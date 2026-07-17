@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/lunemis/mux/tmux"
+	"github.com/xguru/mux/tmux"
 )
 
 func renderPreview(item *listItem, captured string, width, height int, tokenUsage *tmux.TokenUsage) string {

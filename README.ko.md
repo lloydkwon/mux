@@ -2,6 +2,12 @@
 
 **AI CLI 세션 간 전환을 빠르고 직관적으로.**
 
+> [!IMPORTANT]
+> 이 저장소는 [lunemis/mux](https://github.com/lunemis/mux)의 개인용 포크입니다.
+> 라이브 프리뷰, AI CLI 감지, Git/worktree 표시, popup 모드와 핵심 세션
+> 관리 기능은 원작과 기여자들이 만들었습니다. 이 포크에는 개인 서버에서
+> SSH로 접속해 사용하는 흐름에 맞춘 시작 메뉴와 세션 정렬 기능을 추가했습니다.
+
 tmux 세션을 터미널에서 빠르게 탐색하고 관리하는 TUI 도구입니다.
 
 [English](README.md)
@@ -10,6 +16,21 @@ tmux 세션을 터미널에서 빠르게 탐색하고 관리하는 TUI 도구입
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
 
 ![Demo](assets/demo.gif)
+
+## 개인 포크에서 추가한 기능
+
+- **New shell** — SSH 로그인 직후 mux가 열렸을 때 일반 로그인 셸로
+  들어갑니다. tmux 안이나 mux popup에서 선택하면 세션은 유지한 채 현재
+  client를 detach하고 바깥 셸로 돌아갑니다.
+- **New tmux session** — 이름과 시작 디렉터리를 지정해 새 세션을 만들고
+  바로 attach합니다.
+- **영속적인 Order** — 세션을 선택하고 숫자를 입력한 뒤 `Enter`를 누르면
+  원하는 순서를 지정합니다. `0`은 Order를 해제합니다.
+- **정렬 전환** — `o`를 누를 때마다 최근 활동 순, 알파벳 순, Order 순으로
+  정렬 방식이 바뀝니다.
+
+개인 포크 기능이 필요하지 않고 원작과 Homebrew 패키지를 사용하려면
+[lunemis/mux](https://github.com/lunemis/mux)를 이용해 주세요.
 
 ## 기능
 
@@ -25,12 +46,9 @@ tmux 세션을 터미널에서 빠르게 탐색하고 관리하는 TUI 도구입
 ## 빠른 시작
 
 ```bash
-# 인터랙티브 설치 (추천)
-curl -sSL https://raw.githubusercontent.com/lunemis/mux/main/install.sh | bash
-
-# 또는 직접 설치
-brew install lunemis/tap/mux   # or: go install github.com/lunemis/mux/cmd/mux@latest
-mux                             # 세션 매니저 실행
+# 개인 포크의 현재 main 브랜치 설치
+go install github.com/xguru/mux/cmd/mux@main
+mux
 ```
 
 팝업 모드 설정 (tmux 위에 오버레이로 띄우기):
@@ -44,32 +62,35 @@ tmux source-file ~/.tmux.conf   # 설정 리로드
 
 ## 설치
 
-### 인터랙티브 설치 (추천)
+### 인터랙티브 설치
 
-바이너리 설치와 키바인딩 설정을 안내합니다:
+Go가 설치되어 있으면 개인 포크의 main 브랜치를 빌드합니다. 미리 빌드된
+바이너리 다운로드는 이 포크의 첫 release를 만든 뒤 사용할 수 있습니다.
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/lunemis/mux/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/xguru/mux/main/install.sh | bash
 ```
 
-### Homebrew
+### 원작 Homebrew 패키지
 
 ```bash
 brew install lunemis/tap/mux
 ```
 
+> 이 명령은 개인 포크 기능이 없는 원작 버전을 설치합니다.
+
 ### 소스에서 빌드
 
 ```bash
-git clone https://github.com/lunemis/mux.git
+git clone https://github.com/xguru/mux.git
 cd mux
-make install   # /usr/local/bin에 설치
+make PREFIX="$HOME/.local" install
 ```
 
 ### Go install
 
 ```bash
-go install github.com/lunemis/mux/cmd/mux@latest
+go install github.com/xguru/mux/cmd/mux@main
 ```
 
 ## 사용법

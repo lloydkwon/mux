@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="lunemis/mux"
+REPO="xguru/mux"
 BINARY="mux"
 INSTALL_DIR="/usr/local/bin"
+INSTALL_REF="${MUX_INSTALL_REF:-main}"
 # Parse flags
 for arg in "$@"; do
     case "$arg" in
@@ -72,7 +73,7 @@ install_binary() {
     # Try go install first
     if command -v go &>/dev/null; then
         if ask "  Go detected. Use 'go install'?"; then
-            go install "github.com/${REPO}/cmd/${BINARY}@latest"
+            go install "github.com/${REPO}/cmd/${BINARY}@${INSTALL_REF}"
             if command -v "${BINARY}" &>/dev/null; then
                 ok "${BINARY} installed via go install"
             else

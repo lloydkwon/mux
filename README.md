@@ -2,6 +2,13 @@
 
 **Switch between AI CLI sessions without breaking your flow.**
 
+> [!IMPORTANT]
+> This is a personal fork of [lunemis/mux](https://github.com/lunemis/mux).
+> The original project and its contributors built the live preview, AI CLI
+> detection, Git/worktree display, popup mode, and core session manager. This
+> fork adds an SSH-first start menu and persistent session ordering for a
+> personal server workflow.
+
 Running Claude in one session, Codex in another, and a dev server in a third? Switching between them means detaching, listing sessions, remembering which is which, and reattaching. mux eliminates that friction — see every session's live output at a glance, spot which AI tools are active, and switch in a keystroke.
 
 [한국어](README.ko.md)
@@ -10,6 +17,21 @@ Running Claude in one session, Codex in another, and a dev server in a third? Sw
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
 
 ![Demo](assets/demo.gif)
+
+## Personal fork additions
+
+- **New shell** — continue into the normal login shell when mux opens on SSH
+  login. From inside tmux or a mux popup, detach the current client and return
+  to the outer shell without killing the session.
+- **New tmux session** — create a named session, optionally choose its starting
+  directory, and attach immediately.
+- **Persistent Order** — select a session, type a number, and press `Enter` to
+  assign its preferred position (`0` clears it).
+- **Sort rotation** — press `o` to rotate through recent activity, alphabetical,
+  and explicit Order sorting.
+
+If you want the original release and Homebrew package without these personal
+changes, use [lunemis/mux](https://github.com/lunemis/mux).
 
 ## The Problem
 
@@ -47,12 +69,9 @@ Press one key to summon mux on top of whatever you're doing — even mid-convers
 ## Quick Start
 
 ```bash
-# One-line interactive installer (recommended)
-curl -sSL https://raw.githubusercontent.com/lunemis/mux/main/install.sh | bash
-
-# Or install manually
-brew install lunemis/tap/mux   # or: go install github.com/lunemis/mux/cmd/mux@latest
-mux                             # launch the session manager
+# Install the personal fork from the current main branch
+go install github.com/xguru/mux/cmd/mux@main
+mux
 ```
 
 For the best experience, set up popup mode (opens mux as a floating overlay):
@@ -66,32 +85,35 @@ Now press `Ctrl+b` then `m` anywhere in tmux to open mux.
 
 ## Installation
 
-### Interactive installer (recommended)
+### Interactive installer
 
-The installer guides you through binary installation and keybinding setup:
+The installer uses Go when available. Release binary downloads will become
+available after this fork publishes its first release:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/lunemis/mux/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/xguru/mux/main/install.sh | bash
 ```
 
-### Homebrew
+### Upstream Homebrew package
 
 ```bash
 brew install lunemis/tap/mux
 ```
 
+> This installs the original upstream version, not the personal fork features.
+
 ### From source
 
 ```bash
-git clone https://github.com/lunemis/mux.git
+git clone https://github.com/xguru/mux.git
 cd mux
-make install   # builds and installs to /usr/local/bin
+make PREFIX="$HOME/.local" install
 ```
 
 ### Go install
 
 ```bash
-go install github.com/lunemis/mux/cmd/mux@latest
+go install github.com/xguru/mux/cmd/mux@main
 ```
 
 ## Usage
