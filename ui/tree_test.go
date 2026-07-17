@@ -27,6 +27,26 @@ func TestFlatten_NoExpansion(t *testing.T) {
 	}
 }
 
+func TestFlattenMenuIncludesActionsAndOrders(t *testing.T) {
+	sessions := []tmux.Session{{Name: "news"}}
+	items := flattenMenu(sessions, &treeState{
+		expandedSession: map[string]bool{},
+		expandedWindow:  map[string]map[int]bool{},
+		windowsCache:    map[string][]tmux.Window{},
+		panesCache:      map[paneCacheKey][]tmux.Pane{},
+	}, map[string]int{"news": 12}, true)
+
+	if len(items) != 3 {
+		t.Fatalf("items = %d, want 3", len(items))
+	}
+	if items[0].kind != itemNewShell || items[1].kind != itemNewSession {
+		t.Fatalf("first rows are not shell/session actions: %#v", items[:2])
+	}
+	if items[2].kind != itemSession || items[2].order != 12 {
+		t.Fatalf("session row = %#v", items[2])
+	}
+}
+
 func TestFlatten_ExpandedSession(t *testing.T) {
 	sessions := []tmux.Session{{Name: "a"}, {Name: "b"}}
 	state := newTreeState()

@@ -2,11 +2,14 @@ package ui
 
 import "github.com/lunemis/mux/tmux"
 
-// itemKind identifies whether a list row represents a session, window, or pane.
+// itemKind identifies whether a list row represents an action, session, window,
+// or pane.
 type itemKind int
 
 const (
-	itemSession itemKind = iota
+	itemNewShell itemKind = iota
+	itemNewSession
+	itemSession
 	itemWindow
 	itemPane
 )
@@ -20,6 +23,7 @@ type listItem struct {
 	session *tmux.Session
 	window  *tmux.Window
 	pane    *tmux.Pane
+	order   int
 }
 
 // paneCacheKey is the cache key for panes loaded from a (session, window).
@@ -115,10 +119,23 @@ func (t *treeState) pruneCaches(sessions []tmux.Session) {
 // state. Expanded sessions yield their windows; expanded windows yield their
 // panes. The original session slice is held by reference inside the items.
 func flatten(sessions []tmux.Session, t *treeState) []listItem {
+	return flattenMenu(sessions, t, nil, false)
+}
+
+// flattenMenu builds the interactive menu. Action rows are included only in
+// the unfiltered top-level view; order values are copied onto session rows for
+// rendering without changing tmux's Session type.
+func flattenMenu(sessions []tmux.Session, t *treeState, orders map[string]int, includeActions bool) []listItem {
 	items := make([]listItem, 0, len(sessions))
+	if includeActions {
+		items = append(items,
+			listItem{kind: itemNewShell},
+			listItem{kind: itemNewSession},
+		)
+	}
 	for i := range sessions {
 		s := &sessions[i]
-		items = append(items, listItem{kind: itemSession, session: s})
+		items = append(items, listItem{kind: itemSession, session: s, order: orders[s.Name]})
 
 		if !t.isSessionExpanded(s.Name) {
 			continue
@@ -184,8 +201,9 @@ func previewKeyForItem(it listItem) previewKey {
 		return previewKey{session: it.session.Name, window: it.window.Index, pane: -1}
 	case itemPane:
 		return previewKey{session: it.session.Name, window: it.window.Index, pane: it.pane.Index}
-	default:
+	case itemSession:
 		return previewKey{session: it.session.Name, window: -1, pane: -1}
+	default:
+		return previewKey{}
 	}
 }
-

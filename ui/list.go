@@ -71,6 +71,10 @@ func renderSessionList(sessions []tmux.Session, cursor int, filter string, width
 
 func formatItemRow(it listItem, selected bool, width int, t *treeState) string {
 	switch it.kind {
+	case itemNewShell:
+		return formatActionRow("○", "New shell", "leave tmux", selected, width)
+	case itemNewSession:
+		return formatActionRow("+", "New tmux session", "create and attach", selected, width)
 	case itemWindow:
 		expanded := t.isWindowExpanded(it.session.Name, it.window.Index)
 		return formatWindowRow(it.window, expanded, selected, width)
@@ -78,11 +82,24 @@ func formatItemRow(it listItem, selected bool, width int, t *treeState) string {
 		return formatPaneRow(it.pane, selected, width)
 	default:
 		expanded := t.isSessionExpanded(it.session.Name)
-		return formatSessionRow(*it.session, expanded, selected, width)
+		return formatSessionRow(*it.session, it.order, expanded, selected, width)
 	}
 }
 
-func formatSessionRow(s tmux.Session, expanded, selected bool, width int) string {
+func formatActionRow(icon, name, description string, selected bool, width int) string {
+	text := fmt.Sprintf("  %s %-18s %s", icon, name, description)
+	row := padOrTruncate(text, width)
+	if selected {
+		return lipgloss.NewStyle().
+			Bold(true).
+			Foreground(colorCursor).
+			Background(colorSelected).
+			Render(row)
+	}
+	return lipgloss.NewStyle().Foreground(colorAccent).Render(row)
+}
+
+func formatSessionRow(s tmux.Session, order int, expanded, selected bool, width int) string {
 	chevron := "▶"
 	if expanded {
 		chevron = "▼"
@@ -111,7 +128,11 @@ func formatSessionRow(s tmux.Session, expanded, selected bool, width int) string
 		branch = " " + s.GitBranch
 	}
 
-	text := fmt.Sprintf("%s %s %-18s %s", chevron, status, name, ago)
+	orderLabel := "    "
+	if order > 0 {
+		orderLabel = fmt.Sprintf("#%-3d", order)
+	}
+	text := fmt.Sprintf("%s %s %s %-18s %s", chevron, status, orderLabel, name, ago)
 	text += styledIcon + branch
 	extraWidth := 0
 	if iconColor != "" {

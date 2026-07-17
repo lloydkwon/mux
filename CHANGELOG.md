@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Login-friendly **New shell** and **New tmux session** action rows. New shell detaches the current client when selected from inside tmux.
+- Persistent per-session Order values with multi-digit input (`0` clears).
+- Sort rotation with `o`: recent activity, session name, and explicit Order.
 - Multi-window/pane tree expansion in the session list (#14):
   - `Tab` / `→` / `l` to expand a session into its windows, then a window into its panes
   - `Shift+Tab` / `←` / `h` to collapse one level

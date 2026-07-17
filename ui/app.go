@@ -16,8 +16,8 @@ import (
 
 const (
 	// Layout
-	listWidthPercent = 2  // numerator of 5 (40%)
-	listWidthDenom   = 5  // denominator
+	listWidthPercent = 2 // numerator of 5 (40%)
+	listWidthDenom   = 5 // denominator
 	minPanelHeight   = 5
 
 	// Timing
@@ -38,30 +38,34 @@ const (
 	modeRename
 	modeFilter
 	modeConfirmKill
+	modeOrder
 )
 
 // Model is the top-level Bubble Tea model for the session manager TUI.
 type Model struct {
-	sessions       []tmux.Session
-	filtered       []tmux.Session
-	items          []listItem // flattened tree of (sessions, windows, panes)
-	tree           treeState
-	cursor         int
-	mode           mode
-	width          int
-	height         int
-	err            error
-	createModel      createModel
-	renameModel      renameModel
-	filterMod        filterModel
-	confirmKillMod   confirmKillModel
-	filterText       string
-	attachTarget     previewKey // set when we want to attach after quitting (zero value = no attach)
-	focusSession     string // session name to focus cursor on after next load
-	previewContent string           // cached capture-pane output
-	previewKey     previewKey       // (session, window, pane) the cache belongs to
-	tokenUsage     *tmux.TokenUsage // cached token usage for current AI session
-	tokenSession   string           // session name the token cache belongs to
+	sessions        []tmux.Session
+	filtered        []tmux.Session
+	items           []listItem // flattened tree of (sessions, windows, panes)
+	tree            treeState
+	cursor          int
+	mode            mode
+	width           int
+	height          int
+	err             error
+	createModel     createModel
+	renameModel     renameModel
+	filterMod       filterModel
+	confirmKillMod  confirmKillModel
+	orderModel      orderModel
+	filterText      string
+	prefs           preferences
+	attachTarget    previewKey       // set when we want to attach after quitting (zero value = no attach)
+	detachRequested bool             // set when New shell is selected from inside tmux
+	focusSession    string           // session name to focus cursor on after next load
+	previewContent  string           // cached capture-pane output
+	previewKey      previewKey       // (session, window, pane) the cache belongs to
+	tokenUsage      *tmux.TokenUsage // cached token usage for current AI session
+	tokenSession    string           // session name the token cache belongs to
 }
 
 type tickMsg time.Time
@@ -140,7 +144,8 @@ func loadTokenUsage(sessionName string, panePID int) tea.Cmd {
 
 // NewModel returns a new Model with default settings.
 func NewModel() Model {
-	return Model{tree: newTreeState()}
+	prefs, err := loadPreferences()
+	return Model{tree: newTreeState(), prefs: prefs, err: err}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -156,7 +161,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		cmds := []tea.Cmd{loadSessions, tick()}
-		if it := m.currentItem(); it != nil {
+		if it := m.currentItem(); it != nil && it.session != nil {
 			cmds = append(cmds, refreshPreview(previewKeyForItem(*it)))
 			if tmux.IsAICommand(it.session.ActiveCommand) {
 				cmds = append(cmds, loadTokenUsage(it.session.Name, it.session.PanePID))
@@ -175,7 +180,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionsLoadedMsg:
 		m.err = msg.err
-		if msg.sessions != nil {
+		if msg.err == nil {
 			m.sessions = msg.sessions
 			m.tree.pruneCaches(m.sessions)
 			m.applyFilter()
@@ -213,11 +218,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionCreatedMsg:
 		m.mode = modeList
+		if msg.attach {
+			m.attachTarget = previewKey{session: msg.name, window: -1, pane: -1}
+			return m, tea.Quit
+		}
 		m.focusSession = msg.name
 		return m, loadSessions
 
 	case sessionRenamedMsg:
 		m.mode = modeList
+		if order, ok := m.prefs.Orders[msg.oldName]; ok {
+			delete(m.prefs.Orders, msg.oldName)
+			m.prefs.Orders[msg.newName] = order
+			if err := savePreferences(m.prefs); err != nil {
+				m.err = err
+			}
+		}
+		m.focusSession = msg.newName
 		return m, loadSessions
 
 	case filterAppliedMsg:
@@ -232,8 +249,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.mode = modeList
 		if msg.name != "" {
+			if _, ok := m.prefs.Orders[msg.name]; ok {
+				delete(m.prefs.Orders, msg.name)
+				if err := savePreferences(m.prefs); err != nil {
+					m.err = err
+				}
+			}
 			return m, loadSessions
 		}
+		return m, nil
+
+	case sessionOrderMsg:
+		m.mode = modeList
+		if msg.order == 0 {
+			delete(m.prefs.Orders, msg.sessionName)
+		} else {
+			m.prefs.Orders[msg.sessionName] = msg.order
+		}
+		if err := savePreferences(m.prefs); err != nil {
+			m.err = err
+		}
+		m.applyFilter()
+		m.focusItemSession(msg.sessionName)
 		return m, nil
 	}
 
@@ -246,6 +283,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateFilter(msg)
 	case modeConfirmKill:
 		return m.updateConfirmKill(msg)
+	case modeOrder:
+		return m.updateOrder(msg)
 	default:
 		return m.updateList(msg)
 	}
@@ -285,14 +324,34 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "enter":
 			if it := m.currentItem(); it != nil {
-				m.attachTarget = previewKeyForItem(*it)
-				return m, tea.Quit
+				switch it.kind {
+				case itemNewShell:
+					m.detachRequested = os.Getenv("TMUX") != ""
+					return m, tea.Quit
+				case itemNewSession:
+					m.mode = modeCreate
+					m.createModel = newCreateModel(true)
+					return m, m.createModel.nameInput.Focus()
+				default:
+					m.attachTarget = previewKeyForItem(*it)
+					return m, tea.Quit
+				}
 			}
 
 		case "n":
 			m.mode = modeCreate
-			m.createModel = newCreateModel()
+			m.createModel = newCreateModel(false)
 			return m, m.createModel.nameInput.Focus()
+
+		case "o":
+			selected := m.currentSessionName()
+			m.prefs = m.prefs.nextSort()
+			if err := savePreferences(m.prefs); err != nil {
+				m.err = err
+			}
+			m.applyFilter()
+			m.focusItemSession(selected)
+			return m, m.refreshCurrentPreview()
 
 		case "x":
 			if it := m.currentItem(); it != nil && it.kind == itemSession {
@@ -316,6 +375,15 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.filterText != "" {
 				m.filterText = ""
 				m.applyFilter()
+			}
+
+		default:
+			if len(msg.String()) == 1 && msg.String()[0] >= '0' && msg.String()[0] <= '9' {
+				if it := m.currentItem(); it != nil && it.kind == itemSession {
+					m.mode = modeOrder
+					m.orderModel = newOrderModel(it.session.Name, msg.String())
+					return m, m.orderModel.input.Focus()
+				}
 			}
 		}
 	}
@@ -384,7 +452,7 @@ func (m Model) collapseCurrent() (tea.Model, tea.Cmd) {
 // refreshCurrentPreview returns a tea.Cmd to capture the pane targeted by the
 // current cursor position. Returns nil when there is no current item.
 func (m *Model) refreshCurrentPreview() tea.Cmd {
-	if it := m.currentItem(); it != nil {
+	if it := m.currentItem(); it != nil && it.session != nil {
 		return refreshPreview(previewKeyForItem(*it))
 	}
 	return nil
@@ -393,7 +461,7 @@ func (m *Model) refreshCurrentPreview() tea.Cmd {
 // findItemIndex returns the index of the matching listItem, or -1 if not found.
 func (m *Model) findItemIndex(kind itemKind, sessionName string, windowIdx, paneIdx int) int {
 	for i, it := range m.items {
-		if it.kind != kind || it.session.Name != sessionName {
+		if it.kind != kind || it.session == nil || it.session.Name != sessionName {
 			continue
 		}
 		switch kind {
@@ -453,6 +521,16 @@ func (m Model) updateConfirmKill(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m Model) updateOrder(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "esc" {
+		m.mode = modeList
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.orderModel, cmd = m.orderModel.Update(msg)
+	return m, cmd
+}
+
 func (m *Model) currentItem() *listItem {
 	if m.cursor >= 0 && m.cursor < len(m.items) {
 		return &m.items[m.cursor]
@@ -463,7 +541,7 @@ func (m *Model) currentItem() *listItem {
 // currentSession returns the parent session of the current row (the row itself
 // for session rows). Returns nil if no row is selected.
 func (m *Model) currentSession() *tmux.Session {
-	if it := m.currentItem(); it != nil {
+	if it := m.currentItem(); it != nil && it.session != nil {
 		return it.session
 	}
 	return nil
@@ -480,19 +558,20 @@ func (m *Model) currentSessionName() string {
 // list and current expansion state. Call after sessions, filter, or expansion
 // state changes.
 func (m *Model) rebuildItems() {
-	m.items = flatten(m.filtered, &m.tree)
+	m.items = flattenMenu(m.filtered, &m.tree, m.prefs.Orders, m.filterText == "")
 	if m.cursor >= len(m.items) {
 		m.cursor = max(0, len(m.items)-1)
 	}
 }
 
 func (m *Model) applyFilter() {
+	sorted := sortedSessions(m.sessions, m.prefs)
 	if m.filterText == "" {
-		m.filtered = m.sessions
+		m.filtered = sorted
 	} else {
 		lower := strings.ToLower(m.filterText)
 		m.filtered = nil
-		for _, s := range m.sessions {
+		for _, s := range sorted {
 			if strings.Contains(strings.ToLower(s.Name), lower) ||
 				strings.Contains(strings.ToLower(s.Directory), lower) {
 				m.filtered = append(m.filtered, s)
@@ -500,6 +579,18 @@ func (m *Model) applyFilter() {
 		}
 	}
 	m.rebuildItems()
+}
+
+func (m *Model) focusItemSession(name string) {
+	if name == "" {
+		return
+	}
+	for i, it := range m.items {
+		if it.kind == itemSession && it.session != nil && it.session.Name == name {
+			m.cursor = i
+			return
+		}
+	}
 }
 
 func (m Model) View() string {
@@ -512,6 +603,8 @@ func (m Model) View() string {
 		return m.viewWithOverlay(m.createModel.View())
 	case modeRename:
 		return m.viewWithOverlay(m.renameModel.View())
+	case modeOrder:
+		return m.viewWithOverlay(m.orderModel.View())
 	default:
 		return m.viewMain()
 	}
@@ -520,7 +613,7 @@ func (m Model) View() string {
 func (m Model) viewMain() string {
 	// Title — count sessions only, not windows/panes
 	count := fmt.Sprintf("(%d)", len(m.filtered))
-	title := titleStyle.Render("⚡ tmux sessions " + count)
+	title := titleStyle.Render(fmt.Sprintf("⚡ tmux sessions %s  [sort: %s]", count, m.prefs.Sort))
 
 	// Help bar
 	help := renderHelp()
@@ -533,6 +626,8 @@ func (m Model) viewMain() string {
 		extraBar = m.confirmKillMod.View()
 	} else if m.filterText != "" {
 		extraBar = helpStyle.Render(fmt.Sprintf("filter: %s (esc clear)", m.filterText))
+	} else if m.err != nil {
+		extraBar = errorStyle.Render(m.err.Error())
 	}
 
 	// Chrome: title(1+margin1) + help(1) + extraBar(0 or 1)
@@ -605,6 +700,8 @@ func renderHelp() string {
 		{"n", "new"},
 		{"x", "kill"},
 		{"r", "rename"},
+		{"0-9", "order"},
+		{"o", "sort"},
 		{"/", "filter"},
 		{"q", "quit"},
 	}
@@ -633,6 +730,23 @@ func (m Model) AttachWindowIndex() int {
 // the user did not drill down to a pane row.
 func (m Model) AttachPaneIndex() int {
 	return m.attachTarget.pane
+}
+
+// DetachRequested reports whether New shell was selected while mux was
+// running inside tmux. The caller should detach the current tmux client after
+// the TUI restores the terminal; outside tmux, quitting mux already reveals
+// the login shell and this remains false.
+func (m Model) DetachRequested() bool {
+	return m.detachRequested
+}
+
+// DetachClient detaches the current tmux client without killing its session.
+func DetachClient() error {
+	tmuxPath, err := exec.LookPath("tmux")
+	if err != nil {
+		return fmt.Errorf("tmux not found: %w", err)
+	}
+	return exec.Command(tmuxPath, "detach-client").Run()
 }
 
 // AttachToSession switches to the target session, optionally focusing a

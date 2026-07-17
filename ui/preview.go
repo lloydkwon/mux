@@ -27,6 +27,9 @@ func renderPreview(item *listItem, captured string, width, height int, tokenUsag
 		content := strings.Join(lines, "\n")
 		return drawBorder(content, width, innerHeight)
 	}
+	if item.session == nil {
+		return renderActionPreview(item.kind, width, innerWidth, innerHeight)
+	}
 
 	session := item.session
 	// Header: build text first, append styled suffixes after padding
@@ -100,6 +103,35 @@ func renderPreview(item *listItem, captured string, width, height int, tokenUsag
 
 	content := strings.Join(allLines, "\n")
 	return drawBorder(content, width, innerHeight)
+}
+
+func renderActionPreview(kind itemKind, width, innerWidth, innerHeight int) string {
+	title := "New shell"
+	description := "Close mux and continue in the current SSH login shell."
+	if os.Getenv("TMUX") != "" {
+		description = "Detach this tmux client and continue in the outer login shell."
+	}
+	if kind == itemNewSession {
+		title = "New tmux session"
+		description = "Create a named tmux session, optionally choose its directory, and attach."
+	}
+
+	lines := make([]string, innerHeight)
+	for i := range lines {
+		lines[i] = strings.Repeat(" ", innerWidth)
+	}
+	if innerHeight > 1 {
+		lines[0] = lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(
+			padOrTruncate("[ "+title+" ]", innerWidth))
+		lines[1] = lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", innerWidth))
+	}
+	if innerHeight > 3 {
+		lines[3] = padOrTruncate(description, innerWidth)
+	}
+	if innerHeight > 5 {
+		lines[5] = helpStyle.Render(padOrTruncate("Press Enter to continue.", innerWidth))
+	}
+	return drawBorder(strings.Join(lines, "\n"), width, innerHeight)
 }
 
 // previewLabel returns the header label for the previewed target. For session

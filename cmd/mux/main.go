@@ -103,6 +103,12 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	}
 
 	if m, ok := result.(ui.Model); ok {
+		if m.DetachRequested() {
+			if err := ui.DetachClient(); err != nil {
+				return fmt.Errorf("failed to detach tmux client: %w", err)
+			}
+			return nil
+		}
 		if name := m.AttachName(); name != "" {
 			if err := ui.AttachToSession(name, m.AttachWindowIndex(), m.AttachPaneIndex()); err != nil {
 				return fmt.Errorf("failed to attach: %w", err)

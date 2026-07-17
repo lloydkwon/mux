@@ -10,10 +10,11 @@ type createModel struct {
 	nameInput textinput.Model
 	dirInput  textinput.Model
 	focused   int // 0=name, 1=dir
+	attach    bool
 	err       error
 }
 
-func newCreateModel() createModel {
+func newCreateModel(attach bool) createModel {
 	name := textinput.New()
 	name.Placeholder = "session-name"
 	name.Focus()
@@ -29,6 +30,7 @@ func newCreateModel() createModel {
 		nameInput: name,
 		dirInput:  dir,
 		focused:   0,
+		attach:    attach,
 	}
 }
 
@@ -71,7 +73,7 @@ func (m createModel) Update(msg tea.Msg) (createModel, tea.Cmd) {
 				return m, nil
 			}
 			return m, func() tea.Msg {
-				return sessionCreatedMsg{name: name, attach: false}
+				return sessionCreatedMsg{name: name, attach: m.attach}
 			}
 		}
 	}

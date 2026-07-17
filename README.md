@@ -104,6 +104,10 @@ Run `mux` to open the session manager. Use `j`/`k` to navigate, `Enter` to attac
 
 The left panel shows your sessions with AI badges and git branches. The right panel shows a **live preview** of the selected session's terminal output, updated every 500ms.
 
+The first two rows are login-friendly actions: **New shell** closes mux and continues in the current shell; when selected from inside tmux or a mux popup, it detaches the current client and returns to the outer login shell without killing the session. **New tmux session** creates a named session and attaches immediately.
+
+Press a digit while a session row is selected to set its persistent order. Continue typing for multi-digit values and press `Enter`; enter `0` to clear the order. Press `o` to rotate sorting between recent activity, session name, and explicit order. Preferences are stored in `~/.config/mux/preferences.json` (or the platform's user config directory).
+
 ### Popup mode (recommended)
 
 Open mux as a floating overlay inside tmux — works even while AI CLIs are running in the foreground.
@@ -153,6 +157,8 @@ Pair with [skimd](https://github.com/lunemis/skimd) to review AI-generated markd
 | `n` | Create new session |
 | `r` | Rename session |
 | `x` | Delete session (with confirmation) |
+| `0`–`9` | Set selected session's order (`0` clears) |
+| `o` | Rotate sort: recent → name → order |
 | `/` | Filter sessions by name or path |
 | `Esc` | Clear filter / cancel |
 | `q` | Quit |
