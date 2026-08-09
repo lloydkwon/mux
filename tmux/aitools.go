@@ -26,3 +26,17 @@ func LookupAITool(cmd string) (AITool, bool) {
 	t, ok := aiToolMap[cmd]
 	return t, ok
 }
+
+// SessionAITool returns the AI tool to display for a session.
+//
+// A live Claude Code session wins over the active-pane command, because
+// ActiveCommand only reflects the active pane of the active window while the
+// Claude state file covers the whole session — so Claude running in a
+// background window is still surfaced.
+func SessionAITool(s Session) (AITool, bool) {
+	if s.ClaudeState != ClaudeStateNone {
+		t, ok := aiToolMap["claude"]
+		return t, ok
+	}
+	return LookupAITool(s.ActiveCommand)
+}

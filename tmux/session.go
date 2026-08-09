@@ -26,9 +26,12 @@ func ListSessions() ([]Session, error) {
 		return nil, nil
 	}
 
+	// One scan covers every session, so it is hoisted out of the loop.
+	statuses := ClaudeStatuses()
+
 	sessions := make([]Session, 0, len(lines))
 	for _, line := range lines {
-		s, err := parseLine(line)
+		s, err := parseLine(line, statuses)
 		if err != nil {
 			continue
 		}
@@ -45,7 +48,9 @@ func ListSessions() ([]Session, error) {
 	return sessions, nil
 }
 
-func parseLine(line string) (Session, error) {
+// parseLine builds a Session from one list-sessions line. statuses maps tmux
+// session names to live Claude state and may be nil.
+func parseLine(line string, statuses map[string]ClaudeStatus) (Session, error) {
 	parts := strings.SplitN(line, "|", 8)
 	if len(parts) < 8 {
 		return Session{}, fmt.Errorf("unexpected format: %s", line)
@@ -60,7 +65,7 @@ func parseLine(line string) (Session, error) {
 	activeCommand := resolveCommand(panePID, parts[6])
 	gitInfo := LookupGitInfo(parts[4])
 
-	return Session{
+	s := Session{
 		Name:          parts[0],
 		WindowCount:   windows,
 		Created:       time.Unix(createdUnix, 0),
@@ -71,7 +76,15 @@ func parseLine(line string) (Session, error) {
 		PanePID:       panePID,
 		GitBranch:     gitInfo.Branch,
 		IsWorktree:    gitInfo.IsWorktree,
-	}, nil
+	}
+
+	if st, ok := statuses[s.Name]; ok {
+		s.ClaudeState = st.State
+		s.ClaudeWaitingFor = st.WaitingFor
+		s.ClaudeSince = st.Since
+	}
+
+	return s, nil
 }
 
 // CreateSession creates a new detached tmux session with the given name.

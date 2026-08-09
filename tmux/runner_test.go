@@ -52,7 +52,20 @@ func withMock(t *testing.T, fn func(m *mockRunner)) {
 	cmdCacheMu.Lock()
 	cmdCache = make(map[int]cachedCommand)
 	cmdCacheMu.Unlock()
-	defer func() { runner = old }()
+	// Point the Claude state lookup at an empty home so tests never read the
+	// developer's real ~/.claude/sessions, and drop anything it already cached.
+	claudeStatusCacheMu.Lock()
+	claudeStatusCache = cachedClaudeStatuses{}
+	claudeStatusCacheMu.Unlock()
+	oldHome := homeDir
+	homeDir = func() (string, error) { return t.TempDir(), nil }
+	defer func() {
+		runner = old
+		homeDir = oldHome
+		claudeStatusCacheMu.Lock()
+		claudeStatusCache = cachedClaudeStatuses{}
+		claudeStatusCacheMu.Unlock()
+	}()
 	fn(m)
 }
 

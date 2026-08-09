@@ -17,6 +17,12 @@ type Session struct {
 	PanePID       int
 	GitBranch     string // current git branch, empty if not a git repo
 	IsWorktree    bool   // true if Directory is a linked git worktree
+
+	// Live Claude Code state, sourced from ~/.claude/sessions. Unlike
+	// ActiveCommand these cover the whole session, not just its active pane.
+	ClaudeState      ClaudeState // ClaudeStateNone when no live Claude session
+	ClaudeWaitingFor string      // why Claude is blocked; only for ClaudeStateApproval
+	ClaudeSince      time.Time   // when the current state began; zero if unknown
 }
 
 // Window represents a single tmux window inside a session.

@@ -28,10 +28,38 @@ type TokenUsage struct {
 }
 
 // claudeSessionFile represents the JSON structure of ~/.claude/sessions/{PID}.json.
+//
+// This is Claude Code's private, unversioned format (it carries its own
+// "peerProtocol" number). Every field is optional as far as we are concerned:
+// a renamed or removed field decodes to its zero value, which callers must
+// treat as "state unknown" rather than as an error.
 type claudeSessionFile struct {
 	PID       int    `json:"pid"`
 	SessionID string `json:"sessionId"`
 	CWD       string `json:"cwd"`
+
+	// Tmux is "<session>:@<window_id>.%<pane_id>" when Claude runs under tmux.
+	Tmux string `json:"tmux"`
+	// ProcStart is field 22 of /proc/<pid>/stat, stored as a string.
+	ProcStart string `json:"procStart"`
+	// Status is one of "busy", "shell", "idle", "waiting".
+	Status string `json:"status"`
+	// WaitingFor explains the block; present only when Status == "waiting".
+	WaitingFor string `json:"waitingFor"`
+	// StatusUpdatedAt is when the current status began, in epoch milliseconds.
+	StatusUpdatedAt int64 `json:"statusUpdatedAt"`
+}
+
+// homeDir resolves the user's home directory. Replaceable in tests.
+var homeDir = os.UserHomeDir
+
+// claudeSessionsDir returns ~/.claude/sessions.
+func claudeSessionsDir() (string, error) {
+	home, err := homeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, claudeDir, sessionsDir), nil
 }
 
 // jsonlMessage is a minimal representation of a JSONL line with usage data.
@@ -61,7 +89,7 @@ var (
 // FindClaudeSession locates a Claude Code session file for a given tmux pane PID.
 // It scans child processes to find the Claude PID, then reads its session file.
 func FindClaudeSession(panePID int) (sessionID string, cwd string, err error) {
-	home, err := os.UserHomeDir()
+	sessDir, err := claudeSessionsDir()
 	if err != nil {
 		return "", "", err
 	}
@@ -71,8 +99,6 @@ func FindClaudeSession(panePID int) (sessionID string, cwd string, err error) {
 	if err != nil {
 		return "", "", fmt.Errorf("no child processes for pane %d", panePID)
 	}
-
-	sessDir := filepath.Join(home, claudeDir, sessionsDir)
 
 	for _, pidStr := range strings.Fields(string(out)) {
 		path := filepath.Join(sessDir, pidStr+".json")
@@ -100,7 +126,7 @@ func LoadTokenUsage(sessionID, cwd string) (*TokenUsage, error) {
 	}
 	usageCacheMu.Unlock()
 
-	home, err := os.UserHomeDir()
+	home, err := homeDir()
 	if err != nil {
 		return nil, err
 	}
