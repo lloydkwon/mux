@@ -3,11 +3,14 @@
 **Switch between AI CLI sessions without breaking your flow.**
 
 > [!IMPORTANT]
-> This is a personal fork of [lunemis/mux](https://github.com/lunemis/mux).
-> The original project and its contributors built the live preview, AI CLI
-> detection, Git/worktree display, popup mode, and core session manager. This
-> fork adds an SSH-first start menu and persistent session ordering for a
-> personal server workflow.
+> This is a personal fork, third in a chain:
+> [lunemis/mux](https://github.com/lunemis/mux) →
+> [xguru/mux](https://github.com/xguru/mux) → this repository.
+>
+> lunemis/mux and its contributors built the live preview, AI CLI detection,
+> Git/worktree display, popup mode, and the core session manager. xguru/mux
+> added the SSH-first start menu and persistent session ordering. This fork
+> adds Claude Code progress state to the session list and preview.
 
 Running Claude in one session, Codex in another, and a dev server in a third? Switching between them means detaching, listing sessions, remembering which is which, and reattaching. mux eliminates that friction — see every session's live output at a glance, spot which AI tools are active, and switch in a keystroke.
 
@@ -84,8 +87,9 @@ Press one key to summon mux on top of whatever you're doing — even mid-convers
 ## Quick Start
 
 ```bash
-# Install the personal fork from the current main branch
-go install github.com/xguru/mux/cmd/mux@main
+git clone git@github.com:lloydkwon/mux.git
+cd mux
+make PREFIX="$HOME/.local" install
 mux
 ```
 
@@ -100,14 +104,43 @@ Now press `Ctrl+b` then `m` anywhere in tmux to open mux.
 
 ## Installation
 
-### Interactive installer
+> This repository is **private**, so the install methods below need access to
+> it. Building from source is the path that always works.
 
-The installer uses Go when available. Release binary downloads will become
-available after this fork publishes its first release:
+### From source (recommended)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/xguru/mux/main/install.sh | bash
+git clone git@github.com:lloydkwon/mux.git
+cd mux
+make PREFIX="$HOME/.local" install
 ```
+
+Installs to `$HOME/.local/bin/mux`. Use `sudo make install` for the default
+`/usr/local` prefix instead.
+
+### Go install
+
+Go needs to fetch the module directly rather than through the public proxy, and
+git needs credentials for a private repository — SSH is the simplest:
+
+```bash
+export GOPRIVATE='github.com/lloydkwon/*'
+go install github.com/lloydkwon/mux/cmd/mux@main
+```
+
+To build the checked-out working tree instead of the published branch, run
+`go install ./cmd/mux` from the repository root.
+
+### Interactive installer
+
+```bash
+curl -sSL https://raw.githubusercontent.com/lloydkwon/mux/main/install.sh | bash
+```
+
+> Not usable yet. `raw.githubusercontent.com` returns 404 for a private
+> repository, and the script's binary-download path needs a published release —
+> this fork has no tags yet. It starts working once the repository is public and
+> a release is tagged.
 
 ### Upstream Homebrew package
 
@@ -115,21 +148,7 @@ curl -sSL https://raw.githubusercontent.com/xguru/mux/main/install.sh | bash
 brew install lunemis/tap/mux
 ```
 
-> This installs the original upstream version, not the personal fork features.
-
-### From source
-
-```bash
-git clone https://github.com/xguru/mux.git
-cd mux
-make PREFIX="$HOME/.local" install
-```
-
-### Go install
-
-```bash
-go install github.com/xguru/mux/cmd/mux@main
-```
+> This installs the original upstream version, without the fork's features.
 
 ## Usage
 

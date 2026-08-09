@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/xguru/mux/tmux"
+	"github.com/lloydkwon/mux/tmux"
 )
 
 const (

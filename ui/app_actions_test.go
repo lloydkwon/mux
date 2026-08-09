@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/xguru/mux/tmux"
+	"github.com/lloydkwon/mux/tmux"
 )
 
 func menuTestModel() Model {

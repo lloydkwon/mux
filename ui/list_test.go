@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/xguru/mux/tmux"
+	"github.com/lloydkwon/mux/tmux"
 )
 
 var allClaudeStates = []tmux.ClaudeState{

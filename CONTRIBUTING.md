@@ -5,7 +5,7 @@ Thanks for your interest in contributing! Here's how to get started.
 ## Development setup
 
 ```bash
-git clone https://github.com/xguru/mux.git
+git clone git@github.com:lloydkwon/mux.git
 cd mux
 make build
 ```

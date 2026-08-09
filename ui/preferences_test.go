@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xguru/mux/tmux"
+	"github.com/lloydkwon/mux/tmux"
 )
 
 func TestSortModeRotation(t *testing.T) {

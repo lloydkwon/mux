@@ -7,7 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/xguru/mux/tmux"
+	"github.com/lloydkwon/mux/tmux"
 )
 
 func renderPreview(item *listItem, captured string, width, height int, tokenUsage *tmux.TokenUsage) string {

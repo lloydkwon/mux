@@ -1,4 +1,4 @@
-module github.com/xguru/mux
+module github.com/lloydkwon/mux
 
 go 1.24.2
 

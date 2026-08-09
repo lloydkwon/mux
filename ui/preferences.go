@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/xguru/mux/tmux"
+	"github.com/lloydkwon/mux/tmux"
 )
 
 type sortMode string

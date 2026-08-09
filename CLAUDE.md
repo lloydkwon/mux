@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `mux` is a TUI tmux session manager (Go + Bubble Tea) that shows a live preview of every session, detects AI CLIs (`claude`, `codex`, `aider`, `gemini`), and displays git branch / worktree status and Claude token cost.
 
-This repo is a **personal fork** of `lunemis/mux` — the module path is `github.com/xguru/mux`. Fork-specific features: the "New shell" / "New tmux session" action rows at the top of the list, and persistent per-session ordering (`0`–`9`, `o` to rotate sort).
+This repo is a **personal fork**, third in a chain: `lunemis/mux` → `xguru/mux` → this repo. The module path is `github.com/lloydkwon/mux`. Fork-specific features: the "New shell" / "New tmux session" action rows at the top of the list, persistent per-session ordering (`0`–`9`, `o` to rotate sort), and the Claude progress state badges.
+
+The repo is private and has no tags, so `go install ...@latest` and the release-download path in `install.sh` do not work; build from source or use `go install ./cmd/mux`. Note `origin` still points at `xguru/mux` — the fork's own remote is `personal`.
 
 ## Commands
 

@@ -1,6 +1,6 @@
 package ui
 
-import "github.com/xguru/mux/tmux"
+import "github.com/lloydkwon/mux/tmux"
 
 // itemKind identifies whether a list row represents an action, session, window,
 // or pane.

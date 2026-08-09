@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="xguru/mux"
+REPO="lloydkwon/mux"
 BINARY="mux"
 INSTALL_DIR="/usr/local/bin"
 INSTALL_REF="${MUX_INSTALL_REF:-main}"

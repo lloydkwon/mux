@@ -3,10 +3,14 @@
 **AI CLI 세션 간 전환을 빠르고 직관적으로.**
 
 > [!IMPORTANT]
-> 이 저장소는 [lunemis/mux](https://github.com/lunemis/mux)의 개인용 포크입니다.
-> 라이브 프리뷰, AI CLI 감지, Git/worktree 표시, popup 모드와 핵심 세션
-> 관리 기능은 원작과 기여자들이 만들었습니다. 이 포크에는 개인 서버에서
-> SSH로 접속해 사용하는 흐름에 맞춘 시작 메뉴와 세션 정렬 기능을 추가했습니다.
+> 이 저장소는 포크 체인의 세 번째입니다:
+> [lunemis/mux](https://github.com/lunemis/mux) →
+> [xguru/mux](https://github.com/xguru/mux) → 이 저장소.
+>
+> 라이브 프리뷰, AI CLI 감지, Git/worktree 표시, popup 모드와 핵심 세션 관리
+> 기능은 lunemis/mux와 기여자들이 만들었습니다. xguru/mux가 SSH 우선 시작
+> 메뉴와 세션 순서 지정을 더했고, 이 포크는 여기에 Claude Code 진행 상태
+> 표시를 추가했습니다.
 
 tmux 세션을 터미널에서 빠르게 탐색하고 관리하는 TUI 도구입니다.
 
@@ -46,8 +50,9 @@ tmux 세션을 터미널에서 빠르게 탐색하고 관리하는 TUI 도구입
 ## 빠른 시작
 
 ```bash
-# 개인 포크의 현재 main 브랜치 설치
-go install github.com/xguru/mux/cmd/mux@main
+git clone git@github.com:lloydkwon/mux.git
+cd mux
+make PREFIX="$HOME/.local" install
 mux
 ```
 
@@ -62,14 +67,43 @@ tmux source-file ~/.tmux.conf   # 설정 리로드
 
 ## 설치
 
-### 인터랙티브 설치
+> 이 저장소는 **private**이라 아래 방법들은 저장소 접근 권한이 필요합니다.
+> 소스에서 빌드하는 방법이 항상 동작합니다.
 
-Go가 설치되어 있으면 개인 포크의 main 브랜치를 빌드합니다. 미리 빌드된
-바이너리 다운로드는 이 포크의 첫 release를 만든 뒤 사용할 수 있습니다.
+### 소스에서 빌드 (권장)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/xguru/mux/main/install.sh | bash
+git clone git@github.com:lloydkwon/mux.git
+cd mux
+make PREFIX="$HOME/.local" install
 ```
+
+`$HOME/.local/bin/mux`에 설치됩니다. 기본 prefix인 `/usr/local`을 쓰려면
+`sudo make install`을 실행하세요.
+
+### Go install
+
+공개 프록시를 거치지 않고 모듈을 직접 받아야 하고, private 저장소라 git 인증도
+필요합니다. SSH가 가장 간단합니다:
+
+```bash
+export GOPRIVATE='github.com/lloydkwon/*'
+go install github.com/lloydkwon/mux/cmd/mux@main
+```
+
+체크아웃한 작업 트리를 그대로 빌드하려면 저장소 루트에서
+`go install ./cmd/mux`를 실행하세요.
+
+### 인터랙티브 설치
+
+```bash
+curl -sSL https://raw.githubusercontent.com/lloydkwon/mux/main/install.sh | bash
+```
+
+> 아직 쓸 수 없습니다. private 저장소라 `raw.githubusercontent.com`이 404를
+> 반환하고, 스크립트의 바이너리 다운로드 경로는 발행된 release가 있어야 하는데
+> 이 포크에는 아직 태그가 없습니다. 저장소를 public으로 전환하고 release를
+> 태그하면 동작합니다.
 
 ### 원작 Homebrew 패키지
 
@@ -77,21 +111,7 @@ curl -sSL https://raw.githubusercontent.com/xguru/mux/main/install.sh | bash
 brew install lunemis/tap/mux
 ```
 
-> 이 명령은 개인 포크 기능이 없는 원작 버전을 설치합니다.
-
-### 소스에서 빌드
-
-```bash
-git clone https://github.com/xguru/mux.git
-cd mux
-make PREFIX="$HOME/.local" install
-```
-
-### Go install
-
-```bash
-go install github.com/xguru/mux/cmd/mux@main
-```
+> 이 명령은 포크 기능이 없는 원작 버전을 설치합니다.
 
 ## 사용법
 

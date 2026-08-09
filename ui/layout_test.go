@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xguru/mux/tmux"
+	"github.com/lloydkwon/mux/tmux"
 )
 
 func TestLayoutDimensions(t *testing.T) {
