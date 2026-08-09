@@ -92,9 +92,7 @@ Press one key to summon mux on top of whatever you're doing — even mid-convers
 ## Quick Start
 
 ```bash
-git clone git@github.com:lloydkwon/mux.git
-cd mux
-make PREFIX="$HOME/.local" install
+go install github.com/lloydkwon/mux/cmd/mux@latest
 mux
 ```
 
@@ -109,43 +107,34 @@ Now press `Ctrl+b` then `m` anywhere in tmux to open mux.
 
 ## Installation
 
-> This repository is **private**, so the install methods below need access to
-> it. Building from source is the path that always works.
+### Interactive installer
 
-### From source (recommended)
+Builds with Go when it is available, and downloads a release binary otherwise.
+It also offers to set up the popup keybinding.
 
 ```bash
-git clone git@github.com:lloydkwon/mux.git
+curl -sSL https://raw.githubusercontent.com/lloydkwon/mux/main/install.sh | bash
+```
+
+### Go install
+
+```bash
+go install github.com/lloydkwon/mux/cmd/mux@latest
+```
+
+To build the checked-out working tree instead of the published branch, run
+`go install ./cmd/mux` from the repository root.
+
+### From source
+
+```bash
+git clone https://github.com/lloydkwon/mux.git
 cd mux
 make PREFIX="$HOME/.local" install
 ```
 
 Installs to `$HOME/.local/bin/mux`. Use `sudo make install` for the default
 `/usr/local` prefix instead.
-
-### Go install
-
-Go needs to fetch the module directly rather than through the public proxy, and
-git needs credentials for a private repository — SSH is the simplest:
-
-```bash
-export GOPRIVATE='github.com/lloydkwon/*'
-go install github.com/lloydkwon/mux/cmd/mux@main
-```
-
-To build the checked-out working tree instead of the published branch, run
-`go install ./cmd/mux` from the repository root.
-
-### Interactive installer
-
-```bash
-curl -sSL https://raw.githubusercontent.com/lloydkwon/mux/main/install.sh | bash
-```
-
-> Not usable yet. `raw.githubusercontent.com` returns 404 for a private
-> repository, and the script's binary-download path needs a published release —
-> this fork has no tags yet. It starts working once the repository is public and
-> a release is tagged.
 
 ### Upstream Homebrew package
 

@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This repo is a **personal fork**, third in a chain: `lunemis/mux` → `xguru/mux` → this repo. The module path is `github.com/lloydkwon/mux`. Fork-specific features: the "New shell" / "New tmux session" action rows at the top of the list, persistent per-session ordering (`0`–`9`, `o` to rotate sort), and the Claude progress state badges.
 
-The repo is private and has no tags, so `go install ...@latest` and the release-download path in `install.sh` do not work; build from source or use `go install ./cmd/mux`. Note `origin` still points at `xguru/mux` — the fork's own remote is `personal`.
+Remotes: `origin` is this fork (`lloydkwon/mux`, SSH), `upstream` is the fork it came from (`xguru/mux`). Push over SSH — the `gh` OAuth token lacks the `workflow` scope, so HTTPS pushes are rejected for touching `.github/workflows/`. Use `go install ./cmd/mux` to install the working tree; `@latest` installs the published branch instead.
 
 ## Commands
 

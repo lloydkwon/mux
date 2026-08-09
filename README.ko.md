@@ -60,9 +60,7 @@ tmux 세션을 터미널에서 빠르게 탐색하고 관리하는 TUI 도구입
 ## 빠른 시작
 
 ```bash
-git clone git@github.com:lloydkwon/mux.git
-cd mux
-make PREFIX="$HOME/.local" install
+go install github.com/lloydkwon/mux/cmd/mux@latest
 mux
 ```
 
@@ -77,43 +75,34 @@ tmux source-file ~/.tmux.conf   # 설정 리로드
 
 ## 설치
 
-> 이 저장소는 **private**이라 아래 방법들은 저장소 접근 권한이 필요합니다.
-> 소스에서 빌드하는 방법이 항상 동작합니다.
+### 인터랙티브 설치
 
-### 소스에서 빌드 (권장)
+Go가 있으면 Go로 빌드하고, 없으면 릴리스 바이너리를 내려받습니다. 팝업
+키바인딩 설정도 함께 물어봅니다.
 
 ```bash
-git clone git@github.com:lloydkwon/mux.git
+curl -sSL https://raw.githubusercontent.com/lloydkwon/mux/main/install.sh | bash
+```
+
+### Go install
+
+```bash
+go install github.com/lloydkwon/mux/cmd/mux@latest
+```
+
+체크아웃한 작업 트리를 그대로 빌드하려면 저장소 루트에서
+`go install ./cmd/mux`를 실행하세요.
+
+### 소스에서 빌드
+
+```bash
+git clone https://github.com/lloydkwon/mux.git
 cd mux
 make PREFIX="$HOME/.local" install
 ```
 
 `$HOME/.local/bin/mux`에 설치됩니다. 기본 prefix인 `/usr/local`을 쓰려면
 `sudo make install`을 실행하세요.
-
-### Go install
-
-공개 프록시를 거치지 않고 모듈을 직접 받아야 하고, private 저장소라 git 인증도
-필요합니다. SSH가 가장 간단합니다:
-
-```bash
-export GOPRIVATE='github.com/lloydkwon/*'
-go install github.com/lloydkwon/mux/cmd/mux@main
-```
-
-체크아웃한 작업 트리를 그대로 빌드하려면 저장소 루트에서
-`go install ./cmd/mux`를 실행하세요.
-
-### 인터랙티브 설치
-
-```bash
-curl -sSL https://raw.githubusercontent.com/lloydkwon/mux/main/install.sh | bash
-```
-
-> 아직 쓸 수 없습니다. private 저장소라 `raw.githubusercontent.com`이 404를
-> 반환하고, 스크립트의 바이너리 다운로드 경로는 발행된 release가 있어야 하는데
-> 이 포크에는 아직 태그가 없습니다. 저장소를 public으로 전환하고 release를
-> 태그하면 동작합니다.
 
 ### 원작 Homebrew 패키지
 
