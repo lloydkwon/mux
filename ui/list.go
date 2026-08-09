@@ -12,6 +12,14 @@ import (
 const (
 	indentWindow = 2
 	indentPane   = 4
+
+	// Session row layout. The prefix is chevron + attached marker + order
+	// label + the state cell, plus their separators — a width-invariant
+	// gutter, so the state and elapsed time survive at every panel width.
+	sessionPrefixWidth = 1 + 1 + 1 + 1 + 4 + 1 + stateCellWidth + 1
+	sessionNameMin     = 13 // floor: prefix + this exactly fills an 80-col panel
+	sessionNameMax     = 24
+	sessionTailReserve = 12 // room the AI icon and branch would like
 )
 
 // renderListView renders the flattened tree (sessions + expanded windows + panes).
@@ -110,47 +118,33 @@ func formatSessionRow(s tmux.Session, order int, expanded, selected bool, width 
 		status = "*"
 	}
 
-	name := s.Name
-	if len(name) > maxSessionNameDisplay {
-		name = name[:maxSessionNameDisplay-3] + "..."
-	}
-
-	ago := timeAgo(s.Created)
-
-	icon, iconColor := commandIconPlain(s.ActiveCommand)
-	var styledIcon string
-	if iconColor != "" {
-		styledIcon = " " + lipgloss.NewStyle().Foreground(lipgloss.Color(iconColor)).Render(icon)
-	}
-
-	branch := ""
-	if s.GitBranch != "" {
-		branch = " " + s.GitBranch
-	}
-
 	orderLabel := "    "
 	if order > 0 {
 		orderLabel = fmt.Sprintf("#%-3d", order)
 	}
-	text := fmt.Sprintf("%s %s %s %-18s %s", chevron, status, orderLabel, name, ago)
-	text += styledIcon + branch
-	extraWidth := 0
-	if iconColor != "" {
-		extraWidth = 1
-	}
-	row := padOrTruncate(text, width-extraWidth)
 
-	if selected {
-		return lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorCursor).
-			Background(colorSelected).
-			Render(row)
+	stateText, stateColor := claudeStateCell(s, selected)
+
+	nameWidth := clampInt(width-sessionPrefixWidth-sessionTailReserve,
+		sessionNameMin, sessionNameMax)
+
+	segs := []rowSeg{
+		{text: fmt.Sprintf("%s %s %s ", chevron, status, orderLabel)},
+		{text: stateText, color: stateColor},
+		{text: " " + fitCells(s.Name, nameWidth)},
+	}
+	if tool, ok := tmux.SessionAITool(s); ok {
+		segs = append(segs, rowSeg{
+			text:  " " + tool.Icon,
+			color: lipgloss.Color(tool.Color),
+			atom:  true,
+		})
+	}
+	if s.GitBranch != "" {
+		segs = append(segs, rowSeg{text: " " + s.GitBranch})
 	}
 
-	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#9CA3AF")).
-		Render(row)
+	return renderRow(segs, width, selected)
 }
 
 func formatWindowRow(w *tmux.Window, expanded, selected bool, width int) string {
@@ -208,15 +202,6 @@ func formatPaneRow(p *tmux.Pane, selected bool, width int) string {
 		Render(row)
 }
 
-// commandIconPlain returns the raw icon and its color for known AI CLIs.
-// Returns empty strings for non-AI commands.
-func commandIconPlain(cmd string) (icon string, color string) {
-	if tool, ok := tmux.LookupAITool(cmd); ok {
-		return tool.Icon, tool.Color
-	}
-	return "", ""
-}
-
 func centerText(s string, width int) string {
 	pad := (width - len(s)) / 2
 	if pad < 0 {
@@ -225,16 +210,26 @@ func centerText(s string, width int) string {
 	return strings.Repeat(" ", pad) + s
 }
 
+// timeAgo formats the age of t right-aligned in a 4-cell column.
 func timeAgo(t time.Time) string {
+	return fmt.Sprintf("%4s", compactAgo(t))
+}
+
+// compactAgo formats the age of t as "5s"/"12m"/"3h"/"2d", unpadded. Times in
+// the future clamp to zero rather than rendering as a countdown.
+func compactAgo(t time.Time) string {
 	d := time.Since(t)
+	if d < 0 {
+		d = 0
+	}
 	switch {
 	case d < time.Minute:
-		return fmt.Sprintf("%3ds", int(d.Seconds()))
+		return fmt.Sprintf("%ds", int(d.Seconds()))
 	case d < time.Hour:
-		return fmt.Sprintf("%3dm", int(d.Minutes()))
+		return fmt.Sprintf("%dm", int(d.Minutes()))
 	case d < 24*time.Hour:
-		return fmt.Sprintf("%3dh", int(d.Hours()))
+		return fmt.Sprintf("%dh", int(d.Hours()))
 	default:
-		return fmt.Sprintf("%3dd", int(d.Hours()/24))
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
 }

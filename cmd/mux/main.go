@@ -68,7 +68,7 @@ func runStatus() error {
 
 	var parts []string
 	for _, s := range sessions {
-		tool, ok := tmux.LookupAITool(s.ActiveCommand)
+		tool, ok := tmux.SessionAITool(s)
 		if !ok {
 			continue
 		}

@@ -163,7 +163,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds := []tea.Cmd{loadSessions, tick()}
 		if it := m.currentItem(); it != nil && it.session != nil {
 			cmds = append(cmds, refreshPreview(previewKeyForItem(*it)))
-			if tmux.IsAICommand(it.session.ActiveCommand) {
+			if _, ok := tmux.SessionAITool(*it.session); ok {
 				cmds = append(cmds, loadTokenUsage(it.session.Name, it.session.PanePID))
 			}
 		}

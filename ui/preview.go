@@ -63,15 +63,12 @@ func renderPreview(item *listItem, captured string, width, height int, tokenUsag
 	separator := lipgloss.NewStyle().Foreground(colorBorder).Render(
 		strings.Repeat("─", innerWidth))
 
-	// Token usage line (optional)
-	var tokenLine string
-	if tokenUsage != nil {
-		tokenLine = formatTokenLine(tokenUsage, innerWidth)
-	}
+	// Status line (optional): Claude state on the left, token cost on the right
+	statusLine := formatStatusLine(*session, tokenUsage, innerWidth)
 
-	// Available lines for content (minus header + separator + optional token line)
+	// Available lines for content (minus header + separator + optional status line)
 	headerLines := 2
-	if tokenLine != "" {
+	if statusLine != "" {
 		headerLines = 3
 	}
 	contentLines := innerHeight - headerLines
@@ -90,8 +87,8 @@ func renderPreview(item *listItem, captured string, width, height int, tokenUsag
 	lineIdx := 0
 	allLines[lineIdx] = headerStyled
 	lineIdx++
-	if tokenLine != "" {
-		allLines[lineIdx] = tokenLine
+	if statusLine != "" {
+		allLines[lineIdx] = statusLine
 		lineIdx++
 	}
 	allLines[lineIdx] = separator
@@ -168,14 +165,45 @@ func aiLabelPlain(s tmux.Session) labelInfo {
 	return labelInfo{text: text, styled: styled}
 }
 
-func formatTokenLine(u *tmux.TokenUsage, width int) string {
-	text := fmt.Sprintf("  %s in / %s out  ~$%.2f",
-		tmux.FormatTokens(u.InputTokens),
-		tmux.FormatTokens(u.OutputTokens),
-		u.TotalCost)
-	styled := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280")).Render(
-		padOrTruncate(text, width))
-	return styled
+// formatStatusLine renders the row below the preview header: Claude's state and
+// how long it has held it on the left, token usage and cost on the right.
+// Returns "" when the session has neither, leaving the caller's line budget
+// untouched.
+//
+// The state text is laid out first and the token cluster is dropped when they
+// cannot both fit — on a narrow preview, why Claude is blocked matters more
+// than what it has cost.
+func formatStatusLine(s tmux.Session, u *tmux.TokenUsage, width int) string {
+	left := claudeStatusText(s, width)
+
+	right := ""
+	if u != nil {
+		right = fmt.Sprintf("%s in / %s out  ~$%.2f  ",
+			tmux.FormatTokens(u.InputTokens),
+			tmux.FormatTokens(u.OutputTokens),
+			u.TotalCost)
+	}
+
+	if left == "" && right == "" {
+		return ""
+	}
+
+	gap := width - ansi.StringWidth(left) - ansi.StringWidth(right)
+	if gap < 2 {
+		right = ""
+		gap = width - ansi.StringWidth(left)
+	}
+	if gap < 0 {
+		gap = 0
+	}
+
+	muted := lipgloss.NewStyle().Foreground(colorMuted)
+	stateStyle := muted
+	if c := claudeColor(s.ClaudeState, false); c != nil {
+		stateStyle = lipgloss.NewStyle().Foreground(c)
+	}
+
+	return stateStyle.Render(left) + strings.Repeat(" ", gap) + muted.Render(right)
 }
 
 func shortenPath(path string) string {

@@ -14,6 +14,16 @@ var (
 	colorCursor   = lipgloss.Color("#A78BFA")
 	colorListRow  = lipgloss.Color("#9CA3AF")
 
+	// Claude state colors. The -Sel variants are lighter tints: the base red
+	// only reaches ~3:1 contrast against colorSelected, which is too low to
+	// read on a highlighted row.
+	colorStateWorking     = lipgloss.Color("#22D3EE")
+	colorStateApproval    = lipgloss.Color("#EF4444")
+	colorStateReady       = lipgloss.Color("#22C55E")
+	colorStateWorkingSel  = lipgloss.Color("#67E8F9")
+	colorStateApprovalSel = lipgloss.Color("#FCA5A5")
+	colorStateReadySel    = lipgloss.Color("#86EFAC")
+
 	// Styles
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).

@@ -25,6 +25,10 @@ Running Claude in one session, Codex in another, and a dev server in a third? Sw
   to the outer shell without killing the session.
 - **New tmux session** — create a named session, optionally choose its starting
   directory, and attach immediately.
+- **Claude state at a glance** — each session shows whether Claude is working
+  (`⏳`), blocked waiting on you (`❗`), or done and ready for input (`✅`),
+  along with how long it has been in that state. The preview adds why it is
+  blocked (permission prompt, input needed, and so on).
 - **Persistent Order** — select a session, type a number, and press `Enter` to
   assign its preferred position (`0` clears it).
 - **Sort rotation** — press `o` to rotate through recent activity, alphabetical,
@@ -57,6 +61,17 @@ Each session shows its current git branch. Linked worktrees are visually disting
 
 ### Cost & token tracking
 For Claude Code sessions, mux reads session logs to display real-time token usage and estimated cost — no configuration needed.
+
+### Claude progress state
+Every session running Claude Code shows what it is doing right now, so you can tell at a glance which pane is waiting on *you*:
+
+| | state | meaning |
+|---|---|---|
+| `⏳` | working | Claude is processing |
+| `❗` | approval | blocked on a permission prompt or question — needs you |
+| `✅` | waiting | turn finished, ready for input |
+
+Each badge is followed by how long the session has held that state (`❗ approval 3m`), and the preview panel adds the reason it is blocked. This reads Claude Code's own state file rather than guessing from screen output, so it stays accurate even while the pane is scrolling.
 
 ### Popup overlay
 Press one key to summon mux on top of whatever you're doing — even mid-conversation with an AI CLI. Pick a session and you're there.
