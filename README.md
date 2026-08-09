@@ -23,19 +23,24 @@ Running Claude in one session, Codex in another, and a dev server in a third? Sw
 
 ## Personal fork additions
 
+### Inherited from xguru/mux
+
 - **New shell** — continue into the normal login shell when mux opens on SSH
   login. From inside tmux or a mux popup, detach the current client and return
   to the outer shell without killing the session.
 - **New tmux session** — create a named session, optionally choose its starting
   directory, and attach immediately.
-- **Claude state at a glance** — each session shows whether Claude is working
-  (`⏳`), blocked waiting on you (`❗`), or done and ready for input (`✅`),
-  along with how long it has been in that state. The preview adds why it is
-  blocked (permission prompt, input needed, and so on).
 - **Persistent Order** — select a session, type a number, and press `Enter` to
   assign its preferred position (`0` clears it).
 - **Sort rotation** — press `o` to rotate through recent activity, alphabetical,
   and explicit Order sorting.
+
+### Added in this fork
+
+- **Claude state at a glance** — each session shows whether Claude is working
+  (`⏳`), blocked waiting on you (`❗`), or done and ready for input (`✅`),
+  along with how long it has been in that state. The preview adds why it is
+  blocked (permission prompt, input needed, and so on).
 
 If you want the original release and Homebrew package without these personal
 changes, use [lunemis/mux](https://github.com/lunemis/mux).
