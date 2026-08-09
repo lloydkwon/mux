@@ -12,6 +12,7 @@ var (
 	colorBorder   = lipgloss.Color("#374151")
 	colorSelected = lipgloss.Color("#312E81")
 	colorCursor   = lipgloss.Color("#A78BFA")
+	colorListRow  = lipgloss.Color("#9CA3AF")
 
 	// Styles
 	titleStyle = lipgloss.NewStyle().

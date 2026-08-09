@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/xguru/mux/tmux"
 )
 
 func TestShortenPath(t *testing.T) {
@@ -41,21 +43,28 @@ func TestShortenPathTruncatesLong(t *testing.T) {
 func TestAiLabelPlain(t *testing.T) {
 	// Known commands should return non-empty
 	for _, cmd := range []string{"claude", "codex", "aider", "gemini"} {
-		info := aiLabelPlain(cmd)
+		info := aiLabelPlain(tmux.Session{ActiveCommand: cmd})
 		if info.styled == "" {
 			t.Errorf("aiLabelPlain(%q) returned empty styled", cmd)
 		}
 		if info.text == "" {
 			t.Errorf("aiLabelPlain(%q) returned empty text", cmd)
 		}
-		if info.extraWidth != 1 {
-			t.Errorf("aiLabelPlain(%q) extraWidth = %d, want 1", cmd, info.extraWidth)
-		}
 	}
 	// Unknown commands should return empty
-	info := aiLabelPlain("bash")
+	info := aiLabelPlain(tmux.Session{ActiveCommand: "bash"})
 	if info.styled != "" {
 		t.Errorf("aiLabelPlain(%q) styled = %q, want empty", "bash", info.styled)
+	}
+
+	// A live Claude session is surfaced even when the active pane is a shell,
+	// because Claude may be running in another window.
+	info = aiLabelPlain(tmux.Session{
+		ActiveCommand: "bash",
+		ClaudeState:   tmux.ClaudeStateWorking,
+	})
+	if info.styled == "" {
+		t.Error("a live Claude state should produce a badge regardless of ActiveCommand")
 	}
 }
 

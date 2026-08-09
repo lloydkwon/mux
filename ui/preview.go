@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/xguru/mux/tmux"
 )
 
@@ -34,7 +35,7 @@ func renderPreview(item *listItem, captured string, width, height int, tokenUsag
 	session := item.session
 	// Header: build text first, append styled suffixes after padding
 	// to prevent ANSI codes and ambiguous-width icons from clipping.
-	badge := aiLabelPlain(session.ActiveCommand)
+	badge := aiLabelPlain(*session)
 
 	branchInfo := ""
 	branchStyled := ""
@@ -50,7 +51,9 @@ func renderPreview(item *listItem, captured string, width, height int, tokenUsag
 
 	label := previewLabel(item)
 	headerText := fmt.Sprintf("[ %s ]  %s", label, shortenPath(session.Directory))
-	headerWidth := innerWidth - len(badge.text) - badge.extraWidth - len(branchInfo)
+	// Measure in cells, not bytes: every icon here is multi-byte, and byte
+	// length would over-subtract and float the badge left of the edge.
+	headerWidth := innerWidth - ansi.StringWidth(badge.text) - ansi.StringWidth(branchInfo)
 	if headerWidth < 10 {
 		headerWidth = 10
 	}
@@ -148,23 +151,21 @@ func previewLabel(it *listItem) string {
 	}
 }
 
-// labelInfo holds both the styled and plain-text versions of a badge,
-// plus extra width to compensate for ambiguous-width Unicode characters
-// that terminals render as 2 cells but ansi.StringWidth measures as 1.
+// labelInfo holds both the styled and plain-text versions of a badge. The
+// plain text exists so callers can measure the badge without counting ANSI.
 type labelInfo struct {
-	text       string // plain text for width calculation (e.g. "  ✦ claude")
-	styled     string // ANSI-styled version for display
-	extraWidth int    // extra cells for ambiguous-width chars (1 per icon)
+	text   string // plain text for width calculation (e.g. "  ✦ claude")
+	styled string // ANSI-styled version for display
 }
 
-func aiLabelPlain(cmd string) labelInfo {
-	tool, ok := tmux.LookupAITool(cmd)
+func aiLabelPlain(s tmux.Session) labelInfo {
+	tool, ok := tmux.SessionAITool(s)
 	if !ok {
 		return labelInfo{}
 	}
 	text := "  " + tool.Icon + " " + tool.Name
 	styled := "  " + lipgloss.NewStyle().Foreground(lipgloss.Color(tool.Color)).Bold(true).Render(tool.Icon+" "+tool.Name)
-	return labelInfo{text: text, styled: styled, extraWidth: 1}
+	return labelInfo{text: text, styled: styled}
 }
 
 func formatTokenLine(u *tmux.TokenUsage, width int) string {
