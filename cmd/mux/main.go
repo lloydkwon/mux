@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -11,13 +13,72 @@ import (
 	"github.com/lloydkwon/mux/ui"
 )
 
-var version = "dev"
+// version is injected at build time via -ldflags by the Makefile and by
+// goreleaser. Builds that skip those — notably `go install <module>@<version>`
+// — leave it at defaultVersion and fall back to resolveVersion.
+var version = defaultVersion
+
+const defaultVersion = "dev"
+
+// resolveVersion reports the version to display.
+//
+// An injected value always wins: release builds stamp the exact tag, and
+// nothing Go records is more authoritative than that. Otherwise the module
+// version Go recorded is used — since Go 1.24 that covers plain local builds
+// too, derived from the nearest VCS tag. The bare revision is a last resort
+// for a build with no reachable tag. Only a build with none of these stays
+// "dev".
+//
+// The leading "v" is trimmed from every source so that all build paths agree:
+// goreleaser passes a bare "0.2.0" while git describe and the module version
+// both yield "v0.2.0".
+func resolveVersion(injected string, info *debug.BuildInfo, ok bool) string {
+	return strings.TrimPrefix(rawVersion(injected, info, ok), "v")
+}
+
+func rawVersion(injected string, info *debug.BuildInfo, ok bool) string {
+	if injected != "" && injected != defaultVersion {
+		return injected
+	}
+	if !ok || info == nil {
+		return defaultVersion
+	}
+
+	// "(devel)" is what Go records when the build maps to no module version
+	// and no VCS tag is reachable — fall through to the revision.
+	if v := info.Main.Version; v != "" && v != "(devel)" {
+		return v
+	}
+
+	var revision string
+	var modified bool
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			revision = s.Value
+		case "vcs.modified":
+			modified = s.Value == "true"
+		}
+	}
+	if revision == "" {
+		return defaultVersion
+	}
+	if len(revision) > 12 {
+		revision = revision[:12]
+	}
+	if modified {
+		revision += "-dirty"
+	}
+	return revision
+}
 
 func main() {
+	info, ok := debug.ReadBuildInfo()
+
 	rootCmd := &cobra.Command{
 		Use:     "mux",
 		Short:   "TUI tmux session manager",
-		Version: version,
+		Version: resolveVersion(version, info, ok),
 		RunE:    runTUI,
 		// Suppress cobra's default completion and help subcommands
 		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
