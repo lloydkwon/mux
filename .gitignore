@@ -1,5 +1,8 @@
 # Binary
-mux
+# The leading slash is load-bearing: without it this also matches the source
+# directory cmd/mux/, and new files under it are ignored without ever showing
+# up as untracked. This targets the built binary at the repo root only.
+/mux
 *.exe
 
 # Build
