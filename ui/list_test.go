@@ -14,6 +14,7 @@ var allAIStates = []tmux.AIState{
 	tmux.AIStateWorking,
 	tmux.AIStateApproval,
 	tmux.AIStateReady,
+	tmux.AIStateShell,
 }
 
 // Every decorative rune the list emits must measure what the terminal draws.

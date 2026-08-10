@@ -82,6 +82,7 @@ func parseLine(line string, statuses map[string]ClaudeStatus) (Session, error) {
 		s.AIState = st.State
 		s.AIWaitingFor = st.WaitingFor
 		s.AISince = st.Since
+		s.AIPID = st.PID
 	}
 
 	return s, nil
@@ -105,4 +106,17 @@ func KillSession(name string) error {
 // RenameSession renames a tmux session from oldName to newName.
 func RenameSession(oldName, newName string) error {
 	return runner.Run("tmux", "rename-session", "-t", oldName, newName)
+}
+
+// SwitchClient points the current tmux client at the named session. Only valid
+// from inside tmux, where the client is implied by $TMUX.
+//
+// The "=" prefix forces an exact match. Without it tmux falls back to prefix
+// and then glob matching, so "mux" would be ambiguous next to "mux-old" and a
+// name containing * or [ would match something else entirely.
+//
+// Unlike AttachToSession this returns normally instead of replacing the
+// process, so it has no reason to bypass the runner.
+func SwitchClient(name string) error {
+	return runner.Run("tmux", "switch-client", "-t", "="+name)
 }

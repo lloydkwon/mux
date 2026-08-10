@@ -24,6 +24,7 @@ type Session struct {
 	AIState      AIState   // AIStateNone when no live AI state
 	AIWaitingFor string    // why the tool is blocked; only for AIStateApproval
 	AISince      time.Time // when the current state began; zero if unknown
+	AIPID        int       // pid of the process publishing the state; 0 if none
 }
 
 // Window represents a single tmux window inside a session.

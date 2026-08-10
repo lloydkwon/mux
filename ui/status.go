@@ -40,6 +40,22 @@ func aiGlyph(s tmux.Session) (string, bool) {
 	return tool.Icon, true
 }
 
+// branchGlyph returns the marker that precedes a session's git branch: doubled
+// for a linked worktree, matching the legend the help page prints.
+//
+// One decider, for the same reason aiGlyph is one: the preview, the panel and
+// the help legend all have to agree, and this had already drifted — the panel
+// showed a plain ⌥ for worktrees the preview marked ⌥⌥.
+//
+// Both forms measure exactly what they draw (⌥ is pinned at one cell by
+// TestGlyphWidthsAreStable), so a caller's width arithmetic holds either way.
+func branchGlyph(s tmux.Session) string {
+	if s.IsWorktree {
+		return "⌥⌥"
+	}
+	return "⌥"
+}
+
 // aiStateColor returns the foreground for a live state, using a lighter tint
 // when the row is selected so it stays legible against colorSelected. Returns
 // nil for a session with no live state, meaning "use the row's base color".

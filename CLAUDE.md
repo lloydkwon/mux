@@ -53,6 +53,8 @@ Two deliberate exceptions bypass the runner because they must hit the real proce
 
 Anything new that runs per-tick needs the same treatment.
 
+Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale and the previous slice is dropped, and nothing in the TUI compares one tick against the last. The only cross-tick history in the codebase lives in `mux watch`, not here — see below.
+
 ### Flattened tree list model
 
 There is no nested view. `ui/tree.go`'s `flattenMenu` produces a flat `[]listItem` — action rows, then each session, then (if expanded) its windows, then (if expanded) their panes — and `Model.cursor` is an index into that slice. `treeState` holds the expansion sets plus the window/pane caches; expansion survives session refreshes, and `pruneCaches` drops entries for sessions that vanished.
@@ -70,6 +72,20 @@ Never attach from inside the Bubble Tea loop. `Update` records `attachTarget` / 
 ### Modal sub-models
 
 `mode` selects which `updateX` handles input. Sub-models (`create`, `rename`, `filter`, `confirmKill`, `order`) are plain structs with their own `Update`/`View`; they report completion by emitting a message (`sessionCreatedMsg`, `sessionRenamedMsg`, `sessionOrderMsg`, …) that the *top-level* `Update` handles before mode dispatch — that is where mode is reset to `modeList` and side effects like preference writes happen.
+
+### The notification panel lives in `mux watch`
+
+`ui/notify.go`'s `notifyLines` renders the whole panel, borderless — the tmux pane it fills already draws one — and `watchModel.View` (`ui/watch.go`) drops it into `fixedBox`. It used to also float over the TUI's preview; that overlay is gone, and with it `overlayTopRight`. The panel has one home now.
+
+Blank lines in `notifyLines` are layout, not decoration: a session's trailing blank carries that session's name, which is what makes a click target two rows tall. The blank before the event separator carries none, so it does not stretch the last session's block.
+
+`mux watch` is a pane and not a popup for a reason worth not re-litigating: tmux has no floating window that leaves the keyboard alone. `display-popup` is documented as "Panes are not updated while a popup is present" — it freezes what is behind it and takes input. A pane is the only always-visible tmux surface that still lets you type, which is also why the companion `my-mux` widget lives in a browser Picture-in-Picture window instead.
+
+It runs as a **separate process**, so it shares no state with the TUI: its own `prevAIStates` — the codebase's only cross-tick history, since a transition can only be seen by diffing — its own event log, its own TTL caches, and a slower 2s tick (the 500ms rate exists for the cursor row's preview, which a display-only pane does not have).
+
+Every tmux call it makes must name its own pane (`selfPane()`, from `$TMUX_PANE`). tmux resolves an omitted target to the window's *active* pane, which is the one the user works in — the panel is created detached and never becomes active on its own. A width correction sent without a target shrank the wrong pane, and the panel grew to fill what it gave up.
+
+Pane width is held against tmux, not just recorded. With `aggressive-resize`, switching sessions resizes windows and tmux redistributes panes, so the panel drifted every switch. `applyResize` separates the two causes by reading the *window* width: unchanged window plus changed pane is a border drag (adopt it), changed window is a re-layout (undo it). Two rules keep it from running away — the window width is read **synchronously**, because getting it via a `tea.Cmd` let a stale value read as "window unchanged" and a momentarily squeezed pane became the enforced width; and a width below `notifyMinWidth` is never adopted as intent.
 
 `modeHelp` is the deliberate exception: it carries no state, so it has no sub-model struct, no `Model` field, and no completion message — just an enum value, a `case` in the mode dispatch that resets to `modeList` on any `tea.KeyMsg`, and `viewHelp` in `View`. Don't add a `helpModel` to make it match the others. It also renders through `fixedBox` instead of `viewWithOverlay`, because a centered box has no size bound and the page is taller than a `mux popup` gets on an 80x24 terminal (68x19) — that budget is pinned by `TestHelpBodyFitsPopup`, and adding a line to `renderHelpBody` will fail it.
 
@@ -95,10 +111,11 @@ The list's elapsed column shows the *state's* age for a session with live state 
 
 Claude is the only tool that publishes live state, so `tmux/claude_status.go` is the sole producer of a non-zero `AIState`. It reads `~/.claude/sessions/*.json` — Claude Code's own state file, one per running session — and indexes them by tmux session name via each file's `tmux` field (`"<session>:@<win>.%<pane>"`). `ClaudeStatuses()` does one `os.ReadDir` per refresh behind a 1s TTL cache, and `ListSessions` hoists that single call out of its parse loop, so state arrives atomically with the session slice and needs no tick fan-out or `Model` cache.
 
-Three things about this data are easy to get wrong:
+Four things about this data are easy to get wrong:
 
 - **The file is written only on status change, so mtime is not a heartbeat.** A crashed session leaves its file behind and would display as permanently busy. Liveness is `processAlive` (`tmux/proc.go`): signal-0 for existence, plus a best-effort `/proc/<pid>/stat` field-22 comparison against the file's `procStart` to catch PID reuse. The `/proc` half no-ops on macOS by design — no build tags.
 - **`status: "waiting"` means blocked on the user**, whatever `waitingFor` says; a finished turn sitting at the prompt reports `idle` instead. That mapping lives in `mapClaudeState`.
+- **`status: "shell"` outranks both `idle` and `busy`, and it is sticky.** Claude reports it for as long as *any* background shell is alive, so a session that left a dev server running never reaches `idle` — its turns end invisibly and anything watching for a turn to finish waits forever. Measured: a session actively generating output reported `shell` for 13 minutes because one server was up. `demoteServerShell` (`tmux/claude_status.go`) recovers the common case by reading the Claude-owned children under `/proc/<pid>/task/<pid>/children` (identified by `shell-snapshots/` in their cmdline, which excludes MCP servers) and promoting to `AIStateReady` when *every* one of them matches `serverCmdPattern`. Anything else — a build, a test run, a download — is real work and the shell state stands, as does "no jobs found", since no `/proc` must not read as "the turn ended". Ported from my-mux's `demoteServerShells`; keep the two pattern lists in step.
 - The format is private and unversioned. Every field decodes as optional; a renamed field must degrade to "no badge", never an error.
 
 Because `Session.ActiveCommand` only reflects the *active pane of the active window*, this state file also covers Claude running in a background window. `tmux.SessionAITool` prefers it over `ActiveCommand` so the badge, token loading, and `mux status` all catch that case — and it hardcodes `"claude"` for the stateful path, since a second state provider would first have to carry its own tool name onto `Session`.

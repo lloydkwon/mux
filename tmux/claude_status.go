@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -130,6 +131,9 @@ func parseClaudeStatus(data []byte) (status ClaudeStatus, tmuxSession string, ok
 	if state == AIStateNone {
 		return ClaudeStatus{}, "", false
 	}
+	if state == AIStateShell {
+		state = demoteServerShell(sf.PID)
+	}
 
 	status = ClaudeStatus{
 		State:     state,
@@ -159,10 +163,51 @@ func mapClaudeState(status string) AIState {
 		return AIStateApproval
 	case "idle":
 		return AIStateReady
+	case "shell":
+		return AIStateShell
 	default:
-		// "shell", plus anything a future version adds.
+		// Anything a future version adds.
 		return AIStateNone
 	}
+}
+
+// serverCmdPattern matches commands whose whole job is to keep running — dev
+// servers and watchers. Mirrors my-mux's SERVER_CMD list.
+//
+// ponytail: a plain pattern list; add new launchers here when they turn up.
+var serverCmdPattern = regexp.MustCompile(
+	`(yarn|npm|pnpm|bun)(\s+run)?\s+(dev|start|serve|watch)|bootRun|vite|next dev|nuxt dev|nodemon|runserver|uvicorn`)
+
+// shellJobs is the /proc lookup, replaceable in tests.
+var shellJobs = shellJobCmdlines
+
+// demoteServerShell decides what to display for a session Claude reports as
+// "shell".
+//
+// Claude sets "shell" whenever a background shell is alive, and in its own
+// precedence that outranks both "idle" and "busy". So a session that left a dev
+// server running never reaches "idle" — its turns end invisibly, and a panel
+// watching for the turn to finish waits forever. Observed directly: a session
+// actively generating output reported "shell" for 13 minutes because one
+// background server was up.
+//
+// When every shell job it owns is a long-running server, the turn really is
+// over and the session is waiting on the user. Anything else — a build, a
+// download, a test run — means it is still busy, so the shell state stands.
+//
+// Nothing to inspect (no /proc, no identifiable jobs) also leaves it alone:
+// absence of evidence is not evidence the turn ended.
+func demoteServerShell(pid int) AIState {
+	jobs := shellJobs(pid)
+	if len(jobs) == 0 {
+		return AIStateShell
+	}
+	for _, cmd := range jobs {
+		if !serverCmdPattern.MatchString(cmd) {
+			return AIStateShell
+		}
+	}
+	return AIStateReady
 }
 
 // tmuxSessionName extracts the session name from Claude's tmux reference,
@@ -194,10 +239,12 @@ func moreUrgent(a, b ClaudeStatus) bool {
 func urgencyRank(s AIState) int {
 	switch s {
 	case AIStateApproval:
-		return 3
+		return 4
 	case AIStateWorking:
-		return 2
+		return 3
 	case AIStateReady:
+		return 2
+	case AIStateShell:
 		return 1
 	default:
 		return 0

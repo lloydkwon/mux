@@ -29,6 +29,9 @@ const (
 	AIStateApproval
 	// AIStateReady means the turn finished and the tool awaits input.
 	AIStateReady
+	// AIStateShell means the tool handed the terminal to a shell — a command
+	// the user (or the tool) left running in the foreground, e.g. a download.
+	AIStateShell
 )
 
 func (s AIState) String() string {
@@ -39,6 +42,8 @@ func (s AIState) String() string {
 		return "approval"
 	case AIStateReady:
 		return "waiting"
+	case AIStateShell:
+		return "shell"
 	default:
 		return ""
 	}
@@ -61,6 +66,8 @@ func (s AIState) Icon() string {
 		return "❗"
 	case AIStateReady:
 		return "✅"
+	case AIStateShell:
+		return "💻"
 	default:
 		return ""
 	}

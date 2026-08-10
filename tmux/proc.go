@@ -40,6 +40,38 @@ func processAlive(pid int, procStart string) bool {
 	return actual == procStart
 }
 
+// shellJobCmdlines returns the command lines of Claude's own shell jobs under
+// pid: the children whose cmdline names a shell snapshot, which is how Claude
+// Code's Bash tool launches them. Other children — MCP servers, helpers — are
+// deliberately excluded, since they say nothing about whether a turn is over.
+//
+// Returns nil where /proc is unavailable (macOS) or nothing matches, which the
+// caller must read as "no information" rather than "no jobs".
+func shellJobCmdlines(pid int) []string {
+	if pid <= 0 {
+		return nil
+	}
+	p := strconv.Itoa(pid)
+	data, err := os.ReadFile("/proc/" + p + "/task/" + p + "/children")
+	if err != nil {
+		return nil
+	}
+
+	var cmds []string
+	for _, child := range strings.Fields(string(data)) {
+		raw, err := os.ReadFile("/proc/" + child + "/cmdline")
+		if err != nil {
+			continue // the child exited between listing and reading
+		}
+		// cmdline separates argv with NULs.
+		cmd := strings.ReplaceAll(string(raw), "\x00", " ")
+		if strings.Contains(cmd, "shell-snapshots/") {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return cmds
+}
+
 // readProcStart returns field 22 (starttime) of /proc/<pid>/stat, the value
 // Claude Code records as "procStart". ok is false when /proc is unavailable
 // or the process is gone.

@@ -795,8 +795,10 @@ func AttachToSession(name string, windowIdx, paneIdx int) error {
 		}
 	}
 
+	// "=" forces an exact match. Plain tmux target matching falls back to
+	// prefix and then glob, so "mux" would be ambiguous next to "mux-old".
 	if os.Getenv("TMUX") != "" {
-		return exec.Command(tmuxPath, "switch-client", "-t", name).Run()
+		return exec.Command(tmuxPath, "switch-client", "-t", "="+name).Run()
 	}
-	return syscall.Exec(tmuxPath, []string{"tmux", "attach-session", "-t", name}, os.Environ())
+	return syscall.Exec(tmuxPath, []string{"tmux", "attach-session", "-t", "=" + name}, os.Environ())
 }

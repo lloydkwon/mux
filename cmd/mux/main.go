@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"runtime/debug"
@@ -106,15 +107,39 @@ func main() {
 		},
 	}
 
+	var statusJSON bool
 	statusCmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show AI session summary for tmux statusbar",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if statusJSON {
+				return runStatusJSON()
+			}
 			return runStatus()
 		},
 	}
+	statusCmd.Flags().BoolVar(&statusJSON, "json", false, "output session list as JSON")
 
-	rootCmd.AddCommand(popupCmd, setupKeybindCmd, statusCmd)
+	watchCmd := &cobra.Command{
+		Use:   "watch",
+		Short: "Live AI session panel for a dedicated tmux pane",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return ui.RunWatch()
+		},
+	}
+
+	var panelTarget string
+	panelCmd := &cobra.Command{
+		Use:   "panel",
+		Short: "Toggle the AI session panel pane in a tmux window",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return tmux.TogglePanel(panelTarget)
+		},
+	}
+	panelCmd.Flags().StringVarP(&panelTarget, "target", "t", "",
+		"pane whose window to toggle (default: current)")
+
+	rootCmd.AddCommand(popupCmd, setupKeybindCmd, statusCmd, watchCmd, panelCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -147,6 +172,64 @@ func runStatus() error {
 	}
 
 	fmt.Print(fmt.Sprintf(" %s ", joinWith(parts, " ")))
+	return nil
+}
+
+// sessionJSON is the public schema for `mux status --json`, consumed by
+// external widgets. Field names are pinned by TestSessionsJSON — change them
+// only with the consumers.
+type sessionJSON struct {
+	Name     string `json:"name"`
+	Attached bool   `json:"attached"`
+	Dir      string `json:"dir"`
+	Branch   string `json:"branch,omitempty"`
+	Worktree bool   `json:"worktree,omitempty"` // Directory가 연결된 git worktree인지
+	Tool     string `json:"tool,omitempty"`
+	// State는 AIState.String()을 그대로 쓴다. 주의: AIStateReady가 "waiting"으로
+	// 직렬화된다 (Claude 원시 상태 "waiting"은 approval로 매핑됨). 소비자는
+	// "waiting"을 완료/입력 대기(✅)로 해석해야 한다.
+	State      string `json:"state,omitempty"`
+	WaitingFor string `json:"waitingFor,omitempty"`
+	Since      int64  `json:"since,omitempty"` // 상태 시작 시각, unix millis
+	PID        int    `json:"pid,omitempty"`   // 상태를 발행한 프로세스 (소비자의 프로세스 검사용)
+}
+
+func sessionsJSON(sessions []tmux.Session) ([]byte, error) {
+	out := make([]sessionJSON, 0, len(sessions)) // 빈 목록도 null이 아닌 []로
+	for _, s := range sessions {
+		j := sessionJSON{
+			Name:     s.Name,
+			Attached: s.Attached,
+			Dir:      s.Directory,
+			Branch:   s.GitBranch,
+			Worktree: s.IsWorktree,
+			State:    s.AIState.String(),
+		}
+		if t, ok := tmux.SessionAITool(s); ok {
+			j.Tool = t.Name
+		}
+		if s.AIState == tmux.AIStateApproval {
+			j.WaitingFor = s.AIWaitingFor
+		}
+		if !s.AISince.IsZero() {
+			j.Since = s.AISince.UnixMilli()
+		}
+		j.PID = s.AIPID
+		out = append(out, j)
+	}
+	return json.Marshal(out)
+}
+
+func runStatusJSON() error {
+	sessions, err := tmux.ListSessions()
+	if err != nil {
+		return err
+	}
+	b, err := sessionsJSON(sessions)
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(b))
 	return nil
 }
 

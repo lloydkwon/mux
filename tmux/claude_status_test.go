@@ -61,7 +61,7 @@ func TestMapClaudeState(t *testing.T) {
 		{"busy", AIStateWorking},
 		{"waiting", AIStateApproval},
 		{"idle", AIStateReady},
-		{"shell", AIStateNone},
+		{"shell", AIStateShell},
 		{"", AIStateNone},
 		{"something-new", AIStateNone},
 	}
@@ -78,6 +78,7 @@ func TestAIStateString(t *testing.T) {
 		AIStateWorking:  "working",
 		AIStateApproval: "approval",
 		AIStateReady:    "waiting",
+		AIStateShell:    "shell",
 	}
 	for state, want := range tests {
 		if got := state.String(); got != want {

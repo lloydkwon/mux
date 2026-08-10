@@ -40,11 +40,7 @@ func renderPreview(item *listItem, captured string, width, height int, tokenUsag
 	branchInfo := ""
 	branchStyled := ""
 	if session.GitBranch != "" {
-		prefix := "⌥"
-		if session.IsWorktree {
-			prefix = "⌥⌥"
-		}
-		branchText := prefix + " " + session.GitBranch
+		branchText := branchGlyph(*session) + " " + session.GitBranch
 		branchInfo = "  " + branchText
 		branchStyled = "  " + lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280")).Render(branchText)
 	}

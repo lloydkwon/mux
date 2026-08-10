@@ -191,6 +191,48 @@ set -g status-right '#(mux status)'
 
 This runs `mux status` which outputs a compact summary like `✦ ◈` when AI sessions are active.
 
+### Always-on panel — `mux watch`
+
+The list shows what each session is doing *now*, but not what it just finished. `mux watch` fills a dedicated pane with the live AI sessions and a log of recent state changes, so it is on screen while you work rather than only while the TUI is open:
+
+```
+ 🔔 AI 세션
+
+ ⏳ mux 2m                       ⌥ main
+
+ ❗ api 30s                 ⌥ feature/auth
+    Bash: git push --force
+
+ ── 최근 이벤트
+ 13:42:06 api ❗ 승인 대기 · Bash: git...
+ 13:40:46 mux ✅ 작업 완료
+```
+
+Transitions into "working" are deliberately not logged: the badge already says that, and a line per turn would bury the two that matter.
+
+```tmux
+# Add to ~/.tmux.conf — prefix+a toggles the panel in the current window
+bind a run-shell "/absolute/path/to/mux panel -t #{pane_id}"
+
+# And put it in every new window and session automatically
+set-hook -g after-new-window  'run-shell "/absolute/path/to/mux panel -t #{pane_id}"'
+set-hook -g after-new-session 'run-shell "/absolute/path/to/mux panel -t #{pane_id}"'
+```
+
+`mux panel` closes the panel if the window already has one and opens it otherwise, so the key hides it as readily as it shows it and pressing twice cannot leave two. A window that was just created cannot already hold a panel, which is why the hooks call the same command rather than needing an open-only variant.
+
+The focus stays in the pane you were working in. **Click a session row to switch to it.** The bottom row shows the refresh cadence and when it last ran.
+
+Drag the pane border to resize the panel — that still works, because tmux handles a border drag itself rather than forwarding it to the pane. The width is remembered per session (in a tmux user option, so it lives exactly as long as the session does) and the panel reopens at it.
+
+Sessions are listed newest-first by creation, and the order does not change while you watch. Sorting by anything live — the AI state's age, say — would reshuffle the rows every couple of seconds, and with click-to-switch a moving row means clicking the wrong session.
+
+Enabling clicks means tmux hands this pane every mouse event, so its own wheel-scroll into copy-mode and drag-to-select stop working *there*; hold Shift for the terminal's native selection.
+
+It has to be a pane, not a popup: tmux has no floating window that leaves the keyboard alone. `display-popup` is explicitly documented as *"Panes are not updated while a popup is present"* — it freezes everything behind it and captures input, so it cannot be used as a glanceable overlay. A pane is the only always-visible tmux surface that still lets you type.
+
+Use an absolute path unless `mux` is on the PATH tmux itself sees — a version-manager shim usually is not.
+
 ### Works with skimd
 
 Pair with [skimd](https://github.com/lunemis/skimd) to review AI-generated markdown docs without leaving tmux.
