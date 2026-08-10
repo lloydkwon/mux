@@ -37,7 +37,12 @@ const (
 // A window that has just been created cannot already hold a panel, so on an
 // after-new-window hook this reduces to "open" — which is why the keybinding
 // and the hooks can share one command instead of needing an open-only variant.
-func TogglePanel(target string) error {
+//
+// auto marks the hook path. It skips windows whose session is only being viewed
+// from VS Code, where the panel costs more width than it is worth. The
+// keybinding passes false: pressing it is a decision, and refusing there would
+// leave no way to see the panel in VS Code at all.
+func TogglePanel(target string, auto bool) error {
 	window, dir, err := panelWindow(target)
 	if err != nil {
 		return err
@@ -51,6 +56,11 @@ func TogglePanel(target string) error {
 		return runner.Run("tmux", "kill-pane", "-t", pane)
 	}
 
+	session, sessionErr := SessionForPane(target)
+	if auto && sessionErr == nil && SessionOnlyInVSCode(session) {
+		return nil // not an error: this is where the panel is not wanted
+	}
+
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate mux binary: %w", err)
@@ -60,7 +70,7 @@ func TogglePanel(target string) error {
 	// than resizing after the fact means the pane never appears at the wrong
 	// size first, and `mux watch` has no startup race with its own resize.
 	width := panelWidth
-	if session, err := SessionForPane(target); err == nil {
+	if sessionErr == nil {
 		if w := PanelWidth(session); w > 0 {
 			width = strconv.Itoa(w)
 		}
@@ -130,6 +140,43 @@ func PanelWidth(session string) int {
 		return 0
 	}
 	return w
+}
+
+// vscodeEnvMarker is what VS Code's integrated terminal exports into every
+// shell it starts, and so into a tmux client started from one.
+const vscodeEnvMarker = "TERM_PROGRAM=vscode"
+
+// clientEnvHas is the /proc lookup, replaceable in tests.
+var clientEnvHas = procEnvHas
+
+// SessionOnlyInVSCode reports whether every client attached to session is a
+// VS Code integrated terminal.
+//
+// False when no client is attached: a session created detached has nobody to
+// judge by, and defaulting to "skip" there would silently deny a panel to every
+// session a script makes. No evidence is not evidence.
+//
+// This is the closest tmux allows to "hide it in VS Code". A pane belongs to a
+// window, not a client, so a window seen from both terminals shows the panel to
+// both — the only lever is whether it gets created at all.
+func SessionOnlyInVSCode(session string) bool {
+	out, err := runner.Output("tmux", "list-clients", "-t", session, "-F", "#{client_pid}")
+	if err != nil {
+		return false
+	}
+
+	seen := false
+	for _, line := range strings.Fields(string(out)) {
+		pid, err := strconv.Atoi(line)
+		if err != nil {
+			continue
+		}
+		seen = true
+		if !clientEnvHas(pid, vscodeEnvMarker) {
+			return false
+		}
+	}
+	return seen
 }
 
 // WindowWidth reports the width of target's window. Pass "" for the current

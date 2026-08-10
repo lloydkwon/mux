@@ -20,7 +20,7 @@ func TestTogglePanelOpens(t *testing.T) {
 		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
 			"-F", "#{pane_id} #{pane_start_command}")
 
-		if err := TogglePanel("%3"); err != nil {
+		if err := TogglePanel("%3", false); err != nil {
 			t.Fatalf("TogglePanel: %v", err)
 		}
 
@@ -48,7 +48,7 @@ func TestTogglePanelOpensInWindowDirectory(t *testing.T) {
 				m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 				m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 
-				if err := TogglePanel("%3"); err != nil {
+				if err := TogglePanel("%3", false); err != nil {
 					t.Fatalf("TogglePanel: %v", err)
 				}
 				if len(m.runs) != 1 || !strings.Contains(m.runs[0], "-c "+dir+" ") {
@@ -69,7 +69,7 @@ func TestTogglePanelWithoutDirectory(t *testing.T) {
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 
-		if err := TogglePanel("%3"); err != nil {
+		if err := TogglePanel("%3", false); err != nil {
 			t.Fatalf("TogglePanel: %v", err)
 		}
 		if len(m.runs) != 1 || strings.Contains(m.runs[0], " -c ") {
@@ -109,7 +109,7 @@ func TestTogglePanelCloses(t *testing.T) {
 		m.OnOutput([]byte("%3 \n%9 /home/u/.local/bin/mux watch\n"), nil,
 			"tmux", "list-panes", "-t", "@7", "-F", "#{pane_id} #{pane_start_command}")
 
-		if err := TogglePanel("%3"); err != nil {
+		if err := TogglePanel("%3", false); err != nil {
 			t.Fatalf("TogglePanel: %v", err)
 		}
 
@@ -137,7 +137,7 @@ func TestTogglePanelKillsOnlyThePanel(t *testing.T) {
 				"%4 tail -f /var/log/syslog\n"), nil,
 			"tmux", "list-panes", "-t", "@7", "-F", "#{pane_id} #{pane_start_command}")
 
-		if err := TogglePanel("%3"); err != nil {
+		if err := TogglePanel("%3", false); err != nil {
 			t.Fatalf("TogglePanel: %v", err)
 		}
 		if len(m.runs) != 1 || m.runs[0] != "tmux kill-pane -t %9" {
@@ -153,7 +153,7 @@ func TestTogglePanelIgnoresTheTUI(t *testing.T) {
 		m.OnOutput([]byte("%1 \n%2 /home/u/.local/bin/mux\n"), nil,
 			"tmux", "list-panes", "-t", "@7", "-F", "#{pane_id} #{pane_start_command}")
 
-		if err := TogglePanel("%3"); err != nil {
+		if err := TogglePanel("%3", false); err != nil {
 			t.Fatalf("TogglePanel: %v", err)
 		}
 		if len(m.runs) != 1 || !strings.Contains(m.runs[0], "split-window") {
@@ -170,7 +170,7 @@ func TestTogglePanelDefaultsToCurrentPane(t *testing.T) {
 		m.OnOutput([]byte("%1 \n"), nil, "tmux", "list-panes", "-t", "@7",
 			"-F", "#{pane_id} #{pane_start_command}")
 
-		if err := TogglePanel(""); err != nil {
+		if err := TogglePanel("", false); err != nil {
 			t.Fatalf("TogglePanel: %v", err)
 		}
 	})
@@ -187,7 +187,7 @@ func TestTogglePanelOpensAtRememberedWidth(t *testing.T) {
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 		m.OnOutput([]byte("72\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 
-		if err := TogglePanel("%3"); err != nil {
+		if err := TogglePanel("%3", false); err != nil {
 			t.Fatalf("TogglePanel: %v", err)
 		}
 		if len(m.runs) != 1 || !strings.Contains(m.runs[0], "-l 72 ") {
@@ -208,7 +208,7 @@ func TestTogglePanelWidthFallsBack(t *testing.T) {
 				m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 				m.OnOutput([]byte(stored+"\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 
-				if err := TogglePanel("%3"); err != nil {
+				if err := TogglePanel("%3", false); err != nil {
 					t.Fatalf("TogglePanel: %v", err)
 				}
 				if len(m.runs) != 1 || !strings.Contains(m.runs[0], "-l "+panelWidth+" ") {
@@ -297,6 +297,99 @@ func TestResizePaneWidth(t *testing.T) {
 		}
 		if want := "tmux resize-pane -x 40"; len(m.runs) != 1 || m.runs[0] != want {
 			t.Errorf("ran %v, want [%q]", m.runs, want)
+		}
+	})
+}
+
+// tmux cannot hide a pane from one client and show it to another, so the only
+// lever is whether the panel gets created. "No client attached" must not count
+// as VS Code, or a session made by a script would silently lose its panel.
+func TestSessionOnlyInVSCode(t *testing.T) {
+	tests := []struct {
+		name    string
+		clients string
+		vscode  map[int]bool
+		want    bool
+	}{
+		{
+			name:    "every client is VS Code",
+			clients: "16\n20\n",
+			vscode:  map[int]bool{16: true, 20: true},
+			want:    true,
+		},
+		{
+			name:    "one client is a real terminal",
+			clients: "16\n27\n",
+			vscode:  map[int]bool{16: true},
+			want:    false,
+		},
+		{
+			name:    "nothing attached is not evidence",
+			clients: "",
+			vscode:  nil,
+			want:    false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			withMock(t, func(m *mockRunner) {
+				m.OnOutput([]byte(tc.clients), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
+				old := clientEnvHas
+				clientEnvHas = func(pid int, marker string) bool {
+					if marker != vscodeEnvMarker {
+						t.Errorf("looked for %q, want %q", marker, vscodeEnvMarker)
+					}
+					return tc.vscode[pid]
+				}
+				defer func() { clientEnvHas = old }()
+
+				if got := SessionOnlyInVSCode("work"); got != tc.want {
+					t.Errorf("SessionOnlyInVSCode = %v, want %v", got, tc.want)
+				}
+			})
+		})
+	}
+}
+
+// The hook path stays out of VS Code; pressing the key there still works, or
+// there would be no way to see the panel at all.
+func TestTogglePanelAutoSkipsVSCode(t *testing.T) {
+	setup := func(m *mockRunner) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
+			"-F", "#{pane_id} #{pane_start_command}")
+		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
+		m.OnOutput([]byte("16\n"), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
+	}
+	onlyVSCode := func(int, string) bool { return true }
+
+	withMock(t, func(m *mockRunner) {
+		setup(m)
+		old := clientEnvHas
+		clientEnvHas = onlyVSCode
+		defer func() { clientEnvHas = old }()
+
+		if err := TogglePanel("%3", true); err != nil {
+			t.Fatalf("TogglePanel: %v", err)
+		}
+		if len(m.runs) != 0 {
+			t.Errorf("ran %v, want nothing in a VS Code-only session", m.runs)
+		}
+	})
+
+	withMock(t, func(m *mockRunner) {
+		setup(m)
+		old := clientEnvHas
+		clientEnvHas = onlyVSCode
+		defer func() { clientEnvHas = old }()
+
+		if err := TogglePanel("%3", false); err != nil {
+			t.Fatalf("TogglePanel: %v", err)
+		}
+		if len(m.runs) != 1 || !strings.Contains(m.runs[0], "split-window") {
+			t.Errorf("ran %v, want the explicit call to open a panel", m.runs)
 		}
 	})
 }

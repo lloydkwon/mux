@@ -215,9 +215,11 @@ Transitions into "working" are deliberately not logged: the badge already says t
 bind a run-shell "/absolute/path/to/mux panel -t #{pane_id}"
 
 # And put it in every new window and session automatically
-set-hook -g after-new-window  'run-shell "/absolute/path/to/mux panel -t #{pane_id}"'
-set-hook -g after-new-session 'run-shell "/absolute/path/to/mux panel -t #{pane_id}"'
+set-hook -g after-new-window  'run-shell "/absolute/path/to/mux panel --auto -t #{pane_id}"'
+set-hook -g after-new-session 'run-shell "/absolute/path/to/mux panel --auto -t #{pane_id}"'
 ```
+
+`--auto` marks the hook path, and it skips a session that is only being viewed from a VS Code integrated terminal — 48 columns is a lot to give up there. Pressing the key still opens it, since that is a decision rather than a default. This is as close as tmux gets to "hide it in VS Code": a pane belongs to a window, not a client, so a window open in both terminals shows the panel to both, and the only lever is whether it is created at all.
 
 `mux panel` closes the panel if the window already has one and opens it otherwise, so the key hides it as readily as it shows it and pressing twice cannot leave two. A window that was just created cannot already hold a panel, which is why the hooks call the same command rather than needing an open-only variant.
 

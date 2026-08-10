@@ -129,15 +129,18 @@ func main() {
 	}
 
 	var panelTarget string
+	var panelAuto bool
 	panelCmd := &cobra.Command{
 		Use:   "panel",
 		Short: "Toggle the AI session panel pane in a tmux window",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return tmux.TogglePanel(panelTarget)
+			return tmux.TogglePanel(panelTarget, panelAuto)
 		},
 	}
 	panelCmd.Flags().StringVarP(&panelTarget, "target", "t", "",
 		"pane whose window to toggle (default: current)")
+	panelCmd.Flags().BoolVar(&panelAuto, "auto", false,
+		"for hooks: skip windows whose session is only viewed from VS Code")
 
 	rootCmd.AddCommand(popupCmd, setupKeybindCmd, statusCmd, watchCmd, panelCmd)
 

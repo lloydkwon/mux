@@ -72,6 +72,30 @@ func shellJobCmdlines(pid int) []string {
 	return cmds
 }
 
+// procEnvHas reports whether pid's environment contains marker as a whole
+// entry.
+//
+// The comparison is exact, not a substring: "TERM_PROGRAM=vscode" must not also
+// match "TERM_PROGRAM=vscode-insiders".
+//
+// False where /proc is unavailable (macOS) or the process is gone — callers
+// must read that as "unknown", never as "no".
+func procEnvHas(pid int, marker string) bool {
+	if pid <= 0 {
+		return false
+	}
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/environ")
+	if err != nil {
+		return false
+	}
+	for _, entry := range bytes.Split(data, []byte{0}) {
+		if string(entry) == marker {
+			return true
+		}
+	}
+	return false
+}
+
 // readProcStart returns field 22 (starttime) of /proc/<pid>/stat, the value
 // Claude Code records as "procStart". ok is false when /proc is unavailable
 // or the process is gone.

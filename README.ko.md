@@ -184,9 +184,11 @@ AI 세션이 활성화되면 `✦ ◈` 같은 아이콘이 상태바에 표시�
 bind a run-shell "/mux/절대경로 panel -t #{pane_id}"
 
 # 새 윈도우·새 세션에는 자동으로 붙인다
-set-hook -g after-new-window  'run-shell "/mux/절대경로 panel -t #{pane_id}"'
-set-hook -g after-new-session 'run-shell "/mux/절대경로 panel -t #{pane_id}"'
+set-hook -g after-new-window  'run-shell "/mux/절대경로 panel --auto -t #{pane_id}"'
+set-hook -g after-new-session 'run-shell "/mux/절대경로 panel --auto -t #{pane_id}"'
 ```
+
+`--auto`는 훅 전용 표시로, **VS Code 통합 터미널로만 보고 있는 세션은 건너뜁니다** — 좁은 터미널에서 48칸은 큽니다. 키를 직접 누르면 거기서도 열립니다(기본값이 아니라 결정이므로). tmux에서 "VS Code에서만 숨기기"는 여기까지가 한계입니다: pane은 클라이언트가 아니라 윈도우에 속하므로, 두 터미널에서 같이 보는 윈도우는 양쪽 모두에 보이고 조절할 수 있는 건 **만들지 말지**뿐입니다.
 
 `mux panel`은 그 윈도우에 패널이 있으면 닫고 없으면 엽니다. 그래서 같은 키로 숨길 수 있고, 두 번 눌러도 두 개가 생기지 않습니다. 갓 만들어진 윈도우에는 패널이 있을 수 없으므로 훅도 같은 커맨드를 씁니다 — "열기 전용" 변형이 따로 필요 없습니다.
 
