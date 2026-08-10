@@ -8,6 +8,18 @@ import (
 
 const paneList = "tmux list-panes -t @7 -F #{pane_id} #{pane_start_command}"
 
+// ran reports whether any tmux command matching sub was issued. Assertions use
+// it rather than counting: opening or closing by hand also records the
+// manual-off mark, so the interesting command is rarely the only one.
+func ran(m *mockRunner, sub string) bool {
+	for _, r := range m.runs {
+		if strings.Contains(r, sub) {
+			return true
+		}
+	}
+	return false
+}
+
 func mockPanelWindow(m *mockRunner) {
 	m.OnOutput([]byte("@7 /work/dir\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_id} #{pane_current_path}")
 }
@@ -26,8 +38,8 @@ func TestTogglePanelOpens(t *testing.T) {
 
 		self, _ := os.Executable()
 		want := "tmux split-window -d -h -l " + panelWidth + " -c /work/dir -t @7 " + self + " watch"
-		if len(m.runs) != 1 || m.runs[0] != want {
-			t.Errorf("ran %v,\nwant [%q]", m.runs, want)
+		if !ran(m, want) {
+			t.Errorf("ran %v,\nwant one of them to be %q", m.runs, want)
 		}
 	})
 }
@@ -45,13 +57,14 @@ func TestTogglePanelOpensInWindowDirectory(t *testing.T) {
 					"-t", "%3", "#{window_id} #{pane_current_path}")
 				m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
 					"-F", "#{pane_id} #{pane_start_command}")
+				m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
 				m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 				m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 
 				if err := TogglePanel("%3", false); err != nil {
 					t.Fatalf("TogglePanel: %v", err)
 				}
-				if len(m.runs) != 1 || !strings.Contains(m.runs[0], "-c "+dir+" ") {
+				if !ran(m, "-c "+dir+" ") {
 					t.Errorf("ran %v, want the split to start in %q", m.runs, dir)
 				}
 			})
@@ -66,13 +79,14 @@ func TestTogglePanelWithoutDirectory(t *testing.T) {
 			"-t", "%3", "#{window_id} #{pane_current_path}")
 		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
 			"-F", "#{pane_id} #{pane_start_command}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 
 		if err := TogglePanel("%3", false); err != nil {
 			t.Fatalf("TogglePanel: %v", err)
 		}
-		if len(m.runs) != 1 || strings.Contains(m.runs[0], " -c ") {
+		if !ran(m, "split-window") || ran(m, " -c ") {
 			t.Errorf("ran %v, want a split with no -c", m.runs)
 		}
 	})
@@ -113,14 +127,15 @@ func TestTogglePanelCloses(t *testing.T) {
 			t.Fatalf("TogglePanel: %v", err)
 		}
 
-		want := "tmux kill-pane -t %9"
-		if len(m.runs) != 1 || m.runs[0] != want {
-			t.Errorf("ran %v, want [%q]", m.runs, want)
+		if !ran(m, "tmux kill-pane -t %9") {
+			t.Errorf("ran %v, want the panel killed", m.runs)
 		}
-		for _, r := range m.runs {
-			if strings.Contains(r, "split-window") {
-				t.Error("closing also opened a second panel")
-			}
+		if ran(m, "split-window") {
+			t.Error("closing also opened a second panel")
+		}
+		// Closing by hand must be remembered, or the resize hooks undo it.
+		if !ran(m, "set-option -w -t @7 @mux_panel_off 1") {
+			t.Errorf("ran %v, want the manual-off mark recorded", m.runs)
 		}
 	})
 }
@@ -140,8 +155,13 @@ func TestTogglePanelKillsOnlyThePanel(t *testing.T) {
 		if err := TogglePanel("%3", false); err != nil {
 			t.Fatalf("TogglePanel: %v", err)
 		}
-		if len(m.runs) != 1 || m.runs[0] != "tmux kill-pane -t %9" {
-			t.Fatalf("ran %v, want only the panel killed", m.runs)
+		if !ran(m, "tmux kill-pane -t %9") {
+			t.Fatalf("ran %v, want the panel killed", m.runs)
+		}
+		for _, r := range m.runs {
+			if strings.Contains(r, "kill-pane") && !strings.Contains(r, "%9") {
+				t.Fatalf("killed the wrong pane: %q", r)
+			}
 		}
 	})
 }
@@ -156,7 +176,7 @@ func TestTogglePanelIgnoresTheTUI(t *testing.T) {
 		if err := TogglePanel("%3", false); err != nil {
 			t.Fatalf("TogglePanel: %v", err)
 		}
-		if len(m.runs) != 1 || !strings.Contains(m.runs[0], "split-window") {
+		if !ran(m, "split-window") {
 			t.Errorf("ran %v, want a panel to be opened", m.runs)
 		}
 	})
@@ -184,13 +204,14 @@ func TestTogglePanelOpensAtRememberedWidth(t *testing.T) {
 		mockPanelWindow(m)
 		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
 			"-F", "#{pane_id} #{pane_start_command}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 		m.OnOutput([]byte("72\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 
 		if err := TogglePanel("%3", false); err != nil {
 			t.Fatalf("TogglePanel: %v", err)
 		}
-		if len(m.runs) != 1 || !strings.Contains(m.runs[0], "-l 72 ") {
+		if !ran(m, "-l 72 ") {
 			t.Errorf("ran %v, want a split at width 72", m.runs)
 		}
 	})
@@ -205,13 +226,14 @@ func TestTogglePanelWidthFallsBack(t *testing.T) {
 				mockPanelWindow(m)
 				m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
 					"-F", "#{pane_id} #{pane_start_command}")
+				m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
 				m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 				m.OnOutput([]byte(stored+"\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 
 				if err := TogglePanel("%3", false); err != nil {
 					t.Fatalf("TogglePanel: %v", err)
 				}
-				if len(m.runs) != 1 || !strings.Contains(m.runs[0], "-l "+panelWidth+" ") {
+				if !ran(m, "-l "+panelWidth+" ") {
 					t.Errorf("ran %v, want the default width %s", m.runs, panelWidth)
 				}
 			})
@@ -237,6 +259,7 @@ func TestSetPanelWidth(t *testing.T) {
 
 func TestSessionForPane(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 		got, err := SessionForPane("%3")
 		if err != nil || got != "work" {
@@ -359,6 +382,7 @@ func TestTogglePanelAutoSkipsVSCode(t *testing.T) {
 		mockPanelWindow(m)
 		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
 			"-F", "#{pane_id} #{pane_start_command}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 		m.OnOutput([]byte("16\n"), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
@@ -388,7 +412,7 @@ func TestTogglePanelAutoSkipsVSCode(t *testing.T) {
 		if err := TogglePanel("%3", false); err != nil {
 			t.Fatalf("TogglePanel: %v", err)
 		}
-		if len(m.runs) != 1 || !strings.Contains(m.runs[0], "split-window") {
+		if !ran(m, "split-window") {
 			t.Errorf("ran %v, want the explicit call to open a panel", m.runs)
 		}
 	})
@@ -402,6 +426,7 @@ func TestTogglePanelAutoSkipsNarrowWindow(t *testing.T) {
 		mockPanelWindow(m)
 		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
 			"-F", "#{pane_id} #{pane_start_command}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 		m.OnOutput([]byte("27\n"), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
 		m.OnOutput([]byte(width+"\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
@@ -416,8 +441,9 @@ func TestTogglePanelAutoSkipsNarrowWindow(t *testing.T) {
 		wantSplit bool
 	}{
 		{name: "a phone-sized window is skipped", width: "54", auto: true, wantSplit: false},
-		{name: "one column short is still skipped", width: "95", auto: true, wantSplit: false},
-		{name: "exactly the minimum is wide enough", width: "96", auto: true, wantSplit: true},
+		{name: "one column short is still skipped", width: "199", auto: true, wantSplit: false},
+		{name: "exactly the minimum is wide enough", width: "200", auto: true, wantSplit: true},
+		{name: "a VS Code-sized window is skipped", width: "150", auto: true, wantSplit: false},
 		{name: "a desktop window is fine", width: "269", auto: true, wantSplit: true},
 		{name: "pressing the key overrides the width", width: "54", auto: false, wantSplit: true},
 	}
@@ -433,11 +459,90 @@ func TestTogglePanelAutoSkipsNarrowWindow(t *testing.T) {
 				if err := TogglePanel("%3", tc.auto); err != nil {
 					t.Fatalf("TogglePanel: %v", err)
 				}
-				got := len(m.runs) == 1 && strings.Contains(m.runs[0], "split-window")
+				got := ran(m, "split-window")
 				if got != tc.wantSplit {
 					t.Errorf("split=%v, want %v (ran %v)", got, tc.wantSplit, m.runs)
 				}
 			})
 		})
 	}
+}
+
+// The resize hooks fire constantly. If --auto still toggled, the panel would
+// flap open and shut every time a terminal changed size.
+func TestTogglePanelAutoNeverCloses(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 \n%9 /home/u/.local/bin/mux watch\n"), nil,
+			"tmux", "list-panes", "-t", "@7", "-F", "#{pane_id} #{pane_start_command}")
+
+		if err := TogglePanel("%3", true); err != nil {
+			t.Fatalf("TogglePanel: %v", err)
+		}
+		if len(m.runs) != 0 {
+			t.Errorf("ran %v, want nothing — the panel is already there", m.runs)
+		}
+	})
+
+	// Pressing the key is still a toggle.
+	withMock(t, func(m *mockRunner) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 \n%9 /home/u/.local/bin/mux watch\n"), nil,
+			"tmux", "list-panes", "-t", "@7", "-F", "#{pane_id} #{pane_start_command}")
+
+		if err := TogglePanel("%3", false); err != nil {
+			t.Fatalf("TogglePanel: %v", err)
+		}
+		if !ran(m, "kill-pane -t %9") {
+			t.Errorf("ran %v, want the panel closed", m.runs)
+		}
+	})
+}
+
+// Closing the panel by hand has to survive the resize hooks, or the key stops
+// meaning anything the moment a terminal is nudged.
+func TestTogglePanelAutoRespectsManualOff(t *testing.T) {
+	setup := func(m *mockRunner, off string) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
+			"-F", "#{pane_id} #{pane_start_command}")
+		m.OnOutput([]byte(off+"\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
+		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
+		m.OnOutput([]byte("27\n"), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
+		m.OnOutput([]byte("269\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
+	}
+	notVSCode := func(int, string) bool { return false }
+
+	withMock(t, func(m *mockRunner) {
+		setup(m, "1")
+		old := clientEnvHas
+		clientEnvHas = notVSCode
+		defer func() { clientEnvHas = old }()
+
+		if err := TogglePanel("%3", true); err != nil {
+			t.Fatalf("TogglePanel: %v", err)
+		}
+		if ran(m, "split-window") {
+			t.Errorf("ran %v, want the manual-off mark respected", m.runs)
+		}
+	})
+
+	// Pressing the key overrides it, and clears the mark so the hooks resume.
+	withMock(t, func(m *mockRunner) {
+		setup(m, "1")
+		old := clientEnvHas
+		clientEnvHas = notVSCode
+		defer func() { clientEnvHas = old }()
+
+		if err := TogglePanel("%3", false); err != nil {
+			t.Fatalf("TogglePanel: %v", err)
+		}
+		if !ran(m, "split-window") {
+			t.Errorf("ran %v, want the explicit call to open a panel", m.runs)
+		}
+		if !ran(m, "set-option -wu -t @7 @mux_panel_off") {
+			t.Errorf("ran %v, want the manual-off mark cleared", m.runs)
+		}
+	})
 }

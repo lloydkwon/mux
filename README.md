@@ -217,11 +217,17 @@ bind a run-shell "/absolute/path/to/mux panel -t #{pane_id}"
 # And put it in every new window and session automatically
 set-hook -g after-new-window  'run-shell "/absolute/path/to/mux panel --auto -t #{pane_id}"'
 set-hook -g after-new-session 'run-shell "/absolute/path/to/mux panel --auto -t #{pane_id}"'
+
+# And bring it back when a window that was too narrow grows again
+set-hook -g client-resized      'run-shell "/absolute/path/to/mux panel --auto -t #{pane_id}"'
+set-hook -g after-resize-window 'run-shell "/absolute/path/to/mux panel --auto -t #{pane_id}"'
 ```
 
-`--auto` marks the hook path, and it stands down in two cases: a session only being viewed from a VS Code integrated terminal, and a window narrower than 96 columns. Pressing the key still opens it in either, since that is a decision rather than a default.
+`--auto` marks the hook path. It is an *ensure* rather than a toggle — it opens a missing panel and never closes one — which is what lets the resize hooks call the same command without the panel flapping. It stands down in three cases: a window narrower than 200 columns, a session only being viewed from a VS Code integrated terminal, and a window where you closed the panel yourself. Pressing the key overrides all three, since that is a decision rather than a default, and it clears the manual-off mark so the hooks resume.
 
-The width rule is how "not on a phone" is decided. A mobile SSH client cannot be identified by environment the way VS Code can, and the real problem was never the device: with `aggressive-resize`, attaching from a phone shrinks the window to around 54 columns while the panel holds its 48, leaving the work pane five. A panel already open when that happens closes itself; `prefix+a` brings it back on a wide screen.
+The width rule is how "not on a small screen" is decided. A mobile SSH client cannot be identified by environment the way VS Code can, and the real problem was never the device: with `aggressive-resize`, attaching from a phone shrinks the window to around 54 columns while the panel holds its 48, leaving the work pane five. The threshold also separates the terminals in use — VS Code's integrated terminal sits at about 150 columns, a full one at 269 — and it reaches where the environment check cannot, since a window with no client attached has nobody to inspect but still has a size.
+
+A panel open when the window shrinks past the threshold closes itself, and the resize hooks open it again when the window grows back.
 
 Hiding it per client is not possible — a pane belongs to a window, not a client, so a window open in both terminals shows the panel to both. The only lever is whether it exists.
 

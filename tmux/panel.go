@@ -31,17 +31,20 @@ const (
 	panelCommand = "mux watch"
 )
 
-// TogglePanel closes the AI session panel in target's window if there is one,
-// and opens it otherwise. Pass "" for the current pane.
+// TogglePanel opens or closes the AI session panel in target's window. Pass ""
+// for the current pane.
 //
-// A window that has just been created cannot already hold a panel, so on an
-// after-new-window hook this reduces to "open" — which is why the keybinding
-// and the hooks can share one command instead of needing an open-only variant.
+// auto marks the hook path, and changes the verb from toggle to ensure: it
+// opens a missing panel but never closes one. That is what lets the resize
+// hooks call the same command — they fire constantly, and a toggle there would
+// flap. On after-new-window it behaves as before, since a fresh window cannot
+// already hold a panel.
 //
-// auto marks the hook path. It skips windows whose session is only being viewed
-// from VS Code, where the panel costs more width than it is worth. The
-// keybinding passes false: pressing it is a decision, and refusing there would
-// leave no way to see the panel in VS Code at all.
+// The hook path also stands down in three cases, none of them an error: the
+// window is too narrow to spare the width, its session is only being viewed
+// from VS Code, or the user closed the panel here by hand. Pressing the key
+// passes auto=false and overrides all three — that is a decision, not a
+// default, and refusing it would leave no way to see the panel at all.
 func TogglePanel(target string, auto bool) error {
 	window, dir, err := panelWindow(target)
 	if err != nil {
@@ -53,14 +56,21 @@ func TogglePanel(target string, auto bool) error {
 		return err
 	}
 	if pane != "" {
+		if auto {
+			return nil // ensure: already there, nothing to do
+		}
+		// Closing by hand is a decision the resize hooks must not undo.
+		_ = SetPanelDisabled(window, true)
 		return runner.Run("tmux", "kill-pane", "-t", pane)
 	}
 
+	// Everything below only runs when a panel has to be created, so the common
+	// hook case — a window that already has one — costs a single list-panes.
+	if auto && PanelDisabled(window) {
+		return nil
+	}
+
 	session, sessionErr := SessionForPane(target)
-	// Not errors: these are the places the panel is not wanted. A window too
-	// narrow to spare the width is the mobile case; a VS Code-only session is
-	// the other. Both only apply to the hook path — pressing the key opens it
-	// anywhere, because that is a decision rather than a default.
 	if auto {
 		if sessionErr == nil && SessionOnlyInVSCode(session) {
 			return nil
@@ -68,6 +78,9 @@ func TogglePanel(target string, auto bool) error {
 		if w, err := WindowWidth(target); err == nil && w < MinWindowWidth {
 			return nil
 		}
+	} else {
+		// Opening by hand clears the manual-off mark, so the hooks resume.
+		_ = SetPanelDisabled(window, false)
 	}
 
 	self, err := os.Executable()
@@ -155,15 +168,20 @@ func PanelWidth(session string) int {
 // shell it starts, and so into a tmux client started from one.
 const vscodeEnvMarker = "TERM_PROGRAM=vscode"
 
-// MinWindowWidth is the narrowest window worth putting a panel in: twice the
-// panel's own width, so it never takes more than half.
+// MinWindowWidth is the narrowest window worth putting a panel in.
 //
-// This is how "not on mobile" is decided. A phone over SSH cannot be identified
-// by environment the way VS Code can — every client app differs — and the real
-// problem was never the device but the width. Measured, a phone lands near 54
-// columns, where `aggressive-resize` shrank the window and the panel held its
-// 48, leaving the work pane 5.
-const MinWindowWidth = 96
+// This is how "small screen" is decided, and it covers what environment cannot.
+// A phone over SSH has no marker to match on — every client app differs — and
+// the device was never the point: measured, a phone lands near 54 columns,
+// where `aggressive-resize` shrank the window and the panel held its 48,
+// leaving the work pane 5.
+//
+// The value separates the terminals actually in use: VS Code's integrated
+// terminal sits at 149-150 columns, Windows Terminal at 269. 200 leaves margin
+// on both sides. The width rule reaches where SessionOnlyInVSCode cannot — a
+// window with no client attached has nobody to inspect, but it still has a
+// size.
+const MinWindowWidth = 200
 
 // clientEnvHas is the /proc lookup, replaceable in tests.
 var clientEnvHas = procEnvHas
@@ -231,6 +249,28 @@ func ResizePaneWidth(target string, width int) error {
 	}
 	args = append(args, "-x", strconv.Itoa(width))
 	return runner.Run("tmux", args...)
+}
+
+// panelDisabledOption marks a window where the user closed the panel by hand.
+// Without it the resize hooks would reopen it on the next stray resize and the
+// key would stop meaning anything. Per window, because the panel is per window.
+const panelDisabledOption = "@mux_panel_off"
+
+// PanelDisabled reports whether the panel was closed by hand in this window.
+func PanelDisabled(window string) bool {
+	out, err := runner.Output("tmux", "show-options", "-wqv", "-t", window, panelDisabledOption)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "1"
+}
+
+// SetPanelDisabled records, or clears, the manual-off mark for a window.
+func SetPanelDisabled(window string, off bool) error {
+	if !off {
+		return runner.Run("tmux", "set-option", "-wu", "-t", window, panelDisabledOption)
+	}
+	return runner.Run("tmux", "set-option", "-w", "-t", window, panelDisabledOption, "1")
 }
 
 // SetPanelWidth records the panel width for a session.

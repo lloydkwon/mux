@@ -231,9 +231,12 @@ func TestWatchSwitchFailureIsLogged(t *testing.T) {
 func TestWatchHoldsWidthAgainstRelayout(t *testing.T) {
 	m := watchTestModel(40, 20)
 
+	// Every window here is comfortably over MinWindowWidth: this test is about
+	// holding a width, and a narrow window would take the quit branch first.
+	//
 	// Window unchanged, pane changed: a border drag. Adopt and remember it.
-	m.winWidth, m.targetWidth = 150, 40
-	dragged, cmd := m.applyResizeWith(60, 150)
+	m.winWidth, m.targetWidth = 250, 40
+	dragged, cmd := m.applyResizeWith(60, 250)
 	if cmd == nil {
 		t.Error("a drag did not schedule a save")
 	}
@@ -242,19 +245,19 @@ func TestWatchHoldsWidthAgainstRelayout(t *testing.T) {
 	}
 
 	// Window changed and the pane drifted: tmux re-laid it out, so undo it.
-	relaid, cmd := dragged.applyResizeWith(66, 269)
+	relaid, cmd := dragged.applyResizeWith(66, 300)
 	if cmd == nil {
 		t.Error("a re-layout was not corrected")
 	}
 	if relaid.targetWidth != 60 {
 		t.Errorf("target = %d after a re-layout, want it held at 60", relaid.targetWidth)
 	}
-	if relaid.winWidth != 269 {
+	if relaid.winWidth != 300 {
 		t.Errorf("winWidth = %d, want the new window size recorded", relaid.winWidth)
 	}
 
 	// The correction lands: same window, pane back on target, nothing to undo.
-	settled, _ := relaid.applyResizeWith(60, 269)
+	settled, _ := relaid.applyResizeWith(60, 300)
 	if settled.targetWidth != 60 {
 		t.Errorf("target = %d once settled, want 60", settled.targetWidth)
 	}
@@ -302,8 +305,9 @@ func TestWatchQuitsWhenWindowGetsNarrow(t *testing.T) {
 		t.Error("did not quit when the window shrank past the minimum")
 	}
 
-	// Still wide enough: hold the width as before, do not leave.
-	if _, cmd := wide.applyResizeWith(52, 120); quits(cmd) {
-		t.Error("quit on a window that is still wide enough")
+	// Still wide enough: hold the width as before, do not leave. Expressed
+	// against the constant so it follows when the threshold moves.
+	if _, cmd := wide.applyResizeWith(52, tmux.MinWindowWidth); quits(cmd) {
+		t.Error("quit on a window that is exactly the minimum")
 	}
 }
