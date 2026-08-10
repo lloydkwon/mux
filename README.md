@@ -216,7 +216,10 @@ Pair with [skimd](https://github.com/lunemis/skimd) to review AI-generated markd
 | `o` | Rotate sort: recent → name → order |
 | `/` | Filter sessions by name or path |
 | `Esc` | Clear filter / cancel |
+| `?` | Help — marker legend and the full key list |
 | `q` | Quit |
+
+`?` opens a full-screen page explaining every marker a row can carry (`▶`/`▼`, `*`/`○`, `#N`, the elapsed column, `⌥`, the AI badge) alongside the keys above — the footer bar can list a key but cannot explain a glyph. The page is written in Korean, matching `README.ko.md`.
 
 ## Requirements
 

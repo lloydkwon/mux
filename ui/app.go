@@ -39,6 +39,7 @@ const (
 	modeFilter
 	modeConfirmKill
 	modeOrder
+	modeHelp
 )
 
 // Model is the top-level Bubble Tea model for the session manager TUI.
@@ -287,6 +288,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateConfirmKill(msg)
 	case modeOrder:
 		return m.updateOrder(msg)
+	case modeHelp:
+		// Any key closes, like confirmKillModel's default cancel. Guarding on
+		// KeyMsg keeps the 500ms tick from dismissing the page on its own.
+		if _, ok := msg.(tea.KeyMsg); ok {
+			m.mode = modeList
+		}
+		return m, nil
 	default:
 		return m.updateList(msg)
 	}
@@ -371,6 +379,10 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "/":
 			m.mode = modeFilter
 			m.filterMod = newFilterModel(m.filterText)
+			return m, nil
+
+		case "?":
+			m.mode = modeHelp
 			return m, nil
 
 		case "esc":
@@ -607,6 +619,8 @@ func (m Model) View() string {
 		return m.viewWithOverlay(m.renameModel.View())
 	case modeOrder:
 		return m.viewWithOverlay(m.orderModel.View())
+	case modeHelp:
+		return m.viewHelp()
 	default:
 		return m.viewMain()
 	}
@@ -705,6 +719,7 @@ func renderHelp() string {
 		{"0-9", "order"},
 		{"o", "sort"},
 		{"/", "filter"},
+		{"?", "help"},
 		{"q", "quit"},
 	}
 
@@ -713,7 +728,10 @@ func renderHelp() string {
 		parts = append(parts,
 			helpKeyStyle.Render(k.key)+" "+helpStyle.Render(k.desc))
 	}
-	return strings.Join(parts, helpStyle.Render("  •  "))
+	// A tight separator, not the roomier "  •  ": the bar is clipped at the
+	// terminal's width, and at 12 entries the wider one pushed `q quit` off a
+	// 150-column screen.
+	return strings.Join(parts, helpStyle.Render(" • "))
 }
 
 // AttachName returns the session name to attach to (if any) after the TUI

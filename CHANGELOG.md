@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `?` opens a full-screen help page. The list packs a lot into a few cells — `▶`/`▼`, `*`/`○`, `#N`, an elapsed column that silently switches from session age to AI-state age, `⌥`/`⌥⌥`, and the AI badge — and none of it was explained anywhere but the README. The page is a marker legend first, key table second, written in Korean. It reads the tool icons and their colors out of `tmux.LookupAITool` and the state glyphs out of `AIState.Icon()`, so the legend cannot drift from what the list actually draws. It renders through `fixedBox` rather than the centered overlay the other modals use: a `mux popup` on an 80x24 terminal gets 68x19, which a centered box would overflow, and a test pins the body to that budget.
+
 ### Changed
+- The footer bar gained a `? help` entry, and its separator tightened from `  •  ` to ` • `. The bar is clipped at the terminal's width rather than wrapped, so at twelve entries the roomier separator pushed `q quit` off the end of a 150-column screen.
 - Claude's live state is no longer a feature beside AI CLI detection — it is now part of it. The list row's dedicated state column is gone; the existing AI badge shows the state glyph (`⏳`/`❗`/`✅`) in place of the tool icon when a tool publishes state, and keeps its own icon (`✦ ◈ ⬡ ✧`) when it does not. Previously a Claude session rendered both, telling you the same thing twice.
 - `Session.ClaudeState` / `ClaudeWaitingFor` / `ClaudeSince` → `Session.AIState` / `AIWaitingFor` / `AISince`, with `tmux.ClaudeState` → `tmux.AIState` moved into `tmux/aitools.go` next to the tool registry. `tmux/claude_status.go` stays the Claude-specific *reader* — it is the only producer of a non-zero `AIState` — but nothing downstream speaks Claude any more. `ui/status.go`'s render helpers renamed to match (`aiGlyph`, `aiStateColor`, `aiBadgeColor`, `aiStatusText`).
 - `mux status` applies the same badge rule, so the tmux status bar shows which session is blocked rather than just which sessions run an AI CLI.
