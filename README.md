@@ -219,7 +219,11 @@ set-hook -g after-new-window  'run-shell "/absolute/path/to/mux panel --auto -t 
 set-hook -g after-new-session 'run-shell "/absolute/path/to/mux panel --auto -t #{pane_id}"'
 ```
 
-`--auto` marks the hook path, and it skips a session that is only being viewed from a VS Code integrated terminal — 48 columns is a lot to give up there. Pressing the key still opens it, since that is a decision rather than a default. This is as close as tmux gets to "hide it in VS Code": a pane belongs to a window, not a client, so a window open in both terminals shows the panel to both, and the only lever is whether it is created at all.
+`--auto` marks the hook path, and it stands down in two cases: a session only being viewed from a VS Code integrated terminal, and a window narrower than 96 columns. Pressing the key still opens it in either, since that is a decision rather than a default.
+
+The width rule is how "not on a phone" is decided. A mobile SSH client cannot be identified by environment the way VS Code can, and the real problem was never the device: with `aggressive-resize`, attaching from a phone shrinks the window to around 54 columns while the panel holds its 48, leaving the work pane five. A panel already open when that happens closes itself; `prefix+a` brings it back on a wide screen.
+
+Hiding it per client is not possible — a pane belongs to a window, not a client, so a window open in both terminals shows the panel to both. The only lever is whether it exists.
 
 `mux panel` closes the panel if the window already has one and opens it otherwise, so the key hides it as readily as it shows it and pressing twice cannot leave two. A window that was just created cannot already hold a panel, which is why the hooks call the same command rather than needing an open-only variant.
 

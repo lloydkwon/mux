@@ -57,8 +57,17 @@ func TogglePanel(target string, auto bool) error {
 	}
 
 	session, sessionErr := SessionForPane(target)
-	if auto && sessionErr == nil && SessionOnlyInVSCode(session) {
-		return nil // not an error: this is where the panel is not wanted
+	// Not errors: these are the places the panel is not wanted. A window too
+	// narrow to spare the width is the mobile case; a VS Code-only session is
+	// the other. Both only apply to the hook path — pressing the key opens it
+	// anywhere, because that is a decision rather than a default.
+	if auto {
+		if sessionErr == nil && SessionOnlyInVSCode(session) {
+			return nil
+		}
+		if w, err := WindowWidth(target); err == nil && w < MinWindowWidth {
+			return nil
+		}
 	}
 
 	self, err := os.Executable()
@@ -145,6 +154,16 @@ func PanelWidth(session string) int {
 // vscodeEnvMarker is what VS Code's integrated terminal exports into every
 // shell it starts, and so into a tmux client started from one.
 const vscodeEnvMarker = "TERM_PROGRAM=vscode"
+
+// MinWindowWidth is the narrowest window worth putting a panel in: twice the
+// panel's own width, so it never takes more than half.
+//
+// This is how "not on mobile" is decided. A phone over SSH cannot be identified
+// by environment the way VS Code can — every client app differs — and the real
+// problem was never the device but the width. Measured, a phone lands near 54
+// columns, where `aggressive-resize` shrank the window and the panel held its
+// 48, leaving the work pane 5.
+const MinWindowWidth = 96
 
 // clientEnvHas is the /proc lookup, replaceable in tests.
 var clientEnvHas = procEnvHas

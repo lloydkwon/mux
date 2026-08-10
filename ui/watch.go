@@ -165,6 +165,15 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth int) (watchModel, tea.Cm
 		}
 		return m, nil
 
+	case winWidth < tmux.MinWindowWidth:
+		// The window shrank past what it can spare — a phone attached, most
+		// likely. Leave, so the work pane gets its columns back; `prefix+a`
+		// brings the panel back on a wide screen.
+		//
+		// Only on the *transition*: a panel opened by hand in an already narrow
+		// window stays, for the same reason the key overrides the hook.
+		return m, tea.Quit
+
 	case winWidth == m.winWidth: // the user dragged the border
 		if paneWidth < notifyMinWidth {
 			return m, nil

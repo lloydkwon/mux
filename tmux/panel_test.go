@@ -393,3 +393,51 @@ func TestTogglePanelAutoSkipsVSCode(t *testing.T) {
 		}
 	})
 }
+
+// A phone over SSH cannot be told apart by environment, and the real problem
+// was never the device but the width: `aggressive-resize` shrinks the window
+// and a 48-column panel leaves the work pane almost nothing.
+func TestTogglePanelAutoSkipsNarrowWindow(t *testing.T) {
+	setup := func(m *mockRunner, width string) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
+			"-F", "#{pane_id} #{pane_start_command}")
+		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
+		m.OnOutput([]byte("27\n"), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
+		m.OnOutput([]byte(width+"\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
+	}
+	notVSCode := func(int, string) bool { return false }
+
+	tests := []struct {
+		name      string
+		width     string
+		auto      bool
+		wantSplit bool
+	}{
+		{name: "a phone-sized window is skipped", width: "54", auto: true, wantSplit: false},
+		{name: "one column short is still skipped", width: "95", auto: true, wantSplit: false},
+		{name: "exactly the minimum is wide enough", width: "96", auto: true, wantSplit: true},
+		{name: "a desktop window is fine", width: "269", auto: true, wantSplit: true},
+		{name: "pressing the key overrides the width", width: "54", auto: false, wantSplit: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			withMock(t, func(m *mockRunner) {
+				setup(m, tc.width)
+				old := clientEnvHas
+				clientEnvHas = notVSCode
+				defer func() { clientEnvHas = old }()
+
+				if err := TogglePanel("%3", tc.auto); err != nil {
+					t.Fatalf("TogglePanel: %v", err)
+				}
+				got := len(m.runs) == 1 && strings.Contains(m.runs[0], "split-window")
+				if got != tc.wantSplit {
+					t.Errorf("split=%v, want %v (ran %v)", got, tc.wantSplit, m.runs)
+				}
+			})
+		})
+	}
+}

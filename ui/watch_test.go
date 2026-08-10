@@ -271,3 +271,39 @@ func TestWatchWidthIgnoresSqueeze(t *testing.T) {
 		t.Errorf("target = %d, want the squeeze rejected and 60 kept", squeezed.targetWidth)
 	}
 }
+
+// Attaching from a phone shrinks the window and the panel would hold its 48
+// columns, leaving the work pane almost none. It leaves instead. The first size
+// is exempt: a panel opened by hand in an already narrow window stays, the same
+// way the key overrides the hook.
+func TestWatchQuitsWhenWindowGetsNarrow(t *testing.T) {
+	quits := func(cmd tea.Cmd) bool {
+		if cmd == nil {
+			return false
+		}
+		_, ok := cmd().(tea.QuitMsg)
+		return ok
+	}
+
+	// Opened by hand in a 54-column window: stays.
+	m := watchTestModel(40, 20)
+	narrowFirst, cmd := m.applyResizeWith(40, 54)
+	if quits(cmd) {
+		t.Error("quit on the first size — a hand-opened panel should stay")
+	}
+	if narrowFirst.winWidth != 54 {
+		t.Errorf("winWidth = %d, want the narrow window adopted", narrowFirst.winWidth)
+	}
+
+	// A phone attaches to a window that was wide: leave.
+	wide := watchTestModel(48, 20)
+	wide.winWidth, wide.targetWidth = 269, 48
+	if _, cmd := wide.applyResizeWith(48, 54); !quits(cmd) {
+		t.Error("did not quit when the window shrank past the minimum")
+	}
+
+	// Still wide enough: hold the width as before, do not leave.
+	if _, cmd := wide.applyResizeWith(52, 120); quits(cmd) {
+		t.Error("quit on a window that is still wide enough")
+	}
+}
