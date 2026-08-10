@@ -14,10 +14,12 @@ const (
 	indentPane   = 4
 
 	// Session row layout. The prefix is chevron + attached marker + order
-	// label + the state cell, plus their separators — a width-invariant
-	// gutter, so the state and elapsed time survive at every panel width.
-	sessionPrefixWidth = 1 + 1 + 1 + 1 + 4 + 1 + stateCellWidth + 1
-	sessionNameMin     = 13 // floor: prefix + this exactly fills an 80-col panel
+	// label + the elapsed cell, plus their separators — a width-invariant
+	// gutter, so the elapsed time survives at every panel width.
+	sessionPrefixWidth = 1 + 1 + 1 + 1 + 4 + 1 + elapsedWidth + 1
+	// floor: prefix + this + the badge cell exactly fills an 80-col panel, so
+	// the badge is the last thing standing rather than the first thing cut.
+	sessionNameMin     = 13
 	sessionNameMax     = 24
 	sessionTailReserve = 12 // room the AI icon and branch would like
 )
@@ -123,23 +125,24 @@ func formatSessionRow(s tmux.Session, order int, expanded, selected bool, width 
 		orderLabel = fmt.Sprintf("#%-3d", order)
 	}
 
-	stateText, stateColor := claudeStateCell(s, selected)
-
 	nameWidth := clampInt(width-sessionPrefixWidth-sessionTailReserve,
 		sessionNameMin, sessionNameMax)
 
+	// The elapsed time takes the state's color: with the state glyph folded
+	// into the AI badge, the color is what still says "this row is blocked".
 	segs := []rowSeg{
 		{text: fmt.Sprintf("%s %s %s ", chevron, status, orderLabel)},
-		{text: stateText, color: stateColor},
+		{text: timeAgo(sessionAge(s)), color: aiStateColor(s.AIState, selected)},
 		{text: " " + fitCells(s.Name, nameWidth)},
 	}
-	if tool, ok := tmux.SessionAITool(s); ok {
-		segs = append(segs, rowSeg{
-			text:  " " + tool.Icon,
-			color: lipgloss.Color(tool.Color),
-			atom:  true,
-		})
-	}
+	// Always emit the badge cell, blank when there is no AI CLI, so the branch
+	// column lines up whether or not a row has a badge.
+	glyph, _ := aiGlyph(s)
+	segs = append(segs, rowSeg{
+		text:  " " + padOrTruncate(glyph, badgeWidth),
+		color: aiBadgeColor(s, selected),
+		atom:  true,
+	})
 	if s.GitBranch != "" {
 		segs = append(segs, rowSeg{text: " " + s.GitBranch})
 	}

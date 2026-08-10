@@ -20,6 +20,9 @@ make install PREFIX=~/.local     # installs to $PREFIX/bin
 go test ./ui -run TestFlattenMenu -v    # single test
 go vet ./... && golangci-lint run       # expected before submitting (no repo config; defaults)
 GOARCH=arm64 go build ./cmd/mux         # CI also cross-compiles this
+
+scripts/test-fixture.sh up      # real tmux sessions (multi-window/pane/empty) for manual TUI checks
+scripts/test-fixture.sh down    # tear them down
 ```
 
 CI (`.github/workflows/ci.yml`) runs test + build + arm64 cross-build. Releases are tag-driven via goreleaser. Commits follow Conventional Commits.
@@ -76,9 +79,19 @@ Never attach from inside the Bubble Tea loop. `Update` records `attachTarget` / 
 - **Width compensation is impossible here.** `drawBorder` re-pads every line to `innerWidth`, so any cell a row subtracts to account for a wide glyph is added straight back. The only workable rule is to emit glyphs whose drawn width equals `ansi.StringWidth` — verify a new glyph before using it (`TestGlyphWidthsAreStable` in `ui/list_test.go` pins the current set). Emoji measure and draw 2; most geometric shapes measure and draw 1.
 - **Never wrap a row containing nested styled spans in an outer style.** A nested `lipgloss.Render` emits its own `ESC[0m`, which resets the *background* too, so a colored segment mid-row strips the selection highlight from everything after it. `renderRow` (`ui/layout.go`) builds rows from `rowSeg` values where each span re-states the full style, background included.
 
+### One AI badge, two facts
+
+AI CLI detection is a single feature, not a generic layer with a Claude feature bolted beside it. `tmux/aitools.go` owns all of it: `aiToolMap` (which tools exist, their icon and color) *and* `AIState` (`None`/`Working`/`Approval`/`Ready`) with `AIState.Icon()` (`⏳`/`❗`/`✅`).
+
+**The rule: a live state glyph replaces the tool icon, it never sits beside it.** `ui/status.go`'s `aiGlyph` is the one place that decides, and `ui/list.go`, `ui/preview.go`, and `mux status` all go through it. A separate state column would repeat what the tool icon already says, since only a detected AI CLI can have a state. Keep it that way when adding anything state-related.
+
+The badge cell is padded to `badgeWidth` (2) even when empty, because state glyphs measure 2 and tool icons measure 1 — that padding is what keeps the git branch in one column across every row. `sessionNameMin` is tuned so prefix + name + badge exactly fills an 80-col panel: the badge is the last thing cut, not the first.
+
+The list's elapsed column shows the *state's* age for a session with live state (`sessionAge`) and the session's creation age otherwise, and takes the state color — with the glyph folded into the badge, that color is what still marks a blocked row at a glance.
+
 ### Claude live-state chain
 
-`tmux/claude_status.go` reads `~/.claude/sessions/*.json` — Claude Code's own state file, one per running session — and indexes them by tmux session name via each file's `tmux` field (`"<session>:@<win>.%<pane>"`). `ClaudeStatuses()` does one `os.ReadDir` per refresh behind a 1s TTL cache, and `ListSessions` hoists that single call out of its parse loop, so state arrives atomically with the session slice and needs no tick fan-out or `Model` cache.
+Claude is the only tool that publishes live state, so `tmux/claude_status.go` is the sole producer of a non-zero `AIState`. It reads `~/.claude/sessions/*.json` — Claude Code's own state file, one per running session — and indexes them by tmux session name via each file's `tmux` field (`"<session>:@<win>.%<pane>"`). `ClaudeStatuses()` does one `os.ReadDir` per refresh behind a 1s TTL cache, and `ListSessions` hoists that single call out of its parse loop, so state arrives atomically with the session slice and needs no tick fan-out or `Model` cache.
 
 Three things about this data are easy to get wrong:
 
@@ -86,11 +99,11 @@ Three things about this data are easy to get wrong:
 - **`status: "waiting"` means blocked on the user**, whatever `waitingFor` says; a finished turn sitting at the prompt reports `idle` instead. That mapping lives in `mapClaudeState`.
 - The format is private and unversioned. Every field decodes as optional; a renamed field must degrade to "no badge", never an error.
 
-Because `Session.ActiveCommand` only reflects the *active pane of the active window*, this state file also covers Claude running in a background window. `tmux.SessionAITool` prefers it over `ActiveCommand` so the `✦` badge, token loading, and `mux status` all catch that case.
+Because `Session.ActiveCommand` only reflects the *active pane of the active window*, this state file also covers Claude running in a background window. `tmux.SessionAITool` prefers it over `ActiveCommand` so the badge, token loading, and `mux status` all catch that case — and it hardcodes `"claude"` for the stateful path, since a second state provider would first have to carry its own tool name onto `Session`.
 
 ### Claude cost tracking chain
 
-`tmux/claude.go`: pane PID → `pgrep -P` children → `~/.claude/sessions/<childPID>.json` → `{sessionId, cwd}` → `~/.claude/projects/<cwd with "/" replaced by "-">/<sessionId>.jsonl` → sum `usage` fields on `type: "assistant"` lines. Per-1M pricing constants are hardcoded in `estimateCost` (currently Opus-tier rates) and are an estimate only.
+`tmux/claude.go`: pane PID → `pgrep -P` children → `~/.claude/sessions/<childPID>.json` → `{sessionId, cwd}` → `~/.claude/projects/<cwd with "/" replaced by "-">/<sessionId>.jsonl` → sum `usage` fields on `type: "assistant"` lines. Per-1M pricing constants are hardcoded in `estimateCost` (currently Opus-tier rates) and are an estimate only. `ui/app.go` gates the per-tick load on `tool.Name == "claude"` — any other AI CLI would scan for a file that is not there.
 
 ### Preferences
 

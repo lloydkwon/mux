@@ -56,14 +56,14 @@ func resetClaudeStatusCache() {
 func TestMapClaudeState(t *testing.T) {
 	tests := []struct {
 		status string
-		want   ClaudeState
+		want   AIState
 	}{
-		{"busy", ClaudeStateWorking},
-		{"waiting", ClaudeStateApproval},
-		{"idle", ClaudeStateReady},
-		{"shell", ClaudeStateNone},
-		{"", ClaudeStateNone},
-		{"something-new", ClaudeStateNone},
+		{"busy", AIStateWorking},
+		{"waiting", AIStateApproval},
+		{"idle", AIStateReady},
+		{"shell", AIStateNone},
+		{"", AIStateNone},
+		{"something-new", AIStateNone},
 	}
 	for _, tt := range tests {
 		if got := mapClaudeState(tt.status); got != tt.want {
@@ -72,12 +72,12 @@ func TestMapClaudeState(t *testing.T) {
 	}
 }
 
-func TestClaudeStateString(t *testing.T) {
-	tests := map[ClaudeState]string{
-		ClaudeStateNone:     "",
-		ClaudeStateWorking:  "working",
-		ClaudeStateApproval: "approval",
-		ClaudeStateReady:    "waiting",
+func TestAIStateString(t *testing.T) {
+	tests := map[AIState]string{
+		AIStateNone:     "",
+		AIStateWorking:  "working",
+		AIStateApproval: "approval",
+		AIStateReady:    "waiting",
 	}
 	for state, want := range tests {
 		if got := state.String(); got != want {
@@ -112,7 +112,7 @@ func TestScanClaudeStatusesRealFixtures(t *testing.T) {
 		}
 
 		blocked := got["myname"]
-		if blocked.State != ClaudeStateApproval {
+		if blocked.State != AIStateApproval {
 			t.Errorf("myname state = %v, want approval", blocked.State)
 		}
 		if blocked.WaitingFor != "input needed" {
@@ -126,7 +126,7 @@ func TestScanClaudeStatusesRealFixtures(t *testing.T) {
 		}
 
 		ready := got["project"]
-		if ready.State != ClaudeStateReady {
+		if ready.State != AIStateReady {
 			t.Errorf("project state = %v, want waiting", ready.State)
 		}
 		if ready.WaitingFor != "" {
@@ -177,7 +177,7 @@ func TestScanClaudeStatusesPrefersMoreUrgent(t *testing.T) {
 			if len(got) != 1 {
 				t.Fatalf("expected 1 entry, got %d", len(got))
 			}
-			if s := got["shared"]; s.State != ClaudeStateApproval || s.PID != 200 {
+			if s := got["shared"]; s.State != AIStateApproval || s.PID != 200 {
 				t.Errorf("expected the blocked session to win, got state=%v pid=%d", s.State, s.PID)
 			}
 		})

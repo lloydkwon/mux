@@ -2,7 +2,7 @@ package ui
 
 import (
 	"fmt"
-	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -10,47 +10,52 @@ import (
 )
 
 const (
-	// stateGlyphWidth is the cell width every state glyph must measure. The
-	// glyphs below are Emoji_Presentation, which ansi.StringWidth reports as 2
-	// and terminals draw as 2. Any replacement must measure the same, because
-	// drawBorder re-pads every line and no width compensation survives it.
-	stateGlyphWidth = 2
+	// badgeWidth is the fixed cell width of the AI column. State glyphs are
+	// Emoji_Presentation and measure 2; tool icons measure 1 and get padded to
+	// match, so the branch column lines up across every row.
+	badgeWidth = 2
 
-	// stateCellWidth is the fixed list column: glyph + space + 4-cell elapsed.
-	stateCellWidth = stateGlyphWidth + 1 + 4
+	// elapsedWidth is the fixed gutter holding how long the row has held its
+	// state.
+	elapsedWidth = 4
 )
 
-// claudeGlyph returns the marker for a Claude state, or blank padding when
-// there is no live Claude session. Always exactly stateGlyphWidth cells.
-func claudeGlyph(st tmux.ClaudeState) string {
-	switch st {
-	case tmux.ClaudeStateWorking:
-		return "⏳"
-	case tmux.ClaudeStateApproval:
-		return "❗"
-	case tmux.ClaudeStateReady:
-		return "✅"
-	default:
-		return strings.Repeat(" ", stateGlyphWidth)
+// aiGlyph returns the session's AI marker: the live-state glyph when the tool
+// publishes one, otherwise the tool's own icon. ok is false when the session
+// runs no known AI CLI.
+//
+// One badge carries both facts. A separate state column would repeat what the
+// tool icon already says, since only a detected AI CLI can have a state.
+//
+// The result is unpadded — the list pads it to badgeWidth, the preview header
+// wants it tight against the tool name.
+func aiGlyph(s tmux.Session) (string, bool) {
+	tool, ok := tmux.SessionAITool(s)
+	if !ok {
+		return "", false
 	}
+	if g := s.AIState.Icon(); g != "" {
+		return g, true
+	}
+	return tool.Icon, true
 }
 
-// claudeColor returns the foreground for a state, using a lighter tint when the
-// row is selected so it stays legible against colorSelected. Returns nil for
-// sessions with no Claude state, meaning "use the row's base color".
-func claudeColor(st tmux.ClaudeState, selected bool) lipgloss.TerminalColor {
+// aiStateColor returns the foreground for a live state, using a lighter tint
+// when the row is selected so it stays legible against colorSelected. Returns
+// nil for a session with no live state, meaning "use the row's base color".
+func aiStateColor(st tmux.AIState, selected bool) lipgloss.TerminalColor {
 	switch st {
-	case tmux.ClaudeStateWorking:
+	case tmux.AIStateWorking:
 		if selected {
 			return colorStateWorkingSel
 		}
 		return colorStateWorking
-	case tmux.ClaudeStateApproval:
+	case tmux.AIStateApproval:
 		if selected {
 			return colorStateApprovalSel
 		}
 		return colorStateApproval
-	case tmux.ClaudeStateReady:
+	case tmux.AIStateReady:
 		if selected {
 			return colorStateReadySel
 		}
@@ -60,46 +65,53 @@ func claudeColor(st tmux.ClaudeState, selected bool) lipgloss.TerminalColor {
 	}
 }
 
-// claudeStateCell renders the fixed-width list column holding the state glyph
-// and how long the session has held that state. It always returns exactly
-// stateCellWidth cells.
-//
-// For a Claude session the time is the state's age — "blocked for 3m" is the
-// number worth acting on, where the session's creation age is inert. Other
-// sessions keep showing their creation age, as they always have.
-func claudeStateCell(s tmux.Session, selected bool) (string, lipgloss.TerminalColor) {
-	glyph := claudeGlyph(s.ClaudeState)
-
-	when := s.Created
-	if s.ClaudeState != tmux.ClaudeStateNone && !s.ClaudeSince.IsZero() {
-		when = s.ClaudeSince
+// aiBadgeColor colors the badge by state when there is one, falling back to the
+// tool's own hex so ✦/◈/⬡/✧ keep the colors they have always had.
+func aiBadgeColor(s tmux.Session, selected bool) lipgloss.TerminalColor {
+	if c := aiStateColor(s.AIState, selected); c != nil {
+		return c
 	}
-
-	return glyph + " " + timeAgo(when), claudeColor(s.ClaudeState, selected)
+	if tool, ok := tmux.SessionAITool(s); ok {
+		return lipgloss.Color(tool.Color)
+	}
+	return nil
 }
 
-// claudeStatusText renders the preview's state cluster, dropping detail to fit
-// maxWidth. Returns "" when the session has no live Claude state.
+// sessionAge returns the timestamp the list's elapsed column counts from.
+//
+// For a session with live AI state that is the state's age — "blocked for 3m"
+// is the number worth acting on, where the session's creation age is inert.
+// Other sessions keep showing their creation age, as they always have.
+func sessionAge(s tmux.Session) time.Time {
+	if s.AIState != tmux.AIStateNone && !s.AISince.IsZero() {
+		return s.AISince
+	}
+	return s.Created
+}
+
+// aiStatusText renders the preview's state cluster, dropping detail to fit
+// maxWidth. Returns "" when the session has no live AI state — the preview
+// header already names the tool.
 //
 // The blocking reason outranks everything else it competes with: on a narrow
 // preview the token counts go before the reason does.
-func claudeStatusText(s tmux.Session, maxWidth int) string {
-	if s.ClaudeState == tmux.ClaudeStateNone {
+func aiStatusText(s tmux.Session, maxWidth int) string {
+	if s.AIState == tmux.AIStateNone {
 		return ""
 	}
 
-	glyph := claudeGlyph(s.ClaudeState)
-	label := s.ClaudeState.String()
+	glyph := s.AIState.Icon()
+	label := s.AIState.String()
 
 	elapsed := ""
-	if !s.ClaudeSince.IsZero() {
-		elapsed = "  " + compactAgo(s.ClaudeSince)
+	if !s.AISince.IsZero() {
+		elapsed = "  " + compactAgo(s.AISince)
 	}
 
 	candidates := []string{}
-	if s.ClaudeWaitingFor != "" {
+	if s.AIWaitingFor != "" {
 		candidates = append(candidates,
-			fmt.Sprintf("  %s %s · %s%s", glyph, label, s.ClaudeWaitingFor, elapsed))
+			fmt.Sprintf("  %s %s · %s%s", glyph, label, s.AIWaitingFor, elapsed))
 	}
 	candidates = append(candidates,
 		fmt.Sprintf("  %s %s%s", glyph, label, elapsed),

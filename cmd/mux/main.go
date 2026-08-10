@@ -133,7 +133,13 @@ func runStatus() error {
 		if !ok {
 			continue
 		}
-		parts = append(parts, tool.Icon)
+		// Same badge rule as the list: a live state replaces the tool icon, so
+		// the status bar alone shows which session is waiting on you.
+		icon := tool.Icon
+		if g := s.AIState.Icon(); g != "" {
+			icon = g
+		}
+		parts = append(parts, icon)
 	}
 
 	if len(parts) == 0 {

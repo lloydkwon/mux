@@ -62,21 +62,26 @@ func TestAiLabelPlain(t *testing.T) {
 
 	// A live Claude session is surfaced even when the active pane is a shell,
 	// because Claude may be running in another window.
-	info = aiLabelPlain(tmux.Session{
-		ActiveCommand: "bash",
-		ClaudeState:   tmux.ClaudeStateWorking,
-	})
+	live := tmux.Session{ActiveCommand: "bash", AIState: tmux.AIStateWorking}
+	info = aiLabelPlain(live)
 	if info.styled == "" {
-		t.Error("a live Claude state should produce a badge regardless of ActiveCommand")
+		t.Error("a live AI state should produce a badge regardless of ActiveCommand")
+	}
+	// The header follows the same merge rule as the list: state glyph, not ✦.
+	if !strings.Contains(info.text, tmux.AIStateWorking.Icon()) {
+		t.Errorf("header badge = %q, want the state glyph", info.text)
+	}
+	if strings.Contains(info.text, "✦") {
+		t.Errorf("header badge shows both state and tool icon: %q", info.text)
 	}
 }
 
 func TestFormatStatusLine(t *testing.T) {
 	now := time.Now()
 	blocked := tmux.Session{
-		ClaudeState:      tmux.ClaudeStateApproval,
-		ClaudeWaitingFor: "permission prompt",
-		ClaudeSince:      now.Add(-3 * time.Minute),
+		AIState:      tmux.AIStateApproval,
+		AIWaitingFor: "permission prompt",
+		AISince:      now.Add(-3 * time.Minute),
 	}
 	usage := &tmux.TokenUsage{InputTokens: 1200, OutputTokens: 890, TotalCost: 0.12}
 
@@ -116,12 +121,12 @@ func TestFormatStatusLine(t *testing.T) {
 
 // The header must keep its exact line budget whether or not a status row is
 // present, in both the 2-line and 3-line branches.
-func TestRenderPreviewLineCountWithClaudeState(t *testing.T) {
+func TestRenderPreviewLineCountWithAIState(t *testing.T) {
 	session := tmux.Session{
-		Name:        "mux",
-		Directory:   "/home/user/mux",
-		ClaudeState: tmux.ClaudeStateWorking,
-		ClaudeSince: time.Now().Add(-time.Minute),
+		Name:      "mux",
+		Directory: "/home/user/mux",
+		AIState:   tmux.AIStateWorking,
+		AISince:   time.Now().Add(-time.Minute),
 	}
 	item := &listItem{kind: itemSession, session: &session}
 
@@ -135,22 +140,22 @@ func TestRenderPreviewLineCountWithClaudeState(t *testing.T) {
 	}
 }
 
-func TestClaudeStatusTextDegrades(t *testing.T) {
+func TestAIStatusTextDegrades(t *testing.T) {
 	s := tmux.Session{
-		ClaudeState:      tmux.ClaudeStateApproval,
-		ClaudeWaitingFor: "permission prompt",
-		ClaudeSince:      time.Now().Add(-3 * time.Minute),
+		AIState:      tmux.AIStateApproval,
+		AIWaitingFor: "permission prompt",
+		AISince:      time.Now().Add(-3 * time.Minute),
 	}
 
 	for _, width := range []int{70, 46, 30, 20, 12, 8, 4, 1} {
-		got := claudeStatusText(s, width)
+		got := aiStatusText(s, width)
 		if w := ansi.StringWidth(got); w > width {
 			t.Errorf("width=%d produced %d cells: %q", width, w, got)
 		}
 	}
 
-	if got := claudeStatusText(tmux.Session{}, 70); got != "" {
-		t.Errorf("no Claude state should render nothing, got %q", got)
+	if got := aiStatusText(tmux.Session{}, 70); got != "" {
+		t.Errorf("no live AI state should render nothing, got %q", got)
 	}
 }
 

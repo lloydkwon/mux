@@ -155,26 +155,31 @@ type labelInfo struct {
 	styled string // ANSI-styled version for display
 }
 
+// aiLabelPlain builds the preview header badge. It uses the same glyph rule as
+// the list: the live-state glyph when the tool publishes one, the tool's own
+// icon otherwise.
 func aiLabelPlain(s tmux.Session) labelInfo {
 	tool, ok := tmux.SessionAITool(s)
 	if !ok {
 		return labelInfo{}
 	}
-	text := "  " + tool.Icon + " " + tool.Name
-	styled := "  " + lipgloss.NewStyle().Foreground(lipgloss.Color(tool.Color)).Bold(true).Render(tool.Icon+" "+tool.Name)
-	return labelInfo{text: text, styled: styled}
+	glyph, _ := aiGlyph(s)
+	text := "  " + glyph + " " + tool.Name
+	// The preview panel is never a selected row, so the base tint always fits.
+	style := lipgloss.NewStyle().Foreground(aiBadgeColor(s, false)).Bold(true)
+	return labelInfo{text: text, styled: "  " + style.Render(glyph+" "+tool.Name)}
 }
 
-// formatStatusLine renders the row below the preview header: Claude's state and
-// how long it has held it on the left, token usage and cost on the right.
-// Returns "" when the session has neither, leaving the caller's line budget
-// untouched.
+// formatStatusLine renders the row below the preview header: the AI CLI's live
+// state and how long it has held it on the left, token usage and cost on the
+// right. Returns "" when the session has neither, leaving the caller's line
+// budget untouched.
 //
 // The state text is laid out first and the token cluster is dropped when they
-// cannot both fit — on a narrow preview, why Claude is blocked matters more
+// cannot both fit — on a narrow preview, why the tool is blocked matters more
 // than what it has cost.
 func formatStatusLine(s tmux.Session, u *tmux.TokenUsage, width int) string {
-	left := claudeStatusText(s, width)
+	left := aiStatusText(s, width)
 
 	right := ""
 	if u != nil {
@@ -199,7 +204,7 @@ func formatStatusLine(s tmux.Session, u *tmux.TokenUsage, width int) string {
 
 	muted := lipgloss.NewStyle().Foreground(colorMuted)
 	stateStyle := muted
-	if c := claudeColor(s.ClaudeState, false); c != nil {
+	if c := aiStateColor(s.AIState, false); c != nil {
 		stateStyle = lipgloss.NewStyle().Foreground(c)
 	}
 

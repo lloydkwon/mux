@@ -163,7 +163,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds := []tea.Cmd{loadSessions, tick()}
 		if it := m.currentItem(); it != nil && it.session != nil {
 			cmds = append(cmds, refreshPreview(previewKeyForItem(*it)))
-			if _, ok := tmux.SessionAITool(*it.session); ok {
+			// Cost tracking reads Claude's own JSONL logs, so it only pays off
+			// for Claude — any other tool would scan for a file that is not there.
+			if tool, ok := tmux.SessionAITool(*it.session); ok && tool.Name == "claude" {
 				cmds = append(cmds, loadTokenUsage(it.session.Name, it.session.PanePID))
 			}
 		}

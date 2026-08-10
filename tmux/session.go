@@ -79,9 +79,9 @@ func parseLine(line string, statuses map[string]ClaudeStatus) (Session, error) {
 	}
 
 	if st, ok := statuses[s.Name]; ok {
-		s.ClaudeState = st.State
-		s.ClaudeWaitingFor = st.WaitingFor
-		s.ClaudeSince = st.Since
+		s.AIState = st.State
+		s.AIWaitingFor = st.WaitingFor
+		s.AISince = st.Since
 	}
 
 	return s, nil

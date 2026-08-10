@@ -9,11 +9,11 @@ import (
 	"github.com/lloydkwon/mux/tmux"
 )
 
-var allClaudeStates = []tmux.ClaudeState{
-	tmux.ClaudeStateNone,
-	tmux.ClaudeStateWorking,
-	tmux.ClaudeStateApproval,
-	tmux.ClaudeStateReady,
+var allAIStates = []tmux.AIState{
+	tmux.AIStateNone,
+	tmux.AIStateWorking,
+	tmux.AIStateApproval,
+	tmux.AIStateReady,
 }
 
 // Every decorative rune the list emits must measure what the terminal draws.
@@ -27,49 +27,58 @@ func TestGlyphWidthsAreStable(t *testing.T) {
 			t.Errorf("glyph %q measures %d cells, want 1", g, w)
 		}
 	}
-	for _, st := range allClaudeStates {
-		if w := ansi.StringWidth(claudeGlyph(st)); w != stateGlyphWidth {
-			t.Errorf("claudeGlyph(%v) measures %d cells, want %d", st, w, stateGlyphWidth)
+	for _, st := range allAIStates {
+		g := st.Icon()
+		if st == tmux.AIStateNone {
+			if g != "" {
+				t.Errorf("AIStateNone.Icon() = %q, want empty so the tool icon shows", g)
+			}
+			continue
+		}
+		if w := ansi.StringWidth(g); w != badgeWidth {
+			t.Errorf("%v.Icon() = %q measures %d cells, want %d", st, g, w, badgeWidth)
 		}
 	}
 }
 
-// The state column is a fixed-width slot; if it ever varies, every column to
-// its right shifts on that row alone.
-func TestClaudeStateCellIsFixedWidth(t *testing.T) {
-	now := time.Now()
-	ages := []time.Duration{
-		0,
-		5 * time.Second,
-		12 * time.Minute,
-		3 * time.Hour,
-		2 * 24 * time.Hour,
-		365 * 24 * time.Hour,
-		-5 * time.Second, // clock skew
-	}
-
-	for _, st := range allClaudeStates {
-		for _, age := range ages {
-			s := tmux.Session{
-				Created:     now.Add(-age),
-				ClaudeState: st,
-				ClaudeSince: now.Add(-age),
-			}
-			for _, selected := range []bool{false, true} {
-				text, _ := claudeStateCell(s, selected)
-				if w := ansi.StringWidth(text); w != stateCellWidth {
-					t.Errorf("state=%v age=%v selected=%v: cell %q measures %d, want %d",
-						st, age, selected, text, w, stateCellWidth)
-				}
+// The badge is a fixed-width slot whatever it holds — a 2-cell state glyph, a
+// 1-cell tool icon, or nothing at all. If it ever varies, the branch column
+// shifts on that row alone.
+func TestAIBadgeCellIsFixedWidth(t *testing.T) {
+	for _, st := range allAIStates {
+		for _, cmd := range []string{"", "bash", "claude", "codex", "aider", "gemini"} {
+			s := tmux.Session{ActiveCommand: cmd, AIState: st}
+			glyph, _ := aiGlyph(s)
+			if w := ansi.StringWidth(padOrTruncate(glyph, badgeWidth)); w != badgeWidth {
+				t.Errorf("state=%v cmd=%q: badge %q measures %d, want %d",
+					st, cmd, glyph, w, badgeWidth)
 			}
 		}
 	}
+}
 
-	// An unknown state start must still fill the slot.
-	s := tmux.Session{Created: now, ClaudeState: tmux.ClaudeStateWorking}
-	text, _ := claudeStateCell(s, false)
-	if w := ansi.StringWidth(text); w != stateCellWidth {
-		t.Errorf("zero ClaudeSince: cell %q measures %d, want %d", text, w, stateCellWidth)
+// The whole point of the merge: one badge says both which tool and what state.
+// A live state replaces the tool icon rather than sitting beside it.
+func TestAIBadgeMergesStateAndTool(t *testing.T) {
+	stateful := tmux.Session{ActiveCommand: "claude", AIState: tmux.AIStateWorking}
+	if got, _ := aiGlyph(stateful); got != tmux.AIStateWorking.Icon() {
+		t.Errorf("working claude badge = %q, want the state glyph %q",
+			got, tmux.AIStateWorking.Icon())
+	}
+
+	// No state file (Claude not running under a tmux-aware session, or a tool
+	// that publishes nothing): the tool icon still identifies the row.
+	for cmd, want := range map[string]string{
+		"claude": "✦", "codex": "◈", "aider": "⬡", "gemini": "✧",
+	} {
+		got, ok := aiGlyph(tmux.Session{ActiveCommand: cmd})
+		if !ok || got != want {
+			t.Errorf("aiGlyph(%q) = %q, %v; want %q, true", cmd, got, ok, want)
+		}
+	}
+
+	if _, ok := aiGlyph(tmux.Session{ActiveCommand: "bash"}); ok {
+		t.Error("aiGlyph reported a badge for a plain shell session")
 	}
 }
 
@@ -81,7 +90,7 @@ func TestFormatSessionRowWidthInvariant(t *testing.T) {
 	names := []string{"a", "mux", "a-fairly-long-session-name-indeed", "한글세션이름"}
 	widths := []int{10, 16, 22, 30, 46, 62, 78}
 
-	for _, st := range allClaudeStates {
+	for _, st := range allAIStates {
 		for _, name := range names {
 			for _, branch := range branches {
 				for _, cmd := range []string{"bash", "claude"} {
@@ -95,8 +104,8 @@ func TestFormatSessionRowWidthInvariant(t *testing.T) {
 										Attached:      attached,
 										ActiveCommand: cmd,
 										GitBranch:     branch,
-										ClaudeState:   st,
-										ClaudeSince:   now.Add(-3 * time.Minute),
+										AIState:       st,
+										AISince:       now.Add(-3 * time.Minute),
 									}
 									for _, w := range widths {
 										row := formatSessionRow(s, order, expanded, selected, w)
@@ -115,28 +124,31 @@ func TestFormatSessionRowWidthInvariant(t *testing.T) {
 	}
 }
 
-// At the narrowest supported panel the state and elapsed time must survive —
+// At the narrowest supported panel the badge and elapsed time must survive —
 // they are the reason the layout was rearranged.
 func TestFormatSessionRowKeepsStateWhenNarrow(t *testing.T) {
 	s := tmux.Session{
-		Name:        "some-project",
-		Created:     time.Now().Add(-time.Hour),
-		ClaudeState: tmux.ClaudeStateApproval,
-		ClaudeSince: time.Now().Add(-3 * time.Minute),
+		Name:    "some-project",
+		Created: time.Now().Add(-time.Hour),
+		AIState: tmux.AIStateApproval,
+		AISince: time.Now().Add(-3 * time.Minute),
 	}
 	row := ansi.Strip(formatSessionRow(s, 0, false, false, 30))
 
-	if !strings.Contains(row, claudeGlyph(tmux.ClaudeStateApproval)) {
+	if !strings.Contains(row, tmux.AIStateApproval.Icon()) {
 		t.Errorf("approval glyph missing at width 30: %q", row)
+	}
+	if strings.Contains(row, "✦") {
+		t.Errorf("row shows both the state glyph and the tool icon: %q", row)
 	}
 	if !strings.Contains(row, "3m") {
 		t.Errorf("elapsed time missing at width 30: %q", row)
 	}
 }
 
-// Sessions without Claude must look exactly as they did: no state glyph, and
-// the time column still showing the session's own age.
-func TestFormatSessionRowLeavesNonClaudeAlone(t *testing.T) {
+// Sessions with no AI CLI must look exactly as they did: no badge, and the
+// time column still showing the session's own age.
+func TestFormatSessionRowLeavesNonAIAlone(t *testing.T) {
 	s := tmux.Session{
 		Name:          "plain",
 		Created:       time.Now().Add(-2 * time.Hour),
@@ -144,41 +156,61 @@ func TestFormatSessionRowLeavesNonClaudeAlone(t *testing.T) {
 	}
 	row := ansi.Strip(formatSessionRow(s, 0, false, false, 46))
 
-	for _, st := range []tmux.ClaudeState{
-		tmux.ClaudeStateWorking, tmux.ClaudeStateApproval, tmux.ClaudeStateReady,
+	for _, st := range []tmux.AIState{
+		tmux.AIStateWorking, tmux.AIStateApproval, tmux.AIStateReady,
 	} {
-		if strings.Contains(row, claudeGlyph(st)) {
-			t.Errorf("non-Claude row shows the %v glyph: %q", st, row)
+		if strings.Contains(row, st.Icon()) {
+			t.Errorf("non-AI row shows the %v glyph: %q", st, row)
 		}
 	}
 	if !strings.Contains(row, "2h") {
-		t.Errorf("non-Claude row lost its creation age: %q", row)
+		t.Errorf("non-AI row lost its creation age: %q", row)
 	}
 }
 
-// Columns must line up between rows that differ in what they carry.
+// Columns must line up between rows that differ in what they carry. The badge
+// is padded to a fixed width precisely so a 2-cell state glyph, a 1-cell tool
+// icon, and no badge at all leave the branch in the same column.
 func TestFormatSessionRowColumnsAlign(t *testing.T) {
 	now := time.Now()
 	sessions := []tmux.Session{
-		{Name: "alpha", Created: now, ClaudeState: tmux.ClaudeStateWorking, ClaudeSince: now},
-		{Name: "beta", Created: now, ActiveCommand: "bash"},
+		{Name: "alpha", Created: now, AIState: tmux.AIStateWorking, AISince: now, GitBranch: "main"},
+		{Name: "beta", Created: now, ActiveCommand: "bash", GitBranch: "main"},
 		{Name: "gamma", Created: now, ActiveCommand: "codex", GitBranch: "main"},
 	}
 
-	want := -1
+	// Byte offsets differ between rows because the glyphs are multi-byte; the
+	// column that matters is the cell count.
+	cellOffset := func(row, sub string) int {
+		idx := strings.Index(row, sub)
+		if idx < 0 {
+			return -1
+		}
+		return ansi.StringWidth(row[:idx])
+	}
+
+	wantName, wantBranch := -1, -1
 	for _, s := range sessions {
 		row := ansi.Strip(formatSessionRow(s, 0, false, false, 46))
-		idx := strings.Index(row, s.Name)
-		if idx < 0 {
+
+		got := cellOffset(row, s.Name)
+		if got < 0 {
 			t.Fatalf("name %q not found in %q", s.Name, row)
 		}
-		// Byte offsets differ between rows because the state glyphs are
-		// multi-byte; the column that matters is the cell count.
-		got := ansi.StringWidth(row[:idx])
-		if want < 0 {
-			want = got
-		} else if got != want {
-			t.Errorf("name column for %q starts at cell %d, want %d: %q", s.Name, got, want, row)
+		if wantName < 0 {
+			wantName = got
+		} else if got != wantName {
+			t.Errorf("name column for %q starts at cell %d, want %d: %q", s.Name, got, wantName, row)
+		}
+
+		got = cellOffset(row, s.GitBranch)
+		if got < 0 {
+			t.Fatalf("branch %q not found in %q", s.GitBranch, row)
+		}
+		if wantBranch < 0 {
+			wantBranch = got
+		} else if got != wantBranch {
+			t.Errorf("branch column for %q starts at cell %d, want %d: %q", s.Name, got, wantBranch, row)
 		}
 	}
 }

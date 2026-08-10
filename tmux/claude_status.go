@@ -14,39 +14,13 @@ import (
 // long a *transition* takes to appear, not the smoothness of the clock.
 const claudeStatusTTL = 1 * time.Second
 
-// ClaudeState is the coarse, display-oriented state of a Claude Code session.
-type ClaudeState int
-
-const (
-	// ClaudeStateNone means no live Claude session, or a state we don't model.
-	ClaudeStateNone ClaudeState = iota
-	// ClaudeStateWorking means Claude is processing.
-	ClaudeStateWorking
-	// ClaudeStateApproval means Claude is blocked waiting on the user.
-	ClaudeStateApproval
-	// ClaudeStateReady means the turn finished and Claude awaits input.
-	ClaudeStateReady
-)
-
-func (s ClaudeState) String() string {
-	switch s {
-	case ClaudeStateWorking:
-		return "working"
-	case ClaudeStateApproval:
-		return "approval"
-	case ClaudeStateReady:
-		return "waiting"
-	default:
-		return ""
-	}
-}
-
 // ClaudeStatus is the live state of one Claude Code session bound to a tmux
-// session.
+// session. Claude is the one AI CLI that publishes its own state, so this file
+// is the only producer of a non-zero AIState.
 type ClaudeStatus struct {
-	State      ClaudeState
+	State      AIState
 	RawStatus  string    // verbatim "status", for diagnostics
-	WaitingFor string    // verbatim "waitingFor"; set only for ClaudeStateApproval
+	WaitingFor string    // verbatim "waitingFor"; set only for AIStateApproval
 	Since      time.Time // when the current state began; zero when unknown
 	SessionID  string
 	PID        int
@@ -153,7 +127,7 @@ func parseClaudeStatus(data []byte) (status ClaudeStatus, tmuxSession string, ok
 	}
 
 	state := mapClaudeState(sf.Status)
-	if state == ClaudeStateNone {
+	if state == AIStateNone {
 		return ClaudeStatus{}, "", false
 	}
 
@@ -163,7 +137,7 @@ func parseClaudeStatus(data []byte) (status ClaudeStatus, tmuxSession string, ok
 		SessionID: sf.SessionID,
 		PID:       sf.PID,
 	}
-	if state == ClaudeStateApproval {
+	if state == AIStateApproval {
 		status.WaitingFor = sf.WaitingFor
 	}
 	if sf.StatusUpdatedAt > 0 {
@@ -172,22 +146,22 @@ func parseClaudeStatus(data []byte) (status ClaudeStatus, tmuxSession string, ok
 	return status, tmuxSession, true
 }
 
-// mapClaudeState reduces Claude's status enum to what we display.
+// mapClaudeState reduces Claude's status enum to the AIState we display.
 //
 // "waiting" always means Claude is blocked on the user — it is set only while
 // some prompt or dialog is open, whatever the reason. A finished turn sitting
 // at the prompt reports "idle" instead.
-func mapClaudeState(status string) ClaudeState {
+func mapClaudeState(status string) AIState {
 	switch status {
 	case "busy":
-		return ClaudeStateWorking
+		return AIStateWorking
 	case "waiting":
-		return ClaudeStateApproval
+		return AIStateApproval
 	case "idle":
-		return ClaudeStateReady
+		return AIStateReady
 	default:
 		// "shell", plus anything a future version adds.
-		return ClaudeStateNone
+		return AIStateNone
 	}
 }
 
@@ -217,13 +191,13 @@ func moreUrgent(a, b ClaudeStatus) bool {
 	return a.PID > b.PID
 }
 
-func urgencyRank(s ClaudeState) int {
+func urgencyRank(s AIState) int {
 	switch s {
-	case ClaudeStateApproval:
+	case AIStateApproval:
 		return 3
-	case ClaudeStateWorking:
+	case AIStateWorking:
 		return 2
-	case ClaudeStateReady:
+	case AIStateReady:
 		return 1
 	default:
 		return 0

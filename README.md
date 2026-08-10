@@ -37,10 +37,13 @@ Running Claude in one session, Codex in another, and a dev server in a third? Sw
 
 ### Added in this fork
 
-- **Claude state at a glance** — each session shows whether Claude is working
-  (`⏳`), blocked waiting on you (`❗`), or done and ready for input (`✅`),
-  along with how long it has been in that state. The preview adds why it is
-  blocked (permission prompt, input needed, and so on).
+- **The AI badge shows live state** — the badge that already told you *which*
+  AI CLI a session runs now also tells you *what it is doing*: working (`⏳`),
+  blocked waiting on you (`❗`), or done and ready for input (`✅`), with how
+  long it has been that way. Tools that publish no state keep their own icon
+  (`✦ ◈ ⬡ ✧`). The preview adds why it is blocked (permission prompt, input
+  needed, and so on), and `mux status` puts the same badge in your tmux status
+  bar.
 
 If you want the original release and Homebrew package without these personal
 changes, use [lunemis/mux](https://github.com/lunemis/mux).
@@ -62,7 +65,7 @@ tmux's built-in `choose-session` shows you a list of names — but which session
 See the actual terminal output of any session *before* you switch. Press `Tab` to expand a session into its windows, expand again to peek into individual panes — preview each one without attaching.
 
 ### AI CLI detection
-`claude`, `codex`, `aider`, `gemini` are automatically detected and highlighted with badges — instantly find the right session.
+`claude`, `codex`, `aider`, `gemini` are automatically detected and highlighted with badges — instantly find the right session. Where the tool publishes its own state, that same badge shows what it is doing (see below).
 
 ### Git branch & worktree display
 Each session shows its current git branch. Linked worktrees are visually distinguished so you can tell at a glance which sessions are working on isolated branches.
@@ -70,16 +73,18 @@ Each session shows its current git branch. Linked worktrees are visually disting
 ### Cost & token tracking
 For Claude Code sessions, mux reads session logs to display real-time token usage and estimated cost — no configuration needed.
 
-### Claude progress state
-Every session running Claude Code shows what it is doing right now, so you can tell at a glance which pane is waiting on *you*:
+### Live state in the AI badge
+When a tool publishes its own state — today Claude Code — its badge stops being a static `✦` and starts showing what the session is doing right now, so you can tell at a glance which pane is waiting on *you*:
 
 | | state | meaning |
 |---|---|---|
-| `⏳` | working | Claude is processing |
+| `⏳` | working | the tool is processing |
 | `❗` | approval | blocked on a permission prompt or question — needs you |
 | `✅` | waiting | turn finished, ready for input |
 
-Each badge is followed by how long the session has held that state (`❗ approval 3m`), and the preview panel adds the reason it is blocked. This reads Claude Code's own state file rather than guessing from screen output, so it stays accurate even while the pane is scrolling.
+It is one badge, not two: the state glyph takes the tool icon's place rather than sitting beside it. Tools that publish nothing keep their own icon (`✦ ◈ ⬡ ✧`). The elapsed column next to the session name switches to how long the state has held, the preview panel adds the reason it is blocked (`❗ approval · permission prompt  3m`), and `mux status` puts the same badge in your tmux status bar.
+
+This reads the tool's own state file rather than guessing from screen output, so it stays accurate even while the pane is scrolling.
 
 ### Popup overlay
 Press one key to summon mux on top of whatever you're doing — even mid-conversation with an AI CLI. Pick a session and you're there.

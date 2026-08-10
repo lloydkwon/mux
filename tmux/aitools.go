@@ -15,6 +15,57 @@ var aiToolMap = map[string]AITool{
 	"gemini": {Name: "gemini", Icon: "✧", Color: "#A78BFA"},
 }
 
+// AIState is the coarse, display-oriented state of an AI CLI session. Only a
+// tool that publishes its own state ever reports anything but AIStateNone —
+// today that is Claude Code alone (see claude_status.go).
+type AIState int
+
+const (
+	// AIStateNone means no live AI state, or a state we don't model.
+	AIStateNone AIState = iota
+	// AIStateWorking means the tool is processing.
+	AIStateWorking
+	// AIStateApproval means the tool is blocked waiting on the user.
+	AIStateApproval
+	// AIStateReady means the turn finished and the tool awaits input.
+	AIStateReady
+)
+
+func (s AIState) String() string {
+	switch s {
+	case AIStateWorking:
+		return "working"
+	case AIStateApproval:
+		return "approval"
+	case AIStateReady:
+		return "waiting"
+	default:
+		return ""
+	}
+}
+
+// Icon returns the badge glyph for a live state, or "" for AIStateNone so the
+// caller falls back to the tool's own icon. These glyphs replace the tool icon
+// rather than sitting beside it — one badge answers both "which tool" and
+// "what is it doing".
+//
+// Every glyph here is Emoji_Presentation: it measures and draws 2 cells, where
+// the tool icons measure and draw 1. Any replacement must keep that property,
+// because the manual renderer in ui/layout.go cannot compensate for a
+// mis-measured glyph.
+func (s AIState) Icon() string {
+	switch s {
+	case AIStateWorking:
+		return "⏳"
+	case AIStateApproval:
+		return "❗"
+	case AIStateReady:
+		return "✅"
+	default:
+		return ""
+	}
+}
+
 // IsAICommand reports whether cmd is a known AI CLI process.
 func IsAICommand(cmd string) bool {
 	_, ok := aiToolMap[cmd]
@@ -29,12 +80,14 @@ func LookupAITool(cmd string) (AITool, bool) {
 
 // SessionAITool returns the AI tool to display for a session.
 //
-// A live Claude Code session wins over the active-pane command, because
-// ActiveCommand only reflects the active pane of the active window while the
-// Claude state file covers the whole session — so Claude running in a
-// background window is still surfaced.
+// Live state wins over the active-pane command, because ActiveCommand only
+// reflects the active pane of the active window while the state file covers
+// the whole session — so a tool running in a background window is still
+// surfaced.
 func SessionAITool(s Session) (AITool, bool) {
-	if s.ClaudeState != ClaudeStateNone {
+	if s.AIState != AIStateNone {
+		// ponytail: Claude is the only tool publishing live state today. A
+		// second provider must carry its own tool name onto Session.
 		t, ok := aiToolMap["claude"]
 		return t, ok
 	}

@@ -14,7 +14,7 @@ var (
 	colorCursor   = lipgloss.Color("#A78BFA")
 	colorListRow  = lipgloss.Color("#9CA3AF")
 
-	// Claude state colors. The -Sel variants are lighter tints: the base red
+	// AI live-state colors. The -Sel variants are lighter tints: the base red
 	// only reaches ~3:1 contrast against colorSelected, which is too low to
 	// read on a highlighted row.
 	colorStateWorking     = lipgloss.Color("#22D3EE")
