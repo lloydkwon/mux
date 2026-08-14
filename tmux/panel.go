@@ -139,6 +139,49 @@ func TogglePanel(target string, auto bool) error {
 	return runner.Run("tmux", args...)
 }
 
+// navKeys maps the directions `mux nav` accepts onto the keys the panel reads.
+//
+// The verbs are the vocabulary rather than raw key names so a binding says what
+// it means, and so the panel's key handling can change without every user's
+// tmux.conf having to.
+var navKeys = map[string]string{
+	"up":     "Up",
+	"down":   "Down",
+	"top":    "Home",
+	"bottom": "End",
+	"enter":  "Enter",
+}
+
+// NavPanel steers the panel's selection from a tmux binding.
+//
+// send-keys writes into the target pane's terminal without making it active,
+// which is the entire point: focusing the panel would take the keyboard away
+// from the pane you are typing in, and a sidebar that costs you your cursor is
+// worse than one you have to reach for with the mouse.
+//
+// A window with no panel is not an error — the binding is global and most
+// windows will not have one, and a failing run-shell puts a message on the
+// user's status line every time they press the key.
+func NavPanel(target, direction string) error {
+	key, ok := navKeys[direction]
+	if !ok {
+		return fmt.Errorf("unknown direction %q (want up, down, top, bottom or enter)", direction)
+	}
+
+	window, _, err := panelWindow(target)
+	if err != nil {
+		return err
+	}
+	pane, err := findPanelPane(window)
+	if err != nil {
+		return err
+	}
+	if pane == "" {
+		return nil
+	}
+	return runner.Run("tmux", "send-keys", "-t", pane, key)
+}
+
 // RestoreLastPane moves focus back to the pane that was active before, in
 // target's window.
 //
@@ -153,6 +196,26 @@ func RestoreLastPane(target string) error {
 		args = append(args, "-t", target)
 	}
 	return runner.Run("tmux", args...)
+}
+
+// PaneActive reports whether target is the active pane of its window. Pass ""
+// for the current pane.
+//
+// This is the guard on RestoreLastPane. `select-pane -l` is only ever correct
+// when this pane is the one holding focus; called when it is not, it selects
+// whatever the window visited before the pane the user is actually in.
+func PaneActive(target string) bool {
+	args := []string{"display-message", "-p"}
+	if target != "" {
+		args = append(args, "-t", target)
+	}
+	args = append(args, "#{pane_active}")
+
+	out, err := runner.Output("tmux", args...)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "1"
 }
 
 // SessionForPane reports the tmux session holding target. Pass "" for the

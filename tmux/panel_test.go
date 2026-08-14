@@ -603,3 +603,95 @@ func TestTogglePanelAutoRespectsManualOff(t *testing.T) {
 		}
 	})
 }
+
+// The panel is steered by send-keys rather than by being focused: focusing it
+// would take the keyboard away from the pane the user is typing in, which is
+// the one thing an always-visible sidebar must not cost.
+func TestNavPanel(t *testing.T) {
+	mockPanel := func(m *mockRunner) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 \n%9 /home/u/.local/bin/mux watch\n"), nil,
+			"tmux", "list-panes", "-t", "@7", "-F", "#{pane_id} #{pane_start_command}")
+	}
+
+	for direction, key := range map[string]string{
+		"up": "Up", "down": "Down", "top": "Home", "bottom": "End", "enter": "Enter",
+	} {
+		t.Run(direction, func(t *testing.T) {
+			withMock(t, func(m *mockRunner) {
+				mockPanel(m)
+				if err := NavPanel("%3", direction); err != nil {
+					t.Fatalf("NavPanel(%q): %v", direction, err)
+				}
+				want := "tmux send-keys -t %9 " + key
+				if !ran(m, want) {
+					t.Errorf("ran %v, want %q", m.runs, want)
+				}
+				// select-pane would defeat the whole point.
+				if ran(m, "select-pane") {
+					t.Errorf("ran %v, want the focus left alone", m.runs)
+				}
+			})
+		})
+	}
+}
+
+// The binding is global and most windows have no panel. Failing there would put
+// a message on the status line every time the key is pressed.
+func TestNavPanelWithoutAPanel(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
+			"-F", "#{pane_id} #{pane_start_command}")
+
+		if err := NavPanel("%3", "down"); err != nil {
+			t.Fatalf("NavPanel on a window with no panel: %v", err)
+		}
+		if ran(m, "send-keys") {
+			t.Errorf("ran %v, want nothing sent", m.runs)
+		}
+	})
+}
+
+// A direction that is not one of the five is a typo in the user's tmux.conf,
+// and silently doing nothing would leave them pressing a dead key.
+func TestNavPanelRejectsUnknownDirection(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		if err := NavPanel("%3", "sideways"); err == nil {
+			t.Error("an unknown direction was accepted")
+		}
+		if len(m.runs) != 0 {
+			t.Errorf("ran %v, want nothing before the direction was checked", m.runs)
+		}
+	})
+}
+
+// select-pane -l is only ever right when this pane holds the focus. On the key
+// path the panel is never made active, and restoring there selects whatever the
+// window visited before the pane the user is typing in.
+func TestPaneActive(t *testing.T) {
+	tests := []struct {
+		out  string
+		want bool
+	}{
+		{"1\n", true},
+		{"0\n", false},
+		{"\n", false},
+	}
+	for _, tt := range tests {
+		withMock(t, func(m *mockRunner) {
+			m.OnOutput([]byte(tt.out), nil, "tmux", "display-message", "-p", "-t", "%9", "#{pane_active}")
+			if got := PaneActive("%9"); got != tt.want {
+				t.Errorf("PaneActive with %q = %v, want %v", tt.out, got, tt.want)
+			}
+		})
+	}
+
+	// An unanswerable question is not a yes: guessing active would fire the
+	// select-pane this guard exists to prevent.
+	withMock(t, func(m *mockRunner) {
+		if PaneActive("%9") {
+			t.Error("an unreadable pane reported active")
+		}
+	})
+}

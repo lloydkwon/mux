@@ -142,7 +142,23 @@ func main() {
 	panelCmd.Flags().BoolVar(&panelAuto, "auto", false,
 		"for hooks: skip windows whose session is only viewed from VS Code")
 
-	rootCmd.AddCommand(popupCmd, setupKeybindCmd, statusCmd, watchCmd, panelCmd)
+	var navTarget string
+	navCmd := &cobra.Command{
+		Use:   "nav <up|down|top|bottom|enter>",
+		Short: "Move the panel's selection without leaving the pane you are in",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return tmux.NavPanel(navTarget, args[0])
+		},
+		// The error is the direction being wrong, which is a typo in the user's
+		// tmux.conf — printing cobra's whole usage page onto the status line
+		// helps nobody.
+		SilenceUsage: true,
+	}
+	navCmd.Flags().StringVarP(&navTarget, "target", "t", "",
+		"pane whose window holds the panel (default: current)")
+
+	rootCmd.AddCommand(popupCmd, setupKeybindCmd, statusCmd, watchCmd, panelCmd, navCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

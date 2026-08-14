@@ -106,7 +106,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// tmux made this pane active to deliver the click. Hand focus back even
 		// though we are not leaving: while the panel is the active pane, its
 		// window reports the panel's directory as the session's own.
-		return next, tea.Batch(restoreFocus(), cmd)
+		return next, tea.Batch(restoreFocusCmd(), cmd)
 
 	case previewLoadedMsg:
 		// Same guard the TUI uses: a capture that lands after the selection
@@ -243,10 +243,28 @@ func (m watchModel) previewCmd() tea.Cmd {
 	return refreshPreview(previewKey{session: m.selected, window: -1, pane: -1})
 }
 
-// restoreFocus hands the active pane back after a click that is not a switch.
-func restoreFocus() tea.Cmd {
+// restoreFocus hands the active pane back, but only when this pane has it.
+//
+// tmux makes a pane active before forwarding a click, so after a click this is
+// exactly what needs undoing — left alone, the window keeps reporting the
+// panel's directory as its session's own.
+//
+// The guard is what makes it safe on the key path. Keys arrive by send-keys
+// without the panel ever becoming active, and `select-pane -l` there selects
+// whatever the window visited before the pane the user is typing in. Measured:
+// pressing enter from a three-pane window moved the focus to the third pane.
+func restoreFocus() {
+	self := selfPane()
+	if tmux.PaneActive(self) {
+		_ = tmux.RestoreLastPane(self)
+	}
+}
+
+// restoreFocusCmd is restoreFocus as a tea.Cmd, for a click that selects rather
+// than switches — switchToSession does it on its own way out.
+func restoreFocusCmd() tea.Cmd {
 	return func() tea.Msg {
-		_ = tmux.RestoreLastPane(selfPane())
+		restoreFocus()
 		return nil
 	}
 }
@@ -353,12 +371,12 @@ type switchFailedMsg struct {
 // instead of replacing this process, so the panel survives the switch.
 func switchToSession(name string) tea.Cmd {
 	return func() tea.Msg {
-		// Hand focus back before leaving. tmux made this pane active to deliver
-		// the click, and the window we are about to leave would otherwise keep
-		// reporting the panel's command and directory as the session's own.
-		// Best-effort: there may be no previous pane, and that must not block
-		// the switch the user actually asked for.
-		_ = tmux.RestoreLastPane(selfPane())
+		// Hand focus back before leaving, when there is any to hand back. The
+		// window we are about to leave would otherwise keep reporting the
+		// panel's command and directory as the session's own. Best-effort:
+		// there may be no previous pane, and that must not block the switch the
+		// user actually asked for.
+		restoreFocus()
 
 		if err := tmux.SwitchClient(name); err != nil {
 			return switchFailedMsg{session: name, err: err}
