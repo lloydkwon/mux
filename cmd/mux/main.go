@@ -108,6 +108,19 @@ func main() {
 	}
 
 	var statusJSON bool
+	setupPanelCmd := &cobra.Command{
+		Use:   "setup-panel [key]",
+		Short: fmt.Sprintf("Add the panel keybinding and hooks to tmux config (default: %s)", tmux.DefaultPanelKey),
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			key := tmux.DefaultPanelKey
+			if len(args) > 0 {
+				key = args[0]
+			}
+			return tmux.SetupPanel(key)
+		},
+	}
+
 	statusCmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show AI session summary for tmux statusbar",
@@ -158,7 +171,8 @@ func main() {
 	navCmd.Flags().StringVarP(&navTarget, "target", "t", "",
 		"pane whose window holds the panel (default: current)")
 
-	rootCmd.AddCommand(popupCmd, setupKeybindCmd, statusCmd, watchCmd, panelCmd, navCmd)
+	rootCmd.AddCommand(popupCmd, setupKeybindCmd, setupPanelCmd, statusCmd,
+		watchCmd, panelCmd, navCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

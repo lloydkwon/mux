@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `mux setup-panel` installs the panel keybinding and the tmux hooks that keep a
+  panel in every window you end up looking at. The panel is a pane and a pane
+  belongs to one window, so switching sessions from the panel landed you in a
+  window that had never had one — the panel appearing to vanish. Seven hooks now
+  cover every way a panel-less window can reach the screen, `client-session-changed`
+  being the one that answers that case. It writes a fenced `# mux panel { … }`
+  block with the absolute path filled in, replaces that block on re-runs rather
+  than stacking copies, routes to `.tmux.conf.local` before the sentinel for
+  oh-my-tmux, and sits above a trailing tpm loader, which tpm requires to be the
+  last line.
 - `mux nav <up|down|top|bottom|enter>` steers the panel from a tmux binding. It
   reaches the panel with `send-keys`, so the cursor moves without the focus
   leaving your own pane — focusing the panel would take the keyboard away from

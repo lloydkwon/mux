@@ -239,17 +239,23 @@ bind -n M-Enter run-shell "/absolute/path/to/mux nav -t #{pane_id} enter"
 
 `up`, `down`, `top`, `bottom` and `enter` are the directions it takes. A window with no panel does nothing and exits cleanly, so the binding is safe to make global.
 
+The panel is a pane, and a pane belongs to one window — so a window that has never had one shows none. Switching sessions from the panel lands you in exactly such a window, which looks like the panel vanishing. `mux setup-panel` installs the binding and the hooks that keep one in every window you end up looking at:
+
+```bash
+mux setup-panel                 # prefix + a toggles the panel; default key is `a`
+tmux source-file ~/.tmux.conf
+```
+
+It writes a fenced `# mux panel { … }` block with the absolute path filled in, replaces that block on re-runs rather than stacking copies, and routes to `.tmux.conf.local` before the sentinel for [oh-my-tmux](https://github.com/gpakosz/.tmux) users. If your config ends with tpm's loader — which tpm requires to stay last — the block goes above it.
+
+The hooks it installs are `after-new-window`, `after-new-session`, `after-select-window`, `client-attached`, `client-session-changed`, `client-resized` and `after-resize-window`. Each runs the same `mux panel --auto`. `client-session-changed` is the one that makes the panel follow you when you switch sessions; the resize pair is what brings it back to a window that had grown too narrow.
+
+To write it yourself instead:
+
 ```tmux
-# Add to ~/.tmux.conf — prefix+a toggles the panel in the current window
 bind a run-shell "/absolute/path/to/mux panel -t #{pane_id}"
-
-# And put it in every new window and session automatically
-set-hook -g after-new-window  'run-shell "/absolute/path/to/mux panel --auto -t #{pane_id}"'
-set-hook -g after-new-session 'run-shell "/absolute/path/to/mux panel --auto -t #{pane_id}"'
-
-# And bring it back when a window that was too narrow grows again
-set-hook -g client-resized      'run-shell "/absolute/path/to/mux panel --auto -t #{pane_id}"'
-set-hook -g after-resize-window 'run-shell "/absolute/path/to/mux panel --auto -t #{pane_id}"'
+set-hook -g client-session-changed 'run-shell "/absolute/path/to/mux panel --auto -t #{pane_id}"'
+# … and the same line for each of the other hooks above
 ```
 
 `--auto` marks the hook path. It is an *ensure* rather than a toggle — it opens a missing panel and never closes one — which is what lets the resize hooks call the same command without the panel flapping. It stands down in three cases: a window narrower than 200 columns, a session only being viewed from a VS Code integrated terminal, and a window where you closed the panel yourself. Pressing the key overrides all three, since that is a decision rather than a default, and it clears the manual-off mark so the hooks resume.

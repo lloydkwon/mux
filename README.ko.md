@@ -203,17 +203,23 @@ bind -n M-Enter run-shell "/mux/절대경로 nav -t #{pane_id} enter"
 
 방향은 `up`, `down`, `top`, `bottom`, `enter` 다섯 가지입니다. 패널이 없는 창에서는 아무 일도 하지 않고 정상 종료하므로 전역 바인딩으로 둬도 안전합니다.
 
+패널은 pane이고 pane은 창 하나에 속합니다 — 그래서 **패널을 가져 본 적 없는 창에는 안 보입니다.** 패널에서 세션을 클릭하면 바로 그런 창으로 가게 되고, 패널이 사라진 것처럼 보입니다. `mux setup-panel`이 바인딩과 훅을 한 번에 깔아 줍니다:
+
+```bash
+mux setup-panel                 # prefix + a 로 토글, 기본 키는 `a`
+tmux source-file ~/.tmux.conf
+```
+
+절대경로를 채운 `# mux panel { … }` 블록을 씁니다. 다시 실행하면 그 블록을 **교체**하지 쌓지 않고, [oh-my-tmux](https://github.com/gpakosz/.tmux) 사용자는 `.tmux.conf.local`의 센티널 앞으로 보냅니다. 설정 끝이 tpm 로더로 끝나면(tpm이 마지막 줄을 요구합니다) 그 위에 넣습니다.
+
+설치되는 훅은 `after-new-window`, `after-new-session`, `after-select-window`, `client-attached`, `client-session-changed`, `client-resized`, `after-resize-window` 일곱 개이고 모두 같은 `mux panel --auto`를 부릅니다. **세션을 옮겨도 패널이 따라오게 하는 건 `client-session-changed`** 이고, 리사이즈 두 개는 좁아서 물러났던 창이 넓어졌을 때 되살리는 몫입니다.
+
+직접 쓰고 싶다면:
+
 ```tmux
-# ~/.tmux.conf에 추가 — prefix+a로 현재 윈도우의 패널을 켜고 끈다
 bind a run-shell "/mux/절대경로 panel -t #{pane_id}"
-
-# 새 윈도우·새 세션에는 자동으로 붙인다
-set-hook -g after-new-window  'run-shell "/mux/절대경로 panel --auto -t #{pane_id}"'
-set-hook -g after-new-session 'run-shell "/mux/절대경로 panel --auto -t #{pane_id}"'
-
-# 좁아서 물러났던 창이 다시 넓어지면 되살린다
-set-hook -g client-resized      'run-shell "/mux/절대경로 panel --auto -t #{pane_id}"'
-set-hook -g after-resize-window 'run-shell "/mux/절대경로 panel --auto -t #{pane_id}"'
+set-hook -g client-session-changed 'run-shell "/mux/절대경로 panel --auto -t #{pane_id}"'
+# … 나머지 훅도 같은 줄을 하나씩
 ```
 
 `--auto`는 훅 전용 표시입니다. 토글이 아니라 **ensure**로 — 없으면 만들고 있으면 닫지 않습니다 — 그래서 리사이즈 훅이 같은 커맨드를 불러도 패널이 껐다 켜졌다 하지 않습니다. 세 경우에 물러납니다: **폭 200칸 미만인 창**, **VS Code 통합 터미널로만 보고 있는 세션**, 그리고 **직접 닫아둔 창**. 키를 직접 누르면 셋 다 무시하고 열리며(기본값이 아니라 결정이므로), 수동 끄기 표시도 지워져 훅이 다시 동작합니다.

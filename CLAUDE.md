@@ -31,7 +31,7 @@ CI (`.github/workflows/ci.yml`) runs test + build + arm64 cross-build. Releases 
 
 Three layers, strictly one-directional:
 
-- `cmd/mux` — cobra CLI: root (TUI), `popup`, `setup-keybind`, `status`, `watch`, `panel`, `nav`.
+- `cmd/mux` — cobra CLI: root (TUI), `popup`, `setup-keybind`, `setup-panel`, `status`, `watch`, `panel`, `nav`.
 - `tmux/` — everything that shells out or reads the filesystem. No UI dependencies.
 - `ui/` — Bubble Tea model, rendering, preferences. Depends on `tmux`.
 
@@ -142,4 +142,14 @@ Because `Session.ActiveCommand` only reflects the *active pane of the active win
 
 ### tmux config editing
 
+Two owned regions, deliberately separate.
+
 `SetupKeybind` (`tmux/popup.go`) writes an idempotent, marker-tagged (`# mux popup keybinding`) bind line. It detects gpakosz/.tmux ("oh-my-tmux") by symlink target or the `# : << 'EOF'` first-line signature, and for those installs writes to `.tmux.conf.local` *before* the `# "$@"` sentinel — writing into the main `.tmux.conf` corrupts oh-my-tmux's heredoc. It also strips legacy untagged installer binds. Preserve all of that when touching this file.
+
+`SetupPanel` (`tmux/setuppanel.go`) writes the panel binding plus the hooks that keep a panel in every window, as a fenced `# mux panel { … }` block. **The fence must not become the popup's per-line marker.** Two reasons: `stripMarkerLines` runs on `SetupKeybind`'s oh-my-tmux path and would delete the hooks as collateral, and two tests assert the popup marker appears exactly once. The single-line helpers cannot express a multi-line region anyway — `upsertBindLine` replaces every tagged line, `writeBindToLocal` only the first.
+
+`upsertBlock` places a first-time block above oh-my-tmux's sentinel, else above a trailing tpm loader (tpm documents it as having to be last, and the comment sitting on top of it comes along), else at the end. An opening fence with no closing one is treated as absent — truncating a hand-edited config is not worth the convenience. Writes go through `os.WriteFile`, not temp-file-and-rename, because it follows symlinks and oh-my-tmux installs `~/.tmux.conf` as one.
+
+`panelHooks` is the list of events after which a window can be on screen without a panel. Each was checked against a real server, since a hook that silently never fires looks exactly like a broken feature. `client-session-changed` is the load-bearing one: clicking a session in the panel runs `switch-client`, landing you in a window that never had a panel. There is no recursion — the ensure runs `split-window`, which makes a pane rather than a window.
+
+`install.sh` sets up the popup keybinding only; `mux setup-panel` is the sole path for the panel block.
