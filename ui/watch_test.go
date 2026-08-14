@@ -487,3 +487,71 @@ func TestWatchOwnSessionCanBeChosen(t *testing.T) {
 		t.Errorf("selected %q after a refresh, want the deliberate choice kept", got)
 	}
 }
+
+// The panel reached 188 of 237 columns and stayed there, leaving 48 to work in.
+// "Same window, different pane width" reads as a drag, but it is also what a
+// pane appearing or dying beside the panel looks like — and adopting that once
+// is enough to make it permanent, since the width is then saved and enforced.
+func TestWatchWidthRejectsRunawayGrowth(t *testing.T) {
+	m := watchTestModel(48, 20)
+	m.winWidth, m.targetWidth = 237, 48
+
+	grown, cmd := m.applyResizeWith(188, 237)
+	if grown.targetWidth != 48 {
+		t.Errorf("target = %d, want the runaway rejected and 48 kept", grown.targetWidth)
+	}
+	if cmd == nil {
+		t.Error("the panel was left squeezing the work pane instead of being put back")
+	}
+
+	// Exactly half is still the user's to take — the ceiling is a limit, not a
+	// margin below it.
+	half, _ := m.applyResizeWith(118, 237)
+	if half.targetWidth != 118 {
+		t.Errorf("target = %d, want half the window adopted", half.targetWidth)
+	}
+
+	// One column over is not.
+	over, _ := m.applyResizeWith(119, 237)
+	if over.targetWidth != 48 {
+		t.Errorf("target = %d, want a width past half rejected", over.targetWidth)
+	}
+}
+
+// A width remembered in a roomier window, or saved before the ceiling existed,
+// must not survive being reopened somewhere it no longer fits.
+func TestWatchWidthCorrectsAnOversizeFirstSize(t *testing.T) {
+	m := watchTestModel(188, 20)
+
+	corrected, cmd := m.applyResizeWith(188, 237)
+	if corrected.targetWidth != 118 {
+		t.Errorf("target = %d, want it clamped to half the window", corrected.targetWidth)
+	}
+	if cmd == nil {
+		t.Error("an oversize panel was accepted on sight")
+	}
+
+	// An ordinary first size is still adopted as-is.
+	normal, cmd := watchTestModel(48, 20).applyResizeWith(48, 237)
+	if normal.targetWidth != 48 {
+		t.Errorf("target = %d, want the opening width adopted", normal.targetWidth)
+	}
+	if cmd != nil {
+		t.Error("an in-band first size scheduled a correction")
+	}
+}
+
+// The ceiling must not swallow the case the lower clamp already covers: a pane
+// squeezed below what the panel can render is left alone, not enforced.
+func TestWatchWidthStillIgnoresSqueezeWithCeiling(t *testing.T) {
+	m := watchTestModel(48, 20)
+	m.winWidth, m.targetWidth = 237, 48
+
+	squeezed, cmd := m.applyResizeWith(1, 237)
+	if squeezed.targetWidth != 48 {
+		t.Errorf("target = %d, want the squeeze rejected", squeezed.targetWidth)
+	}
+	if cmd != nil {
+		t.Error("a transient squeeze scheduled a resize")
+	}
+}

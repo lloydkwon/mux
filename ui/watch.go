@@ -299,7 +299,18 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth int) (watchModel, tea.Cm
 	switch {
 	case m.winWidth == 0: // first size seen — adopt it
 		m.winWidth = winWidth
-		if paneWidth >= notifyMinWidth {
+		switch {
+		case paneWidth > maxPanelWidth(winWidth):
+			// Opened wider than the ceiling: a width remembered from a roomier
+			// window, or one saved before the ceiling existed. Correct it now
+			// rather than leaving the work pane squeezed until something else
+			// happens to trigger a re-layout.
+			m.targetWidth = maxPanelWidth(winWidth)
+			return m, tea.Batch(
+				restorePanelWidth(m.targetWidth),
+				rememberPanelWidth(m.targetWidth),
+			)
+		case paneWidth >= notifyMinWidth:
 			m.targetWidth = paneWidth
 		}
 		return m, nil
@@ -317,6 +328,19 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth int) (watchModel, tea.Cm
 		if paneWidth < notifyMinWidth {
 			return m, nil
 		}
+		if paneWidth > maxPanelWidth(winWidth) {
+			// Not a drag anyone meant. "Same window, different pane" is also
+			// what a pane appearing or dying beside the panel looks like, and
+			// adopting that once is enough to make it permanent — the width is
+			// saved to the session and then actively held. Measured: the panel
+			// reached 188 of 237 columns and stayed there, leaving 48 to work
+			// in. Put it back rather than merely declining to remember it, or
+			// the squeeze lasts until the next re-layout.
+			if m.targetWidth > 0 {
+				return m, restorePanelWidth(m.targetWidth)
+			}
+			return m, nil
+		}
 		m.targetWidth = paneWidth
 		return m, rememberPanelWidth(paneWidth)
 
@@ -328,6 +352,18 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth int) (watchModel, tea.Cm
 		return m, nil
 	}
 }
+
+// maxPanelWidth is the widest the panel may be held at: half its window.
+//
+// The ceiling is the counterpart to notifyMinWidth, and it exists for the same
+// reason — a width the panel arrives at by accident must not become the width it
+// enforces. The lower clamp stops a transient squeeze from sticking; this one
+// stops the opposite, which is worse: the panel is a sidebar, and past half the
+// window the pane you actually work in is the one being squeezed.
+//
+// Half rather than a fixed number of columns because the only thing that matters
+// is what is left over, and that scales with the window.
+func maxPanelWidth(winWidth int) int { return winWidth / 2 }
 
 // rememberPanelWidth records the pane's width for its session, so reopening the
 // panel there brings back the size the user dragged it to.
