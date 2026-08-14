@@ -151,7 +151,7 @@ func TestPushEventsCapsAndOrders(t *testing.T) {
 func notifyOrder(ss []tmux.Session) []string {
 	var got []string
 	var last string
-	for _, l := range notifyLines(ss, nil, 40) {
+	for _, l := range notifyLines(ss, nil, 40, "") {
 		if l.session != "" && l.session != last {
 			got = append(got, l.session)
 		}
@@ -213,7 +213,7 @@ func TestNotifySpacingIsClickable(t *testing.T) {
 	blocked.AIWaitingFor = "Bash: git push"
 	sessions := []tmux.Session{first, blocked}
 
-	rows := notifyLines(sessions, nil, 40)
+	rows := notifyLines(sessions, nil, 40, "")
 	owners := map[string]int{}
 	for _, l := range rows {
 		if l.session != "" {
@@ -240,7 +240,7 @@ func TestNotifyWorktreeGlyph(t *testing.T) {
 	tree.GitBranch = "feat"
 	tree.IsWorktree = true
 
-	out := ansi.Strip(strings.Join(notifyTexts(notifyLines([]tmux.Session{plain, tree}, nil, 60)), "\n"))
+	out := ansi.Strip(strings.Join(notifyTexts(notifyLines([]tmux.Session{plain, tree}, nil, 60, "")), "\n"))
 	if !strings.Contains(out, "⌥ main") {
 		t.Errorf("a plain repo did not render a single glyph:\n%s", out)
 	}
@@ -262,7 +262,7 @@ func TestNotifySessionLineLayout(t *testing.T) {
 	}
 
 	for _, name := range []string{"mux", "a-much-longer-name"} {
-		row := ansi.Strip(notifySessionLine(mk(name), 44))
+		row := ansi.Strip(notifySessionLine(mk(name), 44, false, false))
 
 		iName := strings.Index(row, name)
 		iAge := strings.Index(row, "1m")
@@ -291,7 +291,7 @@ func TestNotifySessionLineDropsBranchFirst(t *testing.T) {
 	s.GitBranch = "dimont-onboarding"
 	s.AISince = time.Now().Add(-3 * time.Hour)
 
-	row := ansi.Strip(notifySessionLine(s, 24))
+	row := ansi.Strip(notifySessionLine(s, 24, false, false))
 	if !strings.Contains(row, "3h") {
 		t.Errorf("row %q dropped the age", row)
 	}

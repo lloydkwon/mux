@@ -38,6 +38,17 @@ type watchModel struct {
 	events        []aiEvent
 	err           error
 
+	// selected is the session the detail column is showing, held by name rather
+	// than by row index: rows are ordered by how long a state has held, so an
+	// index points at a different session two seconds later.
+	selected string
+
+	// preview is the captured output for previewKey's session, kept apart so a
+	// capture that arrives after the selection moved can be discarded rather
+	// than shown under the wrong name.
+	preview    string
+	previewKey previewKey
+
 	// Held so a re-layout can be told from a drag. winWidth is the window size
 	// this pane was last seen in; targetWidth is the width to hold it at.
 	winWidth    int
@@ -74,24 +85,36 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Display-only: only quitting is worth a key. Anything else would make
-		// a pane you are not focused on look like it swallowed a keystroke.
-		if k := msg.String(); k == "q" || k == "ctrl+c" {
-			return m, tea.Quit
-		}
-		return m, nil
+		return m.handleKey(msg)
 
 	case tea.MouseMsg:
 		// Press only. A release carries the same button under SGR, and a drag
-		// arrives as motion — neither should switch sessions.
+		// arrives as motion — neither should move the selection.
 		if msg.Button != tea.MouseButtonLeft || msg.Action != tea.MouseActionPress {
 			return m, nil
 		}
-		name := m.sessionAtRow(msg.Y)
+		name := m.sessionAt(msg.X, msg.Y)
 		if name == "" {
 			return m, nil
 		}
-		return m, switchToSession(name)
+		// One click to look, a second to go. Without a detail column there is
+		// nothing to look at, so the first click is the decision.
+		if m.listColumnWidth() == 0 || name == m.selected {
+			return m, switchToSession(name)
+		}
+		next, cmd := m.selectSession(name)
+		// tmux made this pane active to deliver the click. Hand focus back even
+		// though we are not leaving: while the panel is the active pane, its
+		// window reports the panel's directory as the session's own.
+		return next, tea.Batch(restoreFocus(), cmd)
+
+	case previewLoadedMsg:
+		// Same guard the TUI uses: a capture that lands after the selection
+		// moved would be drawn under the wrong session's name.
+		if msg.key.session == m.selected {
+			m.preview, m.previewKey = msg.content, msg.key
+		}
+		return m, nil
 
 	case switchFailedMsg:
 		// Surface it in the log rather than failing silently: the session can
@@ -102,22 +125,130 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case watchTickMsg:
-		return m, tea.Batch(loadSessions, watchTick())
+		return m, tea.Batch(loadSessions, watchTick(), m.previewCmd())
 
 	case sessionsLoadedMsg:
 		m.err = msg.err
-		if msg.err == nil {
-			// Same order as the TUI: diff before the slice is replaced. This
-			// process keeps its own history — it cannot share the TUI's, and a
-			// panel that only logs while mux is open would defeat the point.
-			fresh, next := detectTransitions(m.prevAIStates, msg.sessions, time.Now())
-			m.prevAIStates = next
-			m.events = pushEvents(m.events, fresh)
-			m.sessions = msg.sessions
+		if msg.err != nil {
+			return m, nil
 		}
-		return m, nil
+		// Same order as the TUI: diff before the slice is replaced. This process
+		// keeps its own history — it cannot share the TUI's, and a panel that
+		// only logs while mux is open would defeat the point.
+		fresh, states := detectTransitions(m.prevAIStates, msg.sessions, time.Now())
+		m.prevAIStates = states
+		m.events = pushEvents(m.events, fresh)
+		m.sessions = msg.sessions
+		return m.reselect()
 	}
 	return m, nil
+}
+
+// handleKey drives the selection. Keys reach this pane by `send-keys` from a
+// tmux binding rather than by it being focused — that is the whole point, since
+// focusing the panel would take the keyboard away from the pane you are typing
+// in. See `mux nav`.
+func (m watchModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "up", "k":
+		return m.moveSelection(-1)
+	case "down", "j":
+		return m.moveSelection(1)
+	case "home", "g":
+		return m.moveSelection(-len(m.sessionOrder()))
+	case "end", "G":
+		return m.moveSelection(len(m.sessionOrder()))
+	case "enter":
+		if m.selected == "" {
+			return m, nil
+		}
+		return m, switchToSession(m.selected)
+	}
+	return m, nil
+}
+
+// sessionOrder lists the sessions the panel shows, top to bottom. Derived from
+// the rendered rows rather than from the session slice, so it cannot disagree
+// with what a click on the same row would pick.
+func (m watchModel) sessionOrder() []string {
+	var order []string
+	var last string
+	for _, l := range m.sessionLines() {
+		if l.session != "" && l.session != last {
+			order = append(order, l.session)
+		}
+		last = l.session
+	}
+	return order
+}
+
+// moveSelection steps delta rows through the list, stopping at either end.
+// Wrapping would make a held key cycle forever with nothing to say it had.
+func (m watchModel) moveSelection(delta int) (tea.Model, tea.Cmd) {
+	order := m.sessionOrder()
+	if len(order) == 0 {
+		return m, nil
+	}
+	at := 0
+	for i, name := range order {
+		if name == m.selected {
+			at = clampInt(i+delta, 0, len(order)-1)
+			break
+		}
+	}
+	next, cmd := m.selectSession(order[at])
+	return next, cmd
+}
+
+// selectSession points the detail column at name and asks for its output.
+func (m watchModel) selectSession(name string) (watchModel, tea.Cmd) {
+	if name == "" || name == m.selected {
+		return m, nil
+	}
+	m.selected = name
+	// Drop the outgoing session's output rather than leaving it under the new
+	// name until the next capture lands.
+	m.preview, m.previewKey = "", previewKey{}
+	return m, m.previewCmd()
+}
+
+// reselect keeps the selection pointing at a session that still exists, and
+// picks the top row when there is nothing selected yet.
+func (m watchModel) reselect() (watchModel, tea.Cmd) {
+	for _, s := range m.sessions {
+		if s.Name == m.selected {
+			return m, nil
+		}
+	}
+	m.selected, m.preview, m.previewKey = "", "", previewKey{}
+	order := m.sessionOrder()
+	if len(order) == 0 {
+		return m, nil
+	}
+	m.selected = order[0]
+	// Ask for the output now rather than waiting out a whole tick: the first
+	// frame after startup would otherwise show a named session with a blank
+	// column beside it.
+	return m, m.previewCmd()
+}
+
+// previewCmd captures the selected session's active pane. Nothing to do without
+// a detail column to draw it in — the narrow panel pays no capture at all.
+func (m watchModel) previewCmd() tea.Cmd {
+	if m.selected == "" || m.listColumnWidth() == 0 {
+		return nil
+	}
+	return refreshPreview(previewKey{session: m.selected, window: -1, pane: -1})
+}
+
+// restoreFocus hands the active pane back after a click that is not a switch.
+func restoreFocus() tea.Cmd {
+	return func() tea.Msg {
+		_ = tmux.RestoreLastPane(selfPane())
+		return nil
+	}
 }
 
 // selfPane is this process's own pane, from the environment tmux sets for it.
@@ -236,30 +367,106 @@ func switchToSession(name string) tea.Cmd {
 	}
 }
 
-// sessionAtRow maps a pane row to the session on it, empty when that row is not
-// a session. The watch pane draws no border and starts at the top of the alt
-// screen, so a row index is a line index — the TUI overlay's copy of this panel
-// is offset and must not use this.
-func (m watchModel) sessionAtRow(y int) string {
+// watchTwoColumnMinWidth is the narrowest pane worth splitting. Below it the
+// list gets the whole pane, which is what the panel has always looked like.
+//
+// The split gives the list a readable 30 at minimum and leaves the detail column
+// enough to show a prompt and its options without wrapping every line.
+const watchTwoColumnMinWidth = 76
+
+// listColumnWidth is the session column's width, or 0 when the pane is too
+// narrow to split.
+//
+// Derived from the pane width rather than stored, so a click and the frame it
+// was aimed at can never disagree about where the columns are.
+func (m watchModel) listColumnWidth() int {
+	if m.width < watchTwoColumnMinWidth {
+		return 0
+	}
+	return clampInt(m.width*2/5, 30, 40)
+}
+
+// sessionAt maps a click to the session under it, empty when that point is not
+// on a session row. The watch pane draws no border and starts at the top of the
+// alt screen, so a row index is a line index.
+//
+// A click in the detail column selects nothing: it is a readout, and there is
+// nothing there to aim at.
+func (m watchModel) sessionAt(x, y int) string {
 	if y < 0 || m.width < notifyMinWidth || m.err != nil {
 		return ""
 	}
-	lines := notifyLines(m.sessions, m.events, m.width)
+	if listW := m.listColumnWidth(); listW > 0 && x >= listW {
+		return ""
+	}
+	lines := m.sessionLines()
 	if y >= len(lines) {
 		return ""
 	}
 	return lines[y].session
 }
 
+// sessionLines is the session column's rows, in the layout the current pane
+// width produces.
+func (m watchModel) sessionLines() []notifyLine {
+	if listW := m.listColumnWidth(); listW > 0 {
+		return notifySessionLines(m.sessions, listW, m.selected)
+	}
+	return notifyLines(m.sessions, m.events, m.width, m.selected)
+}
+
 func (m watchModel) View() string {
 	if m.width == 0 {
 		return ""
 	}
+	if listW := m.listColumnWidth(); listW > 0 && m.err == nil {
+		return m.twoColumnView(listW)
+	}
 	return fixedBox(m.body(), m.width, m.height)
 }
 
-// body returns the pane's content before it is clipped to size. No border: the
-// tmux pane already draws one.
+// twoColumnView puts the session list beside the selected session's detail.
+//
+// joinHorizontalFixed concatenates line by line, so both sides have to be
+// exactly their own width and exactly m.height tall or the columns shear.
+func (m watchModel) twoColumnView(listW int) string {
+	lines := notifySessionLines(m.sessions, listW, m.selected)
+	left := ""
+	if len(lines) == 0 {
+		left = helpStyle.Render(fitCells(" 세션 없음", listW))
+	} else {
+		left = strings.Join(notifyTexts(lines), "\n")
+	}
+
+	right := watchDetail(m.selectedSession(), m.previewFor(m.selected),
+		m.events, m.width-listW, m.height)
+
+	return joinHorizontalFixed(fixedBox(left, listW, m.height), right)
+}
+
+// selectedSession returns the selected session, or nil when nothing is selected
+// or the selection has since vanished.
+func (m watchModel) selectedSession() *tmux.Session {
+	for i := range m.sessions {
+		if m.sessions[i].Name == m.selected {
+			return &m.sessions[i]
+		}
+	}
+	return nil
+}
+
+// previewFor returns the captured output only when it belongs to the session
+// asked about. A capture that arrives after the selection moved would otherwise
+// be drawn under the new session's name.
+func (m watchModel) previewFor(session string) string {
+	if session == "" || m.previewKey.session != session {
+		return ""
+	}
+	return m.preview
+}
+
+// body returns the single-column content before it is clipped to size. No
+// border: the tmux pane already draws one.
 func (m watchModel) body() string {
 	if m.width < notifyMinWidth {
 		// Too narrow for the columns to mean anything. Say so rather than
@@ -270,7 +477,7 @@ func (m watchModel) body() string {
 		return errorStyle.Render(fitCells(m.err.Error(), m.width))
 	}
 
-	lines := notifyLines(m.sessions, m.events, m.width)
+	lines := notifyLines(m.sessions, m.events, m.width, m.selected)
 	if len(lines) == 0 {
 		return helpStyle.Render(fitCells(" AI 세션 없음", m.width))
 	}

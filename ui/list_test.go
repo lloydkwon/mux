@@ -22,7 +22,7 @@ var allAIStates = []tmux.AIState{
 // tries to apply is undone — the only workable rule is that measured width
 // equals drawn width.
 func TestGlyphWidthsAreStable(t *testing.T) {
-	oneCell := []string{"▶", "▼", "○", "*", "✦", "◈", "⬡", "✧", "⌥"}
+	oneCell := []string{"▶", "▼", "○", "*", "✦", "◈", "⬡", "✧", "⌥", "│", "─"}
 	for _, g := range oneCell {
 		if w := ansi.StringWidth(g); w != 1 {
 			t.Errorf("glyph %q measures %d cells, want 1", g, w)

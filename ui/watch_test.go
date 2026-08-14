@@ -27,10 +27,16 @@ func TestWatchViewFillsPane(t *testing.T) {
 	sessions := []tmux.Session{sess("mux", tmux.AIStateWorking), sess("api", tmux.AIStateApproval)}
 	sessions[1].AIWaitingFor = "Bash: git push"
 
-	for _, w := range []int{20, 40, 80} {
-		for _, h := range []int{6, 12, 30} {
+	for _, w := range []int{20, 40, 75, 76, 84, 120} {
+		for _, h := range []int{3, 4, 6, 12, 30} {
 			m := watchTestModel(w, h)
 			m.sessions = sessions
+			// Two-column mode has to hold the shape too, and it only draws the
+			// detail column once something is selected.
+			m.selected = "api"
+			m.preview = strings.Repeat("a line of captured output\n", 40)
+			m.previewKey = previewKey{session: "api", window: -1, pane: -1}
+			m.events = []aiEvent{{at: time.Now(), session: "api", text: "❗ 승인 대기"}}
 
 			lines := strings.Split(m.View(), "\n")
 			if len(lines) != h {
@@ -110,8 +116,8 @@ func TestWatchLogsTransitions(t *testing.T) {
 	}
 }
 
-// Keys other than quit must be inert: this pane is usually not the focused one,
-// and a stray key reaching it should not change what it shows.
+// Keys the panel does not use must stay inert: the bindings send only the ones
+// below, and anything else arriving here is a stray that should change nothing.
 func TestWatchKeysAreInert(t *testing.T) {
 	m := watchTestModel(40, 12)
 
@@ -170,46 +176,213 @@ func TestSessionAtRow(t *testing.T) {
 		{-1, ""},
 	}
 	for _, tc := range tests {
-		if got := m.sessionAtRow(tc.row); got != tc.want {
-			t.Errorf("sessionAtRow(%d) = %q, want %q", tc.row, got, tc.want)
+		if got := m.sessionAt(0, tc.row); got != tc.want {
+			t.Errorf("sessionAt(0, %d) = %q, want %q", tc.row, got, tc.want)
 		}
 	}
 }
 
 // Degraded panes have no rows to click, and clicking must not switch anywhere.
-func TestSessionAtRowWhenDegraded(t *testing.T) {
+func TestSessionAtWhenDegraded(t *testing.T) {
 	narrow := watchTestModel(10, 20)
 	narrow.sessions = []tmux.Session{sess("mux", tmux.AIStateWorking)}
-	if got := narrow.sessionAtRow(1); got != "" {
+	if got := narrow.sessionAt(0, 1); got != "" {
 		t.Errorf("narrow pane returned %q", got)
 	}
 
 	broken := watchTestModel(40, 20)
 	broken.sessions = []tmux.Session{sess("mux", tmux.AIStateWorking)}
 	broken.err = errRefreshTest
-	if got := broken.sessionAtRow(1); got != "" {
+	if got := broken.sessionAt(0, 1); got != "" {
 		t.Errorf("errored pane returned %q", got)
 	}
 }
 
-// Only a left press switches. Release repeats the button under SGR and drags
-// arrive as motion — either one switching would fire on an accidental swipe.
-func TestWatchOnlyLeftPressSwitches(t *testing.T) {
+// The detail column is a readout — there is nothing in it to aim at, and a
+// click there landing on whatever row happened to be beside it would switch
+// sessions by accident.
+func TestSessionAtIgnoresDetailColumn(t *testing.T) {
+	m := watchTestModel(100, 30)
+	m.sessions = []tmux.Session{sess("mux", tmux.AIStateWorking)}
+
+	listW := m.listColumnWidth()
+	if listW == 0 {
+		t.Fatal("a 100-column pane should have split into two")
+	}
+	if got := m.sessionAt(listW-1, 2); got != "mux" {
+		t.Errorf("click at the list's right edge = %q, want mux", got)
+	}
+	if got := m.sessionAt(listW, 2); got != "" {
+		t.Errorf("click in the detail column = %q, want nothing", got)
+	}
+}
+
+// Only a left press acts. Release repeats the button under SGR and drags arrive
+// as motion — either one acting would fire on an accidental swipe.
+func TestWatchOnlyLeftPressActs(t *testing.T) {
 	m := watchTestModel(40, 20)
 	m.sessions = []tmux.Session{sess("mux", tmux.AIStateWorking)}
 
 	// Row 0 is the heading and row 1 the blank under it; the first session is 2.
 	if _, cmd := m.Update(tea.MouseMsg{Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}); cmd == nil {
-		t.Error("left press on a session row did not switch")
+		t.Error("left press on a session row did nothing")
 	}
 	if _, cmd := m.Update(tea.MouseMsg{Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease}); cmd != nil {
-		t.Error("release switched")
+		t.Error("release acted")
 	}
 	if _, cmd := m.Update(tea.MouseMsg{Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion}); cmd != nil {
-		t.Error("drag switched")
+		t.Error("drag acted")
 	}
 	if _, cmd := m.Update(tea.MouseMsg{Y: 0, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}); cmd != nil {
-		t.Error("clicking the header switched")
+		t.Error("clicking the header acted")
+	}
+}
+
+// One click to look, a second to go. The first click must not move the client:
+// reading what another session is asking is the whole reason the detail column
+// exists, and it is worthless if looking costs you your place.
+func TestWatchClickSelectsThenSwitches(t *testing.T) {
+	m := watchTestModel(100, 30)
+	m.sessions = []tmux.Session{sess("mux", tmux.AIStateWorking), sess("api", tmux.AIStateApproval)}
+	m, _ = m.reselect()
+	if m.selected != "mux" && m.selected != "api" {
+		t.Fatalf("nothing selected after a refresh: %q", m.selected)
+	}
+
+	// Aim at whichever session is *not* already selected.
+	order := m.sessionOrder()
+	rows := m.sessionLines()
+	var other string
+	for _, name := range order {
+		if name != m.selected {
+			other = name
+		}
+	}
+	row := -1
+	for i, l := range rows {
+		if l.session == other {
+			row = i
+			break
+		}
+	}
+	if row < 0 {
+		t.Fatalf("no row for %q in %v", other, order)
+	}
+
+	click := tea.MouseMsg{X: 1, Y: row, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}
+	first, _ := m.Update(click)
+	selected := first.(watchModel)
+	if selected.selected != other {
+		t.Fatalf("first click selected %q, want %q", selected.selected, other)
+	}
+
+	// The second click on the same row is the decision.
+	if _, cmd := selected.Update(click); cmd == nil {
+		t.Error("clicking the selected session did not switch")
+	}
+}
+
+// Without a detail column there is nothing to look at, so the first click has
+// to be the decision — the narrow panel behaves the way it always has.
+func TestWatchNarrowClickSwitchesImmediately(t *testing.T) {
+	m := watchTestModel(40, 20)
+	m.sessions = []tmux.Session{sess("mux", tmux.AIStateWorking)}
+	if m.listColumnWidth() != 0 {
+		t.Fatal("a 40-column pane should not have split")
+	}
+
+	updated, cmd := m.Update(tea.MouseMsg{Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	if cmd == nil {
+		t.Error("the only click did not switch")
+	}
+	if got := updated.(watchModel).selected; got != "" {
+		t.Errorf("selection = %q, want the narrow panel to keep none", got)
+	}
+}
+
+// The selection is held by name because the rows reorder underneath it. A
+// session that goes away has to release it rather than leave the detail column
+// naming something that no longer exists.
+func TestWatchSelectionSurvivesReorderAndDrops(t *testing.T) {
+	now := time.Now()
+	mk := func(name string, since time.Duration, st tmux.AIState) tmux.Session {
+		s := sess(name, st)
+		s.AISince = now.Add(-since)
+		return s
+	}
+
+	m := watchTestModel(100, 30)
+	loaded, _ := m.Update(sessionsLoadedMsg{sessions: []tmux.Session{
+		mk("mux", time.Minute, tmux.AIStateWorking),
+		mk("api", time.Hour, tmux.AIStateWorking),
+	}})
+	m = loaded.(watchModel)
+	if m.selected != "mux" {
+		t.Fatalf("selected %q, want the top row", m.selected)
+	}
+
+	// Point at the second row, then make it sort to the top.
+	m, _ = m.selectSession("api")
+	reordered, _ := m.Update(sessionsLoadedMsg{sessions: []tmux.Session{
+		mk("mux", time.Hour, tmux.AIStateWorking),
+		mk("api", time.Second, tmux.AIStateWorking),
+	}})
+	if got := reordered.(watchModel).selected; got != "api" {
+		t.Errorf("selected %q after a reorder, want api", got)
+	}
+
+	gone, _ := reordered.(watchModel).Update(sessionsLoadedMsg{sessions: []tmux.Session{
+		mk("mux", time.Hour, tmux.AIStateWorking),
+	}})
+	if got := gone.(watchModel).selected; got != "mux" {
+		t.Errorf("selected %q after api vanished, want it to fall back to mux", got)
+	}
+}
+
+// Keys arrive by send-keys from a tmux binding, so the panel acts on them
+// without ever being the focused pane.
+func TestWatchKeysMoveSelection(t *testing.T) {
+	m := watchTestModel(100, 30)
+	m.sessions = []tmux.Session{sess("mux", tmux.AIStateWorking), sess("api", tmux.AIStateApproval)}
+	m, _ = m.reselect()
+
+	order := m.sessionOrder()
+	if len(order) != 2 {
+		t.Fatalf("order = %v, want two sessions", order)
+	}
+
+	down, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if got := down.(watchModel).selected; got != order[1] {
+		t.Errorf("down selected %q, want %q", got, order[1])
+	}
+	// The end is a stop, not a wrap: a held key would otherwise cycle forever.
+	stop, _ := down.(watchModel).Update(tea.KeyMsg{Type: tea.KeyDown})
+	if got := stop.(watchModel).selected; got != order[1] {
+		t.Errorf("down at the bottom selected %q, want it held at %q", got, order[1])
+	}
+	up, _ := stop.(watchModel).Update(tea.KeyMsg{Type: tea.KeyUp})
+	if got := up.(watchModel).selected; got != order[0] {
+		t.Errorf("up selected %q, want %q", got, order[0])
+	}
+	if _, cmd := up.(watchModel).Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
+		t.Error("enter did not switch")
+	}
+}
+
+// A capture that lands after the selection moved would be drawn under the new
+// session's name.
+func TestWatchPreviewIgnoresStaleCapture(t *testing.T) {
+	m := watchTestModel(100, 30)
+	m.selected = "api"
+
+	stale, _ := m.Update(previewLoadedMsg{key: previewKey{session: "mux", window: -1, pane: -1}, content: "old"})
+	if got := stale.(watchModel).preview; got != "" {
+		t.Errorf("preview = %q, want another session's capture dropped", got)
+	}
+
+	fresh, _ := m.Update(previewLoadedMsg{key: previewKey{session: "api", window: -1, pane: -1}, content: "live"})
+	if got := fresh.(watchModel).preview; got != "live" {
+		t.Errorf("preview = %q, want the selected session's capture", got)
 	}
 }
 
