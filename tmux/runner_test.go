@@ -13,6 +13,10 @@ import (
 type mockRunner struct {
 	outputs map[string]mockResult
 	runs    []string
+	// gets records the commands that were only *read* from. runs cannot: it
+	// holds the side effects, and a test about what mux asked tmux — rather than
+	// what it did to it — has nothing else to assert on.
+	gets []string
 }
 
 type mockResult struct {
@@ -34,6 +38,7 @@ func (m *mockRunner) OnOutput(out []byte, err error, name string, args ...string
 
 func (m *mockRunner) Output(name string, args ...string) ([]byte, error) {
 	k := m.key(name, args...)
+	m.gets = append(m.gets, k)
 	if r, ok := m.outputs[k]; ok {
 		return r.out, r.err
 	}

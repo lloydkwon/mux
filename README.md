@@ -271,6 +271,8 @@ set-hook -g client-session-changed 'run-shell "/absolute/path/to/mux panel --aut
 
 `--auto` marks the hook path. It is an *ensure* rather than a toggle — it opens a missing panel and never closes one — which is what lets the resize hooks call the same command without the panel flapping. It stands down in three cases: a window narrower than 140 columns, a session only being viewed from a VS Code integrated terminal, and a window where you closed the panel yourself. Pressing the key overrides all three, since that is a decision rather than a default, and it clears the manual-off mark so the hooks resume.
 
+**With [tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect), a restored panel comes back as an empty shell.** The plugin saves a pane's child process, and the panel has none — it *is* the pane's process — so there is nothing for it to restore, and `@resurrect-processes` cannot help. mux marks its pane with the tmux pane title, which is the one thing a restore hands back, and closes the dead pane before opening a live one in its place. Nothing to configure; a panel that predates this is simply not recognised the first time.
+
 **If the panel does not appear, suspect the width first** — the stand-down is silent by design, since these hooks fire constantly and an error per window would be worse. 140 is the panel's own 48 columns plus a work pane worth working in; the same number is what an open panel leaves below, so it cannot squeeze you out of a window it would not have opened in. Move the bar for your own screen:
 
 ```bash

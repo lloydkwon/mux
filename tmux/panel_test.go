@@ -720,6 +720,147 @@ func TestTogglePanelAutoRespectsManualOff(t *testing.T) {
 	})
 }
 
+// ghostList is what a window looks like once tmux-resurrect has restored it:
+// the panel's pane is back, in its place and at its width, running a bare shell.
+const ghostList = "%3 \n%9 cat '/home/u/.local/share/tmux/resurrect/restore/pane_contents//pane-work:0.0'; exec /usr/bin/zsh\n"
+
+// mockGhostWindow sets up a restored window whose panel pane came back dead,
+// with titles as resurrect leaves them — the panel's own restored verbatim.
+func mockGhostWindow(m *mockRunner, titles string) {
+	mockPanelWindow(m)
+	m.OnOutput([]byte(ghostList), nil, "tmux", "list-panes", "-t", "@7",
+		"-F", "#{pane_id} #{pane_start_command}")
+	m.OnOutput([]byte(titles), nil, "tmux", "list-panes", "-t", "@7",
+		"-F", "#{pane_id} #{pane_title}")
+	m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
+	m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
+	m.OnOutput([]byte("27\n"), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
+	m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-gqv", "@mux_panel_min_width")
+	m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
+}
+
+// tmux-resurrect cannot bring `mux watch` back — it records a pane's child
+// process and the panel has none — so a restored window holds a 36-column shell
+// where the panel was. Left alone, mux does not recognise it and opens a second
+// panel beside it. The title is what survives the restore, and what says the
+// pane can go.
+func TestTogglePanelClosesARestoredGhost(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		mockGhostWindow(m, "%3 a-hostname\n%9 "+panelTitle+"\n")
+		m.OnOutput([]byte("269\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
+		old := clientEnvHas
+		clientEnvHas = func(int, string) bool { return false }
+		defer func() { clientEnvHas = old }()
+
+		if err := TogglePanel("%3", true); err != nil {
+			t.Fatalf("TogglePanel: %v", err)
+		}
+		if !ran(m, "kill-pane -t %9") {
+			t.Errorf("ran %v, want the restored pane closed", m.runs)
+		}
+		if !ran(m, "split-window") {
+			t.Errorf("ran %v, want a real panel opened in its place", m.runs)
+		}
+		// Order matters: splitting first would size the new pane against a window
+		// the dead one is still taking 36 columns of.
+		for _, r := range m.runs {
+			if strings.Contains(r, "split-window") {
+				t.Errorf("ran %v, want the kill before the split", m.runs)
+			}
+			if strings.Contains(r, "kill-pane") {
+				break
+			}
+		}
+	})
+}
+
+// This closes a pane. A near-miss must not be enough — the title is compared
+// whole, never by substring.
+func TestTogglePanelLeavesOtherTitlesAlone(t *testing.T) {
+	for _, title := range []string{"a-hostname", panelTitle + " notes", "mux", ""} {
+		t.Run(title, func(t *testing.T) {
+			withMock(t, func(m *mockRunner) {
+				mockGhostWindow(m, "%3 a-hostname\n%9 "+title+"\n")
+				m.OnOutput([]byte("269\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
+				old := clientEnvHas
+				clientEnvHas = func(int, string) bool { return false }
+				defer func() { clientEnvHas = old }()
+
+				if err := TogglePanel("%3", true); err != nil {
+					t.Fatalf("TogglePanel: %v", err)
+				}
+				if ran(m, "kill-pane") {
+					t.Errorf("ran %v, want no pane closed for title %q", m.runs, title)
+				}
+			})
+		})
+	}
+}
+
+// A window mux will not put a panel in is the window that wants those columns
+// back most, so the dead pane goes whether or not a live one replaces it.
+func TestTogglePanelClosesTheGhostEvenWhenItWillNotOpen(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		mockGhostWindow(m, "%3 a-hostname\n%9 "+panelTitle+"\n")
+		m.OnOutput([]byte("54\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
+		old := clientEnvHas
+		clientEnvHas = func(int, string) bool { return false }
+		defer func() { clientEnvHas = old }()
+
+		if err := TogglePanel("%3", true); err != nil {
+			t.Fatalf("TogglePanel: %v", err)
+		}
+		if !ran(m, "kill-pane -t %9") {
+			t.Errorf("ran %v, want the dead pane closed in a narrow window too", m.runs)
+		}
+		if ran(m, "split-window") {
+			t.Errorf("ran %v, want no panel in a 54-column window", m.runs)
+		}
+	})
+}
+
+// The hooks fire constantly and almost always find a live panel. That path must
+// stay at one list-panes: the ghost lookup is a second one, and it only belongs
+// on the path that is about to create a pane anyway.
+func TestTogglePanelDoesNotLookForAGhostWhenThePanelIsThere(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 \n%9 /home/u/.local/bin/mux watch\n"), nil,
+			"tmux", "list-panes", "-t", "@7", "-F", "#{pane_id} #{pane_start_command}")
+
+		if err := TogglePanel("%3", true); err != nil {
+			t.Fatalf("TogglePanel: %v", err)
+		}
+		for _, g := range m.gets {
+			if strings.Contains(g, "#{pane_title}") {
+				t.Errorf("asked %v, want no title lookup when a panel is already there", m.gets)
+			}
+		}
+	})
+}
+
+// The mark itself. `select-pane -T` sets the title and returns — it must not be
+// the thing that makes the panel active.
+func TestMarkPanelPane(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		if err := MarkPanelPane("%9"); err != nil {
+			t.Fatalf("MarkPanelPane: %v", err)
+		}
+		if want := "tmux select-pane -t %9 -T " + panelTitle; m.runs[0] != want {
+			t.Errorf("ran %q, want %q", m.runs[0], want)
+		}
+	})
+
+	withMock(t, func(m *mockRunner) {
+		if err := MarkPanelPane(""); err != nil {
+			t.Fatalf("MarkPanelPane: %v", err)
+		}
+		if want := "tmux select-pane -T " + panelTitle; m.runs[0] != want {
+			t.Errorf("ran %q, want %q", m.runs[0], want)
+		}
+	})
+}
+
 // The panel is steered by send-keys rather than by being focused: focusing it
 // would take the keyboard away from the pane the user is typing in, which is
 // the one thing an always-visible sidebar must not cost.

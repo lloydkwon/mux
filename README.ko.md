@@ -214,7 +214,8 @@ bind -n M-Enter run-shell "/mux/절대경로 nav -t #{pane_id} enter"
 패널은 pane이고 pane은 창 하나에 속합니다 — 그래서 **패널을 가져 본 적 없는 창에는 안 보입니다.** 패널에서 세션을 클릭하면 바로 그런 창으로 가게 되고, 패널이 사라진 것처럼 보입니다. `mux setup-panel`이 바인딩과 훅을 한 번에 깔아 줍니다:
 
 ```bash
-mux setup-panel                 # prefix + a 로 토글, 기본 키는 `a`
+mux setup-panel                 # prefix + a 로 토글, prefix + Tab 으로 패널에 들어갔다 나오기
+                                # 둘 다 바꾸려면: mux setup-panel a Tab
 tmux source-file ~/.tmux.conf
 ```
 
@@ -231,6 +232,8 @@ set-hook -g client-session-changed 'run-shell "/mux/절대경로 panel --auto -t
 ```
 
 `--auto`는 훅 전용 표시입니다. 토글이 아니라 **ensure**로 — 없으면 만들고 있으면 닫지 않습니다 — 그래서 리사이즈 훅이 같은 커맨드를 불러도 패널이 껐다 켜졌다 하지 않습니다. 세 경우에 물러납니다: **폭 140칸 미만인 창**, **VS Code 통합 터미널로만 보고 있는 세션**, 그리고 **직접 닫아둔 창**. 키를 직접 누르면 셋 다 무시하고 열리며(기본값이 아니라 결정이므로), 수동 끄기 표시도 지워져 훅이 다시 동작합니다.
+
+**[tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect)로 복원하면 패널은 빈 셸로 돌아옵니다.** 이 플러그인은 pane의 **자식** 프로세스를 저장하는데 패널은 자식이 없습니다 — 패널 자체가 pane의 프로세스입니다. 그래서 되살릴 것이 기록되지 않고 `@resurrect-processes`로도 해결되지 않습니다. mux는 자기 pane에 tmux pane title을 달아 두고(복원이 되돌려주는 유일한 것입니다) 그 죽은 pane을 닫은 뒤 그 자리에 살아 있는 패널을 엽니다. 설정할 것은 없습니다. 이 기능 이전에 만들어진 패널만 처음 한 번 인식되지 않습니다.
 
 **패널이 안 보이면 창 너비부터 의심하세요.** 물러날 때 아무 말도 하지 않는 것은 의도된 설계입니다 — 훅은 쉴 새 없이 발화하므로 창마다 에러를 뱉는 편이 더 나쁩니다. 140은 패널의 48칸 + 작업 pane에 남길 만큼이고, 열려 있는 패널이 스스로 나가는 기준도 같은 값이라 열지 않았을 창에서 사용자를 밀어내는 일이 없습니다. 화면에 맞춰 조절하려면:
 

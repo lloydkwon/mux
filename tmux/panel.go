@@ -39,6 +39,22 @@ const (
 	// by hand with `mux watch` also matches — which is correct, that *is* the
 	// panel.
 	panelCommand = "mux watch"
+
+	// panelTitle names the panel's pane, so a pane that *was* the panel can
+	// still be recognised after tmux-resurrect hands it back as a bare shell.
+	//
+	// A pane title is the only thing that survives a restore. Measured against
+	// the plugin: it saves and restores the title verbatim with no option to
+	// turn that off, it saves no user options at all — a restored pane is a new
+	// tmux object with nothing on it — and it re-creates the pane running
+	// `cat <contents>; exec $SHELL`, so pane_start_command no longer says
+	// `mux watch` either.
+	//
+	// resurrect cannot bring the panel itself back, and that is not fixable from
+	// here: its save strategy records a pane's *child* process, and the panel is
+	// the pane process with no child, so the command it saves is empty. Hence
+	// this: mark the pane, and close what comes back dead.
+	panelTitle = "mux panel"
 )
 
 // TogglePanel opens or closes the AI session panel in target's window. Pass ""
@@ -76,6 +92,15 @@ func TogglePanel(target string, auto bool) error {
 
 	// Everything below only runs when a panel has to be created, so the common
 	// hook case — a window that already has one — costs a single list-panes.
+
+	// No live panel, but something that used to be one may still be sitting in
+	// its place: tmux-resurrect restores the pane as a bare shell. Closing it
+	// comes before every stand-down check below, because a window mux will not
+	// put a panel in is a window that wants those columns back most.
+	if ghost, err := findGhostPane(window); err == nil && ghost != "" {
+		_ = runner.Run("tmux", "kill-pane", "-t", ghost)
+	}
+
 	if auto && PanelDisabled(window) {
 		return nil
 	}
@@ -467,4 +492,47 @@ func findPanelPane(window string) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// findGhostPane returns the id of a pane that carries the panel's title but is
+// no longer running it — what tmux-resurrect leaves behind — or "" when the
+// window has none.
+//
+// This is a second list-panes rather than another field on findPanelPane's, and
+// deliberately so. It only ever runs on the path that is about to create a
+// panel; the hook path, which fires constantly and almost always finds a live
+// panel, still costs exactly one list-panes.
+//
+// The title is compared whole rather than by substring: this kills a pane, and
+// the one thing worse than a leftover pane is closing one the user was in.
+func findGhostPane(window string) (string, error) {
+	out, err := runner.Output("tmux", "list-panes", "-t", window,
+		"-F", "#{pane_id} #{pane_title}")
+	if err != nil {
+		return "", fmt.Errorf("list panes: %w", err)
+	}
+
+	for _, line := range strings.Split(string(out), "\n") {
+		id, title, found := strings.Cut(strings.TrimSpace(line), " ")
+		if !found {
+			continue // a pane with no title
+		}
+		if title == panelTitle {
+			return id, nil
+		}
+	}
+	return "", nil
+}
+
+// MarkPanelPane names target as the panel's pane. Pass "" for the current pane.
+//
+// `select-pane -T` sets the title and returns; it does not make the pane active,
+// which matters because the panel is created detached and must stay that way.
+func MarkPanelPane(target string) error {
+	args := []string{"select-pane"}
+	if target != "" {
+		args = append(args, "-t", target)
+	}
+	args = append(args, "-T", panelTitle)
+	return runner.Run("tmux", args...)
 }

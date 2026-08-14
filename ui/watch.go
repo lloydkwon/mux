@@ -88,6 +88,14 @@ func RunWatch() error {
 		own = "" // not knowing is a state; see watchModel.ownSession
 	}
 
+	// Name the pane, so that whatever restores this window later can tell that
+	// the pane it hands back used to be the panel. Done here rather than where
+	// the pane is created, so a panel someone started by hand with `mux watch`
+	// is marked too — the same reason panelCommand matches that pane.
+	//
+	// A title mux could not set is not a reason to refuse to draw.
+	_ = tmux.MarkPanelPane(selfPane())
+
 	_, err = tea.NewProgram(
 		watchModel{ownSession: own, minWindowWidth: tmux.MinWindowWidth()},
 		tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
