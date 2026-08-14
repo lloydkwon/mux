@@ -151,7 +151,7 @@ func TestPushEventsCapsAndOrders(t *testing.T) {
 func notifyOrder(ss []tmux.Session) []string {
 	var got []string
 	var last string
-	for _, l := range notifyLines(ss, nil, 40, "") {
+	for _, l := range notifyLines(ss, nil, 40, "", "") {
 		if l.session != "" && l.session != last {
 			got = append(got, l.session)
 		}
@@ -213,7 +213,7 @@ func TestNotifySpacingIsClickable(t *testing.T) {
 	blocked.AIWaitingFor = "Bash: git push"
 	sessions := []tmux.Session{first, blocked}
 
-	rows := notifyLines(sessions, nil, 40, "")
+	rows := notifyLines(sessions, nil, 40, "", "")
 	owners := map[string]int{}
 	for _, l := range rows {
 		if l.session != "" {
@@ -240,7 +240,7 @@ func TestNotifyWorktreeGlyph(t *testing.T) {
 	tree.GitBranch = "feat"
 	tree.IsWorktree = true
 
-	out := ansi.Strip(strings.Join(notifyTexts(notifyLines([]tmux.Session{plain, tree}, nil, 60, "")), "\n"))
+	out := ansi.Strip(strings.Join(notifyTexts(notifyLines([]tmux.Session{plain, tree}, nil, 60, "", "")), "\n"))
 	if !strings.Contains(out, "⌥ main") {
 		t.Errorf("a plain repo did not render a single glyph:\n%s", out)
 	}
@@ -262,7 +262,7 @@ func TestNotifySessionLineLayout(t *testing.T) {
 	}
 
 	for _, name := range []string{"mux", "a-much-longer-name"} {
-		row := ansi.Strip(notifySessionLine(mk(name), 44, false, false))
+		row := ansi.Strip(notifySessionLine(mk(name), 44, rowFlags{}))
 
 		iName := strings.Index(row, name)
 		iAge := strings.Index(row, "1m")
@@ -291,7 +291,7 @@ func TestNotifySessionLineDropsBranchFirst(t *testing.T) {
 	s.GitBranch = "dimont-onboarding"
 	s.AISince = time.Now().Add(-3 * time.Hour)
 
-	row := ansi.Strip(notifySessionLine(s, 24, false, false))
+	row := ansi.Strip(notifySessionLine(s, 24, rowFlags{}))
 	if !strings.Contains(row, "3h") {
 		t.Errorf("row %q dropped the age", row)
 	}
@@ -320,5 +320,63 @@ func TestNotifyEventLineHugsName(t *testing.T) {
 	short, long := start("mux"), start("dimont-onboarding")
 	if short >= long {
 		t.Errorf("text starts at %d for a short name and %d for a long one — want it to follow the name", short, long)
+	}
+}
+
+// The card only shows once you pick the session, so the list needs a mark that
+// answers "why is that one different" before you pick it.
+func TestNotifyMarksOwnSession(t *testing.T) {
+	mine := sess("project", tmux.AIStateWorking)
+	mine.GitBranch = "main"
+	other := sess("api", tmux.AIStateWorking)
+	other.GitBranch = "main"
+	sessions := []tmux.Session{mine, other}
+
+	rows := ansi.Strip(strings.Join(notifyTexts(notifySessionLines(sessions, 40, "", "project")), "\n"))
+	marked := 0
+	for _, line := range strings.Split(rows, "\n") {
+		if strings.Contains(line, ownMarker) {
+			marked++
+			if !strings.Contains(line, "project") {
+				t.Errorf("the marker landed on the wrong row: %q", line)
+			}
+		}
+	}
+	if marked != 1 {
+		t.Errorf("%d rows marked, want exactly 1:\n%s", marked, rows)
+	}
+
+	// No own session known — the panel used to have no idea, and marking
+	// something anyway would be a guess.
+	none := ansi.Strip(strings.Join(notifyTexts(notifySessionLines(sessions, 40, "", "")), "\n"))
+	if strings.Contains(none, ownMarker) {
+		t.Errorf("marked a row with no own session known:\n%s", none)
+	}
+}
+
+// The marker costs two cells, so it has to come out of the same budget as
+// everything else rather than pushing the row past its width.
+func TestNotifySessionLineWidthWithMarker(t *testing.T) {
+	s := sess("dimont-onboarding", tmux.AIStateReady)
+	s.GitBranch = "dimont-onboarding"
+	s.AISince = time.Now().Add(-3 * time.Hour)
+
+	for _, width := range []int{24, 30, 34, 40, 60} {
+		for _, own := range []bool{false, true} {
+			row := notifySessionLine(s, width, rowFlags{own: own})
+			if got := ansi.StringWidth(ansi.Strip(row)); got != width {
+				t.Errorf("width=%d own=%v: row measures %d cells", width, own, got)
+			}
+		}
+	}
+
+	// The branch is context and still yields before the marker does — losing
+	// which session it is, or that it is this one, would be worse.
+	narrow := ansi.Strip(notifySessionLine(s, 24, rowFlags{own: true}))
+	if !strings.Contains(narrow, ownMarker) {
+		t.Errorf("row %q dropped the marker instead of the branch", narrow)
+	}
+	if strings.Contains(narrow, "⌥") {
+		t.Errorf("row %q kept a branch it had no room for", narrow)
 	}
 }

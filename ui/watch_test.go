@@ -484,3 +484,145 @@ func TestWatchQuitsWhenWindowGetsNarrow(t *testing.T) {
 		t.Error("quit on a window that is exactly the minimum")
 	}
 }
+
+// The session this pane lives in is already on screen beside the panel, so
+// auto-selecting it spends the detail column mirroring the pane next to it.
+// It is also almost always the top row — the list is ordered by how recently a
+// state changed, and the session you are working in is the one whose state
+// keeps changing — so this is the default case, not an edge one.
+func TestWatchAutoSelectSkipsOwnSession(t *testing.T) {
+	now := time.Now()
+	mk := func(name string, since time.Duration) tmux.Session {
+		s := sess(name, tmux.AIStateWorking)
+		s.AISince = now.Add(-since)
+		return s
+	}
+
+	tests := []struct {
+		name     string
+		own      string
+		sessions []tmux.Session
+		want     string
+	}{
+		{
+			name:     "the freshest row is this pane's own session",
+			own:      "project",
+			sessions: []tmux.Session{mk("project", time.Second), mk("api", time.Hour)},
+			want:     "api",
+		},
+		{
+			name:     "own session is not the top row and nothing changes",
+			own:      "api",
+			sessions: []tmux.Session{mk("project", time.Second), mk("api", time.Hour)},
+			want:     "project",
+		},
+		{
+			// Nothing else to show. The summary card is what keeps this from
+			// being a mirror.
+			name:     "only this session exists",
+			own:      "project",
+			sessions: []tmux.Session{mk("project", time.Second)},
+			want:     "project",
+		},
+		{
+			// Not knowing must not be guessed either way — this is exactly how
+			// the panel behaved before it could tell.
+			name:     "own session unknown",
+			own:      "",
+			sessions: []tmux.Session{mk("project", time.Second), mk("api", time.Hour)},
+			want:     "project",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := watchTestModel(100, 30)
+			m.ownSession = tt.own
+			loaded, _ := m.Update(sessionsLoadedMsg{sessions: tt.sessions})
+			if got := loaded.(watchModel).selected; got != tt.want {
+				t.Errorf("selected %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// Skipping is what happens when nobody chose. Choosing this pane's own session
+// is allowed, and a refresh two seconds later must not take it back.
+func TestWatchOwnSessionCanBeChosen(t *testing.T) {
+	now := time.Now()
+	mk := func(name string, since time.Duration) tmux.Session {
+		s := sess(name, tmux.AIStateWorking)
+		s.AISince = now.Add(-since)
+		return s
+	}
+	sessions := []tmux.Session{mk("project", time.Second), mk("api", time.Hour)}
+
+	m := watchTestModel(100, 30)
+	m.ownSession = "project"
+	loaded, _ := m.Update(sessionsLoadedMsg{sessions: sessions})
+	m = loaded.(watchModel)
+
+	m, _ = m.selectSession("project")
+	refreshed, _ := m.Update(sessionsLoadedMsg{sessions: sessions})
+	if got := refreshed.(watchModel).selected; got != "project" {
+		t.Errorf("selected %q after a refresh, want the deliberate choice kept", got)
+	}
+}
+
+// Capturing this pane's own session would fetch output the card never draws, so
+// the renderer and the loader have to agree on which one is showing. They ask
+// the same question.
+func TestWatchShowsSelfCard(t *testing.T) {
+	m := watchTestModel(100, 30)
+	m.ownSession = "project"
+	m.sessions = []tmux.Session{sess("project", tmux.AIStateWorking), sess("api", tmux.AIStateWorking)}
+
+	m.selected = "api"
+	if m.showsSelfCard() {
+		t.Error("another session was treated as this pane's own")
+	}
+	if m.contentCmd() == nil {
+		t.Error("another session produced no capture")
+	}
+
+	m.selected = "project"
+	if !m.showsSelfCard() {
+		t.Error("this pane's own session was not recognised")
+	}
+	// It is a Claude session, so the card still wants its cost — just not a
+	// capture of the pane sitting next to the panel.
+	if m.contentCmd() == nil {
+		t.Error("the card's cost line was never loaded")
+	}
+
+	// Nothing published, nothing running: the card has everything it needs off
+	// the session itself, so there is no fetch at all.
+	m.sessions[0].AIState = tmux.AIStateNone
+	m.sessions[0].ActiveCommand = "zsh"
+	if cmd := m.contentCmd(); cmd != nil {
+		t.Error("a plain shell session was still fetched")
+	}
+
+	// Nothing selected is not "own".
+	m.selected = ""
+	if m.showsSelfCard() {
+		t.Error("an empty selection matched an empty ownSession")
+	}
+}
+
+// The card's cost line is the one thing it cannot read off the session, and it
+// travels under the same discard rule as the capture.
+func TestWatchTokenUsageIsKeyed(t *testing.T) {
+	m := watchTestModel(100, 30)
+	m.selected = "project"
+
+	stale, _ := m.Update(tokenUsageLoadedMsg{sessionName: "api", usage: &tmux.TokenUsage{TotalCost: 9}})
+	if got := stale.(watchModel).usageFor("project"); got != nil {
+		t.Errorf("usage = %v, want another session's cost dropped", got)
+	}
+
+	fresh, _ := m.Update(tokenUsageLoadedMsg{sessionName: "project", usage: &tmux.TokenUsage{TotalCost: 1.25}})
+	if got := fresh.(watchModel).usageFor("project"); got == nil || got.TotalCost != 1.25 {
+		t.Errorf("usage = %v, want the selected session's cost", got)
+	}
+}

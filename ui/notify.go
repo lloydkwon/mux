@@ -127,8 +127,8 @@ type notifyLine struct {
 //
 // The two-column panel calls notifySessionLines and notifyEventLines directly,
 // because the halves live in different columns there.
-func notifyLines(sessions []tmux.Session, events []aiEvent, width int, selected string) []notifyLine {
-	lines := notifySessionLines(sessions, width, selected)
+func notifyLines(sessions []tmux.Session, events []aiEvent, width int, selected, own string) []notifyLine {
+	lines := notifySessionLines(sessions, width, selected, own)
 	if len(lines) == 0 && len(events) == 0 {
 		return nil
 	}
@@ -155,7 +155,7 @@ func notifyLines(sessions []tmux.Session, events []aiEvent, width int, selected 
 //
 // Glyphs and colors come from aiGlyph/aiStateColor, the same deciders the list
 // uses — a second mapping here would drift from the rows it sits next to.
-func notifySessionLines(sessions []tmux.Session, width int, selected string) []notifyLine {
+func notifySessionLines(sessions []tmux.Session, width int, selected, own string) []notifyLine {
 	if width <= 0 {
 		return nil
 	}
@@ -189,12 +189,12 @@ func notifySessionLines(sessions []tmux.Session, width int, selected string) []n
 		// nothing under it reads as a panel that failed to load.
 		lines = append(lines, notifyLine{text: helpStyle.Render(padOrTruncate("  없음", width))})
 	}
-	lines = append(lines, sessionBlocks(ai, width, selected, false)...)
+	lines = append(lines, sessionBlocks(ai, width, selected, own, false)...)
 
 	if len(other) > 0 {
 		lines = append(lines, blank,
 			notifyLine{text: helpStyle.Render(padOrTruncate(" ── 세션", width))}, blank)
-		lines = append(lines, sessionBlocks(other, width, selected, true)...)
+		lines = append(lines, sessionBlocks(other, width, selected, own, true)...)
 	}
 	return lines
 }
@@ -232,12 +232,12 @@ func sortByDisplayedAge(ss []tmux.Session) {
 // under a blocked one, and a spacer between blocks.
 //
 // dim marks the second group, whose rows are context rather than the point.
-func sessionBlocks(ss []tmux.Session, width int, selected string, dim bool) []notifyLine {
+func sessionBlocks(ss []tmux.Session, width int, selected, own string, dim bool) []notifyLine {
 	var lines []notifyLine
 	for i, s := range ss {
 		sel := s.Name == selected
 		lines = append(lines, notifyLine{
-			text:    notifySessionLine(s, width, sel, dim),
+			text:    notifySessionLine(s, width, rowFlags{selected: sel, dim: dim, own: s.Name == own}),
 			session: s.Name,
 		})
 		if s.AIState == tmux.AIStateApproval && s.AIWaitingFor != "" {
@@ -293,6 +293,21 @@ func notifyTexts(lines []notifyLine) []string {
 // dropped whole rather than shown as an ellipsis.
 const minBranchWidth = 6
 
+// ownMarker flags the session this pane lives in. One cell, like ▶ and ▼, and
+// pinned by TestGlyphWidthsAreStable.
+//
+// It earns its two cells by answering a question the row would otherwise leave
+// open: why picking that one session shows a summary instead of its output.
+const ownMarker = "◀"
+
+// rowFlags are the per-row states notifySessionLine draws differently. Grouped
+// because three trailing booleans at a call site stop saying which is which.
+type rowFlags struct {
+	selected bool
+	dim      bool // second group: context rather than the point
+	own      bool // the session this pane lives in
+}
+
 // notifySessionLine renders "⏳ name 3m            ⌥ branch" for one session.
 //
 // Name and age sit together on the left so the age reads as belonging to the
@@ -300,7 +315,8 @@ const minBranchWidth = 6
 //
 // A session running no AI CLI renders the same way with an empty badge — the
 // padding is what keeps the branch in one column across both groups.
-func notifySessionLine(s tmux.Session, width int, selected, dim bool) string {
+func notifySessionLine(s tmux.Session, width int, f rowFlags) string {
+	selected, dim := f.selected, f.dim
 	glyph, _ := aiGlyph(s)
 
 	// The badge is padded to badgeWidth and framed by single spaces, because a
@@ -317,6 +333,14 @@ func notifySessionLine(s tmux.Session, width int, selected, dim bool) string {
 
 	age := " " + compactAgo(sessionAge(s))
 
+	// Travels with the age, on the left, because it belongs to the session's
+	// identity rather than to its context — and because the branch, which is
+	// what yields under pressure, is on the right.
+	mark := ""
+	if f.own {
+		mark = " " + ownMarker
+	}
+
 	branch := ""
 	if s.GitBranch != "" {
 		branch = branchGlyph(s) + " " + s.GitBranch
@@ -327,7 +351,8 @@ func notifySessionLine(s tmux.Session, width int, selected, dim bool) string {
 	// keeps at least one space between the age and the branch when the branch
 	// has been cut down to exactly the room left.
 	name := s.Name
-	if room := avail - ansi.StringWidth(name) - ansi.StringWidth(age) - 1; room < ansi.StringWidth(branch) {
+	fixed := ansi.StringWidth(age) + ansi.StringWidth(mark)
+	if room := avail - ansi.StringWidth(name) - fixed - 1; room < ansi.StringWidth(branch) {
 		if room >= minBranchWidth {
 			branch = fitCells(branch, room)
 		} else {
@@ -337,14 +362,14 @@ func notifySessionLine(s tmux.Session, width int, selected, dim bool) string {
 	// Only truncate the name when it genuinely overflows — fitCells always pads
 	// to the width it is given, and padding here would reopen the gap between
 	// the name and the age that this layout exists to close.
-	if nameRoom := avail - ansi.StringWidth(age) - ansi.StringWidth(branch); ansi.StringWidth(name) > nameRoom {
+	if nameRoom := avail - fixed - ansi.StringWidth(branch); ansi.StringWidth(name) > nameRoom {
 		name = fitCells(name, nameRoom)
 	}
 
 	// renderRow pads what is left over at the very end, so the gap has to be an
 	// explicit segment — otherwise the padding lands after the branch and the
 	// right edge stops lining up.
-	gap := avail - ansi.StringWidth(name) - ansi.StringWidth(age) - ansi.StringWidth(branch)
+	gap := avail - ansi.StringWidth(name) - fixed - ansi.StringWidth(branch)
 	if gap < 0 {
 		gap = 0
 	}
@@ -364,6 +389,7 @@ func notifySessionLine(s tmux.Session, width int, selected, dim bool) string {
 		{text: head, color: aiBadgeColor(s, selected)},
 		{text: name, color: faded},
 		{text: age, color: ageColor},
+		{text: mark, color: colorAccent},
 		{text: strings.Repeat(" ", gap)},
 		{text: branch, color: faded},
 	}

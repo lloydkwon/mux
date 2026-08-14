@@ -31,7 +31,7 @@ func TestWatchDetailFillsItsColumn(t *testing.T) {
 	for _, w := range []int{3, 8, 20, 46, 51, 80} {
 		for _, h := range []int{1, 2, 3, 5, 12, 40} {
 			for _, sess := range []*tmux.Session{nil, &s} {
-				got := watchDetail(sess, captured, events, w, h)
+				got := detailView{session: sess, captured: captured, events: events}.render(w, h)
 				lines := strings.Split(got, "\n")
 				if len(lines) != h {
 					t.Errorf("%dx%d: %d lines, want %d", w, h, len(lines), h)
@@ -61,7 +61,7 @@ func TestWatchDetailEventLogYieldsFirst(t *testing.T) {
 	// detailMinPreviewLines while it still has any to give.
 	prev := len(events) + 1
 	for _, h := range []int{20, 12, 9, 8, 7, 6, 5, 4} {
-		got := ansi.Strip(watchDetail(&s, captured, events, 50, h))
+		got := ansi.Strip(detailView{session: &s, captured: captured, events: events}.render(50, h))
 		logged := strings.Count(got, "작업 완료")
 		if logged > prev {
 			t.Errorf("height %d shows %d events, more than the %d at the taller size:\n%s",
@@ -77,7 +77,7 @@ func TestWatchDetailEventLogYieldsFirst(t *testing.T) {
 	}
 
 	// Short enough and the log is gone entirely, but the output is still there.
-	shortest := ansi.Strip(watchDetail(&s, captured, events, 50, 6))
+	shortest := ansi.Strip(detailView{session: &s, captured: captured, events: events}.render(50, 6))
 	if strings.Contains(shortest, "작업 완료") {
 		t.Errorf("a 6-row column kept the log instead of the output:\n%s", shortest)
 	}
@@ -94,7 +94,7 @@ func TestWatchDetailCapsTheEventLog(t *testing.T) {
 		events[i] = aiEvent{at: time.Now(), session: "web", text: "✅ 작업 완료"}
 	}
 
-	got := ansi.Strip(watchDetail(&s, strings.Repeat("output\n", 40), events, 50, 40))
+	got := ansi.Strip(detailView{session: &s, captured: strings.Repeat("output\n", 40), events: events}.render(50, 40))
 	if n := strings.Count(got, "작업 완료"); n != detailEventBudget {
 		t.Errorf("column shows %d events, want it capped at %d", n, detailEventBudget)
 	}
@@ -103,7 +103,7 @@ func TestWatchDetailCapsTheEventLog(t *testing.T) {
 // Nothing selected is a real state — the panel starts there, and every session
 // can go away while it is open.
 func TestWatchDetailWithoutASession(t *testing.T) {
-	got := ansi.Strip(watchDetail(nil, "", nil, 50, 10))
+	got := ansi.Strip(detailView{}.render(50, 10))
 	if !strings.Contains(got, "세션을 고르세요") {
 		t.Errorf("an empty column says nothing:\n%s", got)
 	}
@@ -171,5 +171,78 @@ func TestDetailStateTextDegrades(t *testing.T) {
 	}
 	if got := detailStateText(sess("plain", tmux.AIStateNone), 40); got != "" {
 		t.Errorf("a session with no state showed %q, want nothing", got)
+	}
+}
+
+// The session this pane lives in is already on screen beside the panel.
+// Capturing it draws the same screen twice, for fifty columns.
+func TestWatchDetailSelfCard(t *testing.T) {
+	s := sess("project", tmux.AIStateWorking)
+	s.Directory = "/home/u/Projects/mux"
+	s.GitBranch = "main"
+	s.WindowCount = 3
+	s.Created = time.Now().Add(-43 * time.Minute)
+	captured := strings.Repeat("SHOULD NOT APPEAR\n", 40)
+	usage := &tmux.TokenUsage{InputTokens: 1_200_000, OutputTokens: 84_000, TotalCost: 1.24}
+
+	got := ansi.Strip(detailView{
+		session: &s, captured: captured, own: true, usage: usage,
+	}.render(60, 20))
+
+	if strings.Contains(got, "SHOULD NOT APPEAR") {
+		t.Errorf("the card mirrored the pane beside it:\n%s", got)
+	}
+	for _, want := range []string{"지금 이 창입니다", "Projects/mux", "창 3", "가동 43m", "$1.24"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("card is missing %q:\n%s", want, got)
+		}
+	}
+
+	// The same session, not marked own, is still mirrored — this is a property
+	// of which pane you are looking from, not of the session.
+	other := ansi.Strip(detailView{session: &s, captured: captured}.render(60, 20))
+	if !strings.Contains(other, "SHOULD NOT APPEAR") {
+		t.Errorf("another session's output was withheld:\n%s", other)
+	}
+}
+
+// A session with no cost to report must not leave a hole where the line was.
+func TestWatchDetailSelfCardWithoutCost(t *testing.T) {
+	s := sess("project", tmux.AIStateWorking)
+	s.Directory = "/home/u/Projects/mux"
+	s.WindowCount = 1
+
+	got := ansi.Strip(detailView{session: &s, own: true}.render(60, 20))
+	if strings.Contains(got, "$") {
+		t.Errorf("a cost line appeared with no usage loaded:\n%s", got)
+	}
+	if !strings.Contains(got, "지금 이 창입니다") {
+		t.Errorf("card lost its notice:\n%s", got)
+	}
+}
+
+// The notice is the line that explains why this column looks different from
+// every other session's, so it is the last thing to go.
+func TestWatchDetailSelfCardYieldsFromTheBottom(t *testing.T) {
+	s := sess("project", tmux.AIStateWorking)
+	s.Directory = "/home/u/Projects/mux"
+	s.WindowCount = 1
+	s.Created = time.Now().Add(-time.Hour)
+	usage := &tmux.TokenUsage{InputTokens: 10, OutputTokens: 10, TotalCost: 1}
+
+	// Shrinking must never drop the notice while a lower fact survives, and the
+	// column must still be exactly its size at every height.
+	for _, h := range []int{4, 5, 6, 7, 8, 12} {
+		out := detailView{session: &s, own: true, usage: usage}.render(60, h)
+		if n := len(strings.Split(out, "\n")); n != h {
+			t.Fatalf("height %d rendered %d lines", h, n)
+		}
+		got := ansi.Strip(out)
+		if !strings.Contains(got, "지금 이 창입니다") {
+			t.Errorf("height %d dropped the notice:\n%s", h, got)
+		}
+		if strings.Contains(got, "$1.00") && !strings.Contains(got, "Projects/mux") {
+			t.Errorf("height %d kept the cost but dropped the path:\n%s", h, got)
+		}
 	}
 }

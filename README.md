@@ -223,6 +223,8 @@ Transitions into "working" are deliberately not logged: the badge already says t
 
 **Click a session to read it, click it again to go there.** The first click only points the right column at it, which is the point — finding out what another session is asking should not cost you the pane you are typing in. A pane too narrow to split (below 76 columns) shows the list alone, and there a single click switches, since there is nothing to read first.
 
+The session the panel itself sits in is marked `◀` and is skipped when the panel picks a row for you. Its output is already on screen in the pane beside the panel, and it is nearly always the top row — the list is ordered by how recently a state changed, and the session you are working in is the one whose state keeps changing — so left alone the column would open showing a copy of the pane next to it. Selecting it deliberately still works, and gives a summary instead of a mirror: where it is, how many windows, how long it has been up, and what it has cost.
+
 For the keyboard, bind `mux nav`. It reaches the panel with `send-keys`, so the selection moves without the focus leaving your own pane:
 
 ```tmux

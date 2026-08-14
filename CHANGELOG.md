@@ -37,6 +37,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   things reads as a bug. `aiStateLabel` is now the single decider for both.
 
 ### Fixed
+- The panel's detail column opened showing a copy of the pane sitting right
+  beside it. The auto-selection took the top row, and the top row is nearly
+  always the session you are working in — the list is ordered by how recently a
+  state changed, and that is the session whose state keeps changing. Fifty
+  columns of the panel were spending their time mirroring the screen next to
+  them. The panel now knows which session it lives in: the auto-selection looks
+  past it (marked `◀` in the list), and selecting it deliberately gives a
+  summary — directory, window count, uptime, token cost — instead of a mirror.
+  Its output is no longer captured at all.
 - `select-pane -l` fired when the panel was not the focused pane, which moved
   the user off the pane they were typing in. It is only ever correct after a
   click — tmux makes a pane active before forwarding one — and is now gated on

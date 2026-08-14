@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -23,8 +24,26 @@ const (
 	detailMinPreviewLines = 3
 )
 
-// watchDetail renders the panel's right column: which session is selected, what
-// state it is in, and the tail of what it is printing.
+// detailView is everything the panel's right column draws from.
+//
+// Bundled rather than passed as arguments because the column keeps growing
+// facts — output, ownership, cost — and a seven-argument render call stops
+// saying which value is which at the call site.
+type detailView struct {
+	session  *tmux.Session
+	captured string
+	events   []aiEvent
+
+	// own marks the session this pane lives in. Its output is already on screen
+	// in the pane beside the panel, so the column summarises it instead of
+	// drawing a second copy.
+	own   bool
+	usage *tmux.TokenUsage
+}
+
+// render draws the column: which session is selected, what state it is in, and
+// either the tail of what it is printing or — for this pane's own session — a
+// summary of it.
 //
 // Returns exactly height lines of exactly width cells, because
 // joinHorizontalFixed concatenates the two columns line by line and any
@@ -32,37 +51,90 @@ const (
 //
 // This does not reuse renderPreview: that one takes a *listItem, draws its own
 // border, and budgets width-2/height-2 for it. Here the tmux pane is the border.
-func watchDetail(s *tmux.Session, captured string, events []aiEvent, width, height int) string {
+func (d detailView) render(width, height int) string {
 	inner := width - detailGutterWidth
 	if inner < 1 || height < 1 {
 		return fixedBox("", width, height)
 	}
 
-	if s == nil {
+	if d.session == nil {
 		return detailBox(detailCentered("세션을 고르세요", inner, height), width, height)
 	}
 
-	var lines []string
-	lines = append(lines, detailHeader(*s, inner), detailStatus(*s, inner), detailSeparator(inner))
+	s := *d.session
+	lines := []string{detailHeader(s, inner), detailStatus(s, inner), detailSeparator(inner)}
 
-	// What is left after the header goes to the output tail, minus whatever the
-	// event log takes. The log is the first thing to give up its rows.
+	// What is left after the header goes to the body, minus whatever the event
+	// log takes. The log is the first thing to give up its rows.
 	body := height - len(lines)
-	eventRows := detailEventRows(events, body)
-	previewRows := body - eventRows
-	if previewRows < 0 {
-		previewRows = 0
+	eventRows := detailEventRows(d.events, body)
+	bodyRows := body - eventRows
+	if bodyRows < 0 {
+		bodyRows = 0
 	}
 
-	lines = append(lines, detailCapture(captured, inner, previewRows)...)
+	if d.own {
+		lines = append(lines, detailSelfCard(s, d.usage, inner, bodyRows)...)
+	} else {
+		lines = append(lines, detailCapture(d.captured, inner, bodyRows)...)
+	}
+
 	if eventRows > 0 {
 		lines = append(lines, detailSeparator(inner))
-		for _, e := range events[:eventRows-1] {
+		for _, e := range d.events[:eventRows-1] {
 			lines = append(lines, notifyEventLine(e, inner))
 		}
 	}
 
 	return detailBox(lines, width, height)
+}
+
+// detailSelfCard describes this pane's own session instead of mirroring it.
+//
+// Capturing it would draw a copy of the pane sitting right beside the panel —
+// the same screen twice, for fifty columns. What is worth the space is what the
+// pane itself does not say: where it is, how long it has been up, what it has
+// cost.
+//
+// The notice goes first and is the last thing dropped: it is the line that
+// explains why this column looks different from every other session's.
+func detailSelfCard(s tmux.Session, usage *tmux.TokenUsage, inner, rows int) []string {
+	if rows <= 0 {
+		return nil
+	}
+
+	facts := []string{"", " " + shortenPath(s.Directory)}
+
+	windows := fmt.Sprintf("창 %d", s.WindowCount)
+	if !s.Created.IsZero() {
+		windows += " · 가동 " + compactAgo(s.Created)
+	}
+	facts = append(facts, " "+windows)
+
+	if usage != nil {
+		facts = append(facts, fmt.Sprintf(" %s in / %s out  ~$%.2f",
+			tmux.FormatTokens(usage.InputTokens),
+			tmux.FormatTokens(usage.OutputTokens),
+			usage.TotalCost))
+	}
+
+	// Everything after the notice yields from the bottom up, so a short column
+	// keeps the path over the cost rather than the other way round.
+	if len(facts) > rows-1 {
+		facts = facts[:max(0, rows-1)]
+	}
+
+	out := make([]string, 0, rows)
+	out = append(out, renderRow([]rowSeg{
+		{text: fitCells(" 지금 이 창입니다 — 오른쪽이 그 화면입니다", inner), color: colorAccent},
+	}, inner, false))
+	for _, f := range facts {
+		out = append(out, renderRow([]rowSeg{{text: f, color: colorMuted}}, inner, false))
+	}
+	for len(out) < rows {
+		out = append(out, strings.Repeat(" ", inner))
+	}
+	return out[:rows]
 }
 
 // detailEventRows reports how many rows of the column the event log may take,
