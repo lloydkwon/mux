@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-14
+
 ### Added
 - The session's summary now sits on the border above the pane you work in —
   name, directory, AI tool and its live state, git branch — so it is on screen
