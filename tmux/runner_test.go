@@ -198,3 +198,47 @@ func TestWithStderrKeepsTheNoServerCheckWorking(t *testing.T) {
 		t.Errorf("error %q no longer reads as an exit status", err)
 	}
 }
+
+// The border runs once per pane per refresh, in a fresh process. It reads one
+// session through display-message rather than walking every session with
+// ListSessions — and it reads it with list-sessions' own format, so the parser
+// and the fields stay one decision.
+func TestSessionForTargetWithMock(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		now := time.Now().Unix()
+		line := fmt.Sprintf("ai|1|%d|0|/home/user/ai|%d|claude|200", now-7200, now-120)
+
+		m.OnOutput([]byte(line+"\n"), nil, "tmux", "display-message", "-p", "-t", "%3", listFormat)
+		m.OnOutput(nil, fmt.Errorf("no children"), "pgrep", "-P", "200")
+
+		s, err := SessionForTarget("%3")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if s.Name != "ai" {
+			t.Errorf("name = %q, want %q", s.Name, "ai")
+		}
+		if s.Directory != "/home/user/ai" {
+			t.Errorf("directory = %q, want the pane's own path", s.Directory)
+		}
+		if s.ActiveCommand != "claude" {
+			t.Errorf("command = %q, want %q", s.ActiveCommand, "claude")
+		}
+		if s.PanePID != 200 {
+			t.Errorf("pane pid = %d, want 200", s.PanePID)
+		}
+	})
+}
+
+// A pane that has gone is the normal failure here — the border is re-rendered
+// every few seconds and panes close between renders.
+func TestSessionForTargetReportsAMissingPane(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		m.OnOutput(nil, fmt.Errorf("can't find pane"), "tmux",
+			"display-message", "-p", "-t", "%9", listFormat)
+
+		if _, err := SessionForTarget("%9"); err == nil {
+			t.Error("a missing pane resolved to a session")
+		}
+	})
+}

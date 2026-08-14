@@ -218,7 +218,12 @@ func TestPanelBlockQuotingKeepsPaneIDInsideQuotes(t *testing.T) {
 		if strings.Count(before, `"`)%2 == 0 {
 			t.Errorf("#{pane_id} is outside double quotes, tmux will treat it as a comment:\n  %s", line)
 		}
-		if !strings.Contains(line, `"/path with space/mux `) {
+		// Quoted, but by whichever parser is going to read it: tmux runs the
+		// bindings and hooks itself and takes double quotes, while the border's
+		// #() body is handed to /bin/sh, where only the inner single quotes
+		// survive to keep a spaced path as one argument.
+		if !strings.Contains(line, `"/path with space/mux `) &&
+			!strings.Contains(line, `'/path with space/mux' `) {
 			t.Errorf("a path with spaces was not quoted:\n  %s", line)
 		}
 	}
@@ -258,5 +263,46 @@ func TestPanelBlockBindsBothKeyboards(t *testing.T) {
 		if strings.Contains(line, " nav -t ") && !strings.HasPrefix(line, "bind -n ") {
 			t.Errorf("nav binding needs the prefix: %q", line)
 		}
+	}
+}
+
+// The border is the one row of a window mux can write in that is not its own
+// pane, and it only makes sense with the status line turned on.
+func TestPanelBlockInstallsTheBorder(t *testing.T) {
+	block := strings.Join(panelBlockLines("/bin/mux", "a", "Tab"), "\n")
+
+	if !strings.Contains(block, "set -g pane-border-status top") {
+		t.Errorf("the border status line is not turned on:\n%s", block)
+	}
+	if !strings.Contains(block, "'/bin/mux' border -t #{pane_id} -w #{pane_width}") {
+		t.Errorf("the border does not call mux:\n%s", block)
+	}
+
+	// The panel draws its own list; a summary above it would say what its first
+	// rows already say, and the user asked for the other column.
+	if !strings.Contains(block, panelCommand) {
+		t.Errorf("the format does not skip the panel's own pane:\n%s", block)
+	}
+}
+
+// Re-running setup replaces the block, so the options must not stack up.
+func TestSetupPanelBorderStaysSingleOnRerun(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".tmux.conf")
+	if err := os.WriteFile(path, []byte("set -g mouse on\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := upsertBlock(path, testBlock("/bin/mux")); err != nil {
+			t.Fatalf("write %d: %v", i, err)
+		}
+	}
+
+	got := readConf(t, path)
+	if n := strings.Count(got, "pane-border-status"); n != 1 {
+		t.Errorf("pane-border-status appears %d times, want 1:\n%s", n, got)
+	}
+	if n := strings.Count(got, "pane-border-format"); n != 1 {
+		t.Errorf("pane-border-format appears %d times, want 1:\n%s", n, got)
 	}
 }

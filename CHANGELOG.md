@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The session's summary now sits on the border above the pane you work in —
+  name, directory, AI tool and its live state, git branch — so it is on screen
+  without opening the TUI over the top of what you were doing. `mux setup-panel`
+  turns on tmux's `pane-border-status` and points `pane-border-format` at a new
+  `mux border` command. It has to be the border: the pane below is your shell,
+  and its title already belongs to whatever runs in it. The format skips the
+  panel's own pane, so the summary appears beside the list rather than above it,
+  and the line gives up its branch, then the tool's name, then the directory as
+  the pane narrows — never the session name. It costs one row per pane.
+
 ## [0.3.0] - 2026-08-14
 
 The release the sidebar arrived in. `mux` used to be a thing you opened, looked

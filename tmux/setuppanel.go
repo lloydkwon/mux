@@ -153,7 +153,36 @@ func panelBlockLines(muxPath, key, focusKey string) []string {
 	for _, h := range panelHooks {
 		lines = append(lines, fmt.Sprintf("set-hook -g %-*s %s", width, h, ensure))
 	}
-	return append(lines, panelBlockEnd)
+	return append(append(lines, borderLines(muxPath)...), panelBlockEnd)
+}
+
+// borderLines turn on the summary tmux draws above each pane.
+//
+// This is the one row of a window mux can write in that is not its own pane: the
+// pane below is the user's shell, and its title already belongs to whatever runs
+// there — Claude Code names its pane after the task in hand, and taking that
+// over would cost more than this line gives.
+//
+// The conditional skips the panel's own pane, which is what makes this the
+// *other* column's line. Deciding it in the format rather than in `mux border`
+// means the panel costs no process at all, and mux never has to work out which
+// pane it is being asked about.
+//
+// `#()` runs the command in the background and inserts the last line it printed,
+// re-reading at status-interval. Its output is cached per command string, and
+// #{pane_id} makes that string differ per pane — so one cache entry per pane,
+// which is what stops every border showing the first pane's line.
+func borderLines(muxPath string) []string {
+	return []string{
+		"set -g pane-border-status top",
+		// Two levels of quoting, because there are two parsers. The option value
+		// is double-quoted for tmux, which is what keeps the `#` of #{pane_id}
+		// from starting a comment. The path inside #() is single-quoted for
+		// /bin/sh, which is what runs it — the outer quotes mean nothing there,
+		// and a path with a space in it would otherwise be two arguments.
+		fmt.Sprintf(`set -g pane-border-format "#{?#{m:*%s*,#{pane_start_command}},,#('%s' border -t #{pane_id} -w #{pane_width})}"`,
+			panelCommand, muxPath),
+	}
 }
 
 // upsertBlock writes the fenced region into path, replacing an existing one.

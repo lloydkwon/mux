@@ -48,6 +48,34 @@ func ListSessions() ([]Session, error) {
 	return sessions, nil
 }
 
+// SessionForTarget builds the Session owning target, in one round trip. Pass ""
+// for the current pane.
+//
+// Every field of listFormat resolves in a pane's context, so this is
+// list-sessions' format read through display-message and handed to the same
+// parser — no second format string to drift, and no second place deciding what a
+// Session is.
+//
+// It exists for `mux border`, which runs once per pane per refresh as a fresh
+// process. ListSessions there would walk every session and pay for every one of
+// their git and Claude lookups to render a line about one of them.
+//
+// The pane fields (path, command, pid) describe *target* rather than its
+// session's active pane, which is what a line drawn above that pane should say.
+func SessionForTarget(target string) (Session, error) {
+	args := []string{"display-message", "-p"}
+	if target != "" {
+		args = append(args, "-t", target)
+	}
+	args = append(args, listFormat)
+
+	out, err := runner.Output("tmux", args...)
+	if err != nil {
+		return Session{}, fmt.Errorf("resolve session: %w", err)
+	}
+	return parseLine(strings.TrimSpace(string(out)), ClaudeStatuses())
+}
+
 // parseLine builds a Session from one list-sessions line. statuses maps tmux
 // session names to live Claude state and may be nil.
 func parseLine(line string, statuses map[string]ClaudeStatus) (Session, error) {

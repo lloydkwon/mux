@@ -174,6 +174,21 @@ func main() {
 		"move focus into the panel, or back out of it; opens and closes nothing")
 	panelCmd.MarkFlagsMutuallyExclusive("auto", "focus")
 
+	var borderTarget string
+	var borderWidth int
+	borderCmd := &cobra.Command{
+		Use:   "border",
+		Short: "Print the session summary tmux draws above a pane",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runBorder(borderTarget, borderWidth)
+		},
+		SilenceUsage: true,
+	}
+	borderCmd.Flags().StringVarP(&borderTarget, "target", "t", "",
+		"pane to describe (default: current)")
+	borderCmd.Flags().IntVarP(&borderWidth, "width", "w", 0,
+		"cells available on the border line")
+
 	var navTarget string
 	navCmd := &cobra.Command{
 		Use:   "nav <up|down|top|bottom|enter>",
@@ -191,7 +206,7 @@ func main() {
 		"pane whose window holds the panel (default: current)")
 
 	rootCmd.AddCommand(newCmd, popupCmd, setupKeybindCmd, setupPanelCmd, statusCmd,
-		watchCmd, panelCmd, navCmd)
+		watchCmd, panelCmd, navCmd, borderCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -224,6 +239,30 @@ func runStatus() error {
 	}
 
 	fmt.Print(fmt.Sprintf(" %s ", joinWith(parts, " ")))
+	return nil
+}
+
+// defaultBorderWidth is what a border line is fitted to when tmux did not say.
+// Wide enough to be worth printing, narrow enough that a real pane clips little.
+const defaultBorderWidth = 80
+
+// runBorder prints the one line tmux draws above a pane.
+//
+// Failure prints an empty line and exits 0, deliberately. tmux inserts the last
+// line of this command's output into the border and re-runs it every few
+// seconds, so an error message here would not be reported anywhere a user can
+// act on it — it would simply be painted across the top of the pane they are
+// working in, and stay there.
+func runBorder(target string, width int) error {
+	if width <= 0 {
+		width = defaultBorderWidth
+	}
+	session, err := tmux.SessionForTarget(target)
+	if err != nil {
+		fmt.Println()
+		return nil
+	}
+	fmt.Println(ui.BorderLine(session, width))
 	return nil
 }
 
