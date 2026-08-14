@@ -44,12 +44,11 @@ Running Claude in one session, Codex in another, and a dev server in a third? Sw
   (`✦ ◈ ⬡ ✧`). The preview adds why it is blocked (permission prompt, input
   needed, and so on), and `mux status` puts the same badge in your tmux status
   bar.
-- **An always-on sidebar** — `mux watch` keeps a pane on the left of the window
-  with every session and a log of what they just finished. Pick one and its live
-  output appears in the column beside the list; pick it again to actually go
-  there. Drive it with the mouse, or with `mux nav` from a tmux binding, which
-  moves the selection without taking the keyboard away from the pane you are
-  typing in.
+- **An always-on sidebar** — `mux watch` keeps a narrow pane on the left of the
+  window listing every session and what they just finished, while the rest of
+  the window stays your terminal. Click a session to switch to it, or drive the
+  cursor with `mux nav` from a tmux binding, which moves it without taking the
+  keyboard away from the pane you are typing in.
 
 If you want the original release and Homebrew package without these personal
 changes, use [lunemis/mux](https://github.com/lunemis/mux).
@@ -199,33 +198,38 @@ This runs `mux status` which outputs a compact summary like `✦ ◈` when AI se
 
 ### Always-on panel — `mux watch`
 
-The list shows what each session is doing *now*, but not what it just finished. `mux watch` fills a dedicated pane on the left of the window with your sessions, a log of recent state changes, and the live output of whichever session you pick — so it is on screen while you work rather than only while the TUI is open:
+The list shows what each session is doing *now*, but not what it just finished. `mux watch` fills a narrow pane on the left of the window with your sessions and a log of recent state changes, so it is on screen while you work rather than only while the TUI is open. The rest of the window stays your terminal:
 
 ```
- 🔔 AI 세션                      │  api-server                          ⌥ feat/auth
-                                 │  ❗ 승인 대기 · permission prompt  12s
- ❗ api-server 12s   ⌥ feat/auth │ ────────────────────────────────────────────────
-    permission prompt            │ > npm test
-                                 │ ✓ 42 passed
- ⏳ mux 3m                ⌥ main │
-                                 │ ❯ Allow edit to config.ts?
- ✅ web 2h             ⌥ release │   1. Yes
-                                 │   2. No, tell Claude what to do differently
- ── 세션                         │
-                                 │ ────────────────────────────────────────────────
-    notes 3h              ⌥ main │  13:00:47 api-server ❗ 승인 대기 · permission...
-                                 │  12:59:47 web ✅ 작업 완료
+┌ mux watch 48 ──┬ your shell ─────────────────┐
+│ 🔔 AI 세션     │ ❯ npm test                  │
+│                │ ✓ 42 passed                 │
+│ ❗ api 12s     │                             │
+│    permission  │ ❯ _                         │
+│                │                             │
+│ ⏳ mux 3m ◀    │                             │
+│                │                             │
+│ ✅ web 2h      │                             │
+│                │                             │
+│ ── 세션        │                             │
+│                │                             │
+│    notes 3h    │                             │
+│                │                             │
+│ ── 최근 이벤트 │                             │
+│ 13:00 api ❗   │                             │
+│ 12:59 web ✅   │                             │
+└────────────────┴─────────────────────────────┘
 ```
 
-Sessions running an AI CLI come first; the rest sit under `── 세션` so every session is reachable without opening the TUI.
+Sessions running an AI CLI come first; the rest sit under `── 세션` so every session is reachable without opening the TUI. Recent transitions are listed under those.
 
 Transitions into "working" are deliberately not logged: the badge already says that, and a line per turn would bury the two that matter.
 
-**Click a session to read it, click it again to go there.** The first click only points the right column at it, which is the point — finding out what another session is asking should not cost you the pane you are typing in. A pane too narrow to split (below 76 columns) shows the list alone, and there a single click switches, since there is nothing to read first.
+**Click a session to switch to it.** There is nothing here to read first — the panel deliberately does not render a copy of any session's screen, because the one you would want is usually the pane already sitting next to it.
 
-The session the panel itself sits in is marked `◀` and is skipped when the panel picks a row for you. Its output is already on screen in the pane beside the panel, and it is nearly always the top row — the list is ordered by how recently a state changed, and the session you are working in is the one whose state keeps changing — so left alone the column would open showing a copy of the pane next to it. Selecting it deliberately still works, and gives a summary instead of a mirror: where it is, how many windows, how long it has been up, and what it has cost.
+The session the panel itself sits in is marked `◀`. It is also skipped when the panel picks a starting row for the keyboard cursor: it is nearly always the top row — the list is ordered by how recently a state changed, and the session you are working in is the one whose state keeps changing — so the cursor would otherwise open on the one session where pressing enter goes nowhere.
 
-For the keyboard, bind `mux nav`. It reaches the panel with `send-keys`, so the selection moves without the focus leaving your own pane:
+For the keyboard, bind `mux nav`. It reaches the panel with `send-keys`, so the cursor moves without the focus leaving your own pane, and `enter` commits:
 
 ```tmux
 bind -n M-Up    run-shell "/absolute/path/to/mux nav -t #{pane_id} up"
@@ -260,7 +264,7 @@ Hiding it per client is not possible — a pane belongs to a window, not a clien
 
 The focus stays in the pane you were working in, both when the panel opens and after you click it.
 
-Drag the pane border to resize the panel — that still works, because tmux handles a border drag itself rather than forwarding it to the pane. The width is remembered per session (in a tmux user option, so it lives exactly as long as the session does) and the panel reopens at it. A first-time panel opens at 84 columns on a window with room to spare, which is enough for both columns, and at 48 on one that has not.
+Drag the pane border to resize the panel — that still works, because tmux handles a border drag itself rather than forwarding it to the pane. The width is remembered per session (in a tmux user option, so it lives exactly as long as the session does) and the panel reopens at it. A first-time panel opens at 48 columns.
 
 Rows are ordered by the number they print — how long the session has held its state — most recent first. Sorting by anything else makes that column non-monotonic, and a session at 41m listed under two at 3h reads as a bug. Rows do move as states change, which is why a session's block includes the blank line under it: the click target is two rows tall, not one.
 

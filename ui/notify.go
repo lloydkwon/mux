@@ -76,9 +76,8 @@ func detectTransitions(prev map[string]tmux.AIState, sessions []tmux.Session, no
 //
 // The panel speaks Korean throughout — its heading, its separators, its
 // degraded notices — while AIState.String() is the English the TUI and
-// `mux status` print. Both halves of the panel go through here so the detail
-// column and the event log two rows below it cannot disagree about what to call
-// the same state.
+// `mux status` print. The panel goes through here so its own wording cannot
+// drift from the TUI's by accident — they differ on purpose.
 func aiStateLabel(st tmux.AIState) string {
 	switch st {
 	case tmux.AIStateWorking:
@@ -121,12 +120,12 @@ type notifyLine struct {
 	session string
 }
 
-// notifyLines builds the single-column panel: sessions on top, recent
-// transitions below. Every line is exactly width cells. Returns nil when there
-// is nothing to report, so callers can tell "empty" from "a box of blanks".
+// notifyLines builds the whole panel: sessions on top, recent transitions
+// below. Every line is exactly width cells. Returns nil when there is nothing to
+// report, so callers can tell "empty" from "a box of blanks".
 //
-// The two-column panel calls notifySessionLines and notifyEventLines directly,
-// because the halves live in different columns there.
+// The two halves stay separate functions because they answer different questions
+// and degrade differently, not because anything places them apart.
 func notifyLines(sessions []tmux.Session, events []aiEvent, width int, selected, own string) []notifyLine {
 	lines := notifySessionLines(sessions, width, selected, own)
 	if len(lines) == 0 && len(events) == 0 {

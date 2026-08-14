@@ -234,58 +234,21 @@ func TestTogglePanelWidthFallsBack(t *testing.T) {
 					t.Fatalf("TogglePanel: %v", err)
 				}
 				if !ran(m, "-l 48 ") {
-					t.Errorf("ran %v, want the narrow default width", m.runs)
+					t.Errorf("ran %v, want the default width", m.runs)
 				}
 			})
 		})
 	}
 }
 
-// A window with room for the detail column opens the panel wide enough to show
-// it, so the feature is on screen rather than waiting behind a border drag.
-func TestTogglePanelDefaultWidthFollowsWindow(t *testing.T) {
-	tests := []struct {
-		name      string
-		winWidth  string
-		wantWidth string
-	}{
-		{"wide window opens wide", "269", "84"},
-		{"narrow window keeps the list-only width", "150", "48"},
-		{"exactly at the threshold counts as wide", "200", "84"},
-		{"unreadable width counts as narrow", "nope", "48"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			withMock(t, func(m *mockRunner) {
-				mockPanelWindow(m)
-				m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
-					"-F", "#{pane_id} #{pane_start_command}")
-				m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
-				m.OnOutput([]byte(tt.winWidth+"\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
-				m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
-				m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
-
-				if err := TogglePanel("%3", false); err != nil {
-					t.Fatalf("TogglePanel: %v", err)
-				}
-				if !ran(m, "-l "+tt.wantWidth+" ") {
-					t.Errorf("ran %v, want a split at width %s", m.runs, tt.wantWidth)
-				}
-			})
-		})
-	}
-}
-
-// A remembered width outranks whatever the window would have defaulted to —
-// dragging the panel narrow on a wide screen has to stick.
-func TestTogglePanelRememberedWidthBeatsWindowDefault(t *testing.T) {
+// A remembered width outranks the default — dragging the panel narrow has to
+// stick across reopens.
+func TestTogglePanelRememberedWidthWins(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
 		mockPanelWindow(m)
 		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
 			"-F", "#{pane_id} #{pane_start_command}")
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
-		m.OnOutput([]byte("269\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 		m.OnOutput([]byte("40\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 

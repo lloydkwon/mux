@@ -8,44 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- The `mux watch` panel is now a **sidebar with a detail column**. A pane wide
-  enough to split (76 columns) puts the session list on the left and the
-  selected session's live output on the right — name, branch, state, the tail of
-  what it is printing, and the recent transitions under it. Clicking a session
-  selects it; clicking the one already selected is what switches. Reading what
-  another session is asking no longer costs you the pane you were typing in.
-  Below the split threshold nothing changes: there is nothing to read first, so
-  a single click still switches.
 - `mux nav <up|down|top|bottom|enter>` steers the panel from a tmux binding. It
-  reaches the panel with `send-keys`, so the selection moves without the focus
+  reaches the panel with `send-keys`, so the cursor moves without the focus
   leaving your own pane — focusing the panel would take the keyboard away from
   the pane you are working in. A window with no panel exits cleanly, so the
   binding is safe to make global.
 - The panel lists sessions running no AI CLI too, in a second group below the
   ones that do, so every session is reachable without opening the TUI.
+- The session the panel itself sits in is marked `◀`, and the keyboard cursor
+  skips it when it has to pick a starting row. It is nearly always the top row —
+  the list is ordered by how recently a state changed, and that is the session
+  whose state keeps changing — so the cursor would otherwise start on the one
+  row where pressing enter goes nowhere.
 - `tmux.PaneActive` reports whether a pane holds the focus.
 
 ### Changed
 - The panel opens on the **left** of the window (`split-window -hb`) rather than
-  the right, and a first-time panel opens at 84 columns on a window with room to
-  spare — enough for both columns — instead of always 48. A width remembered for
-  the session still wins, and a window that cannot spare the columns still gets
-  48.
-- The panel's detail column names live states in Korean, the way its event log
-  always has, rather than through `AIState.String()` — that one is the English
-  the TUI and `mux status` print, and one pane calling a state two different
-  things reads as a bug. `aiStateLabel` is now the single decider for both.
+  the right. A glance goes left before it goes right, and the panel is the thing
+  you glance at.
+- The panel names live states in Korean, the way its event log always has,
+  rather than through `AIState.String()` — that one is the English the TUI and
+  `mux status` print. `aiStateLabel` is now the panel's single decider.
 
 ### Fixed
-- The panel's detail column opened showing a copy of the pane sitting right
-  beside it. The auto-selection took the top row, and the top row is nearly
-  always the session you are working in — the list is ordered by how recently a
-  state changed, and that is the session whose state keeps changing. Fifty
-  columns of the panel were spending their time mirroring the screen next to
-  them. The panel now knows which session it lives in: the auto-selection looks
-  past it (marked `◀` in the list), and selecting it deliberately gives a
-  summary — directory, window count, uptime, token cost — instead of a mirror.
-  Its output is no longer captured at all.
 - `select-pane -l` fired when the panel was not the focused pane, which moved
   the user off the pane they were typing in. It is only ever correct after a
   click — tmux makes a pane active before forwarding one — and is now gated on
