@@ -8,6 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The `mux watch` panel is now a **sidebar with a detail column**. A pane wide
+  enough to split (76 columns) puts the session list on the left and the
+  selected session's live output on the right — name, branch, state, the tail of
+  what it is printing, and the recent transitions under it. Clicking a session
+  selects it; clicking the one already selected is what switches. Reading what
+  another session is asking no longer costs you the pane you were typing in.
+  Below the split threshold nothing changes: there is nothing to read first, so
+  a single click still switches.
+- `mux nav <up|down|top|bottom|enter>` steers the panel from a tmux binding. It
+  reaches the panel with `send-keys`, so the selection moves without the focus
+  leaving your own pane — focusing the panel would take the keyboard away from
+  the pane you are working in. A window with no panel exits cleanly, so the
+  binding is safe to make global.
+- The panel lists sessions running no AI CLI too, in a second group below the
+  ones that do, so every session is reachable without opening the TUI.
+- `tmux.PaneActive` reports whether a pane holds the focus.
+
+### Changed
+- The panel opens on the **left** of the window (`split-window -hb`) rather than
+  the right, and a first-time panel opens at 84 columns on a window with room to
+  spare — enough for both columns — instead of always 48. A width remembered for
+  the session still wins, and a window that cannot spare the columns still gets
+  48.
+- The panel's detail column names live states in Korean, the way its event log
+  always has, rather than through `AIState.String()` — that one is the English
+  the TUI and `mux status` print, and one pane calling a state two different
+  things reads as a bug. `aiStateLabel` is now the single decider for both.
+
+### Fixed
+- `select-pane -l` fired when the panel was not the focused pane, which moved
+  the user off the pane they were typing in. It is only ever correct after a
+  click — tmux makes a pane active before forwarding one — and is now gated on
+  `PaneActive`.
+
+### Added
 - The panel remembers the width you dragged it to, per session, and reopens at it — and holds it against tmux. Stored as a tmux user option rather than in `preferences.json`: `mux watch` is a separate process from the TUI, which holds its preferences in memory from startup and writes the whole file back, so a width saved by the panel would be silently clobbered — and a tmux option needs no cleanup on rename or kill, since it dies with the session exactly as the panel does. The width is applied at split time rather than by resizing afterwards, so the pane never appears at the wrong size first. Resizing itself already worked: a border drag is handled by tmux, not forwarded to the pane, so it never collided with the mouse reporting that makes rows clickable.
 - `mux panel`, which closes the panel pane in a tmux window if there is one and opens it otherwise. The binding used to be a bare `split-window`, so it could only open — pressing it twice left two panels stacked in one window, and hiding the panel meant killing its pane by hand. Because a freshly created window cannot already hold a panel, the keybinding and the `after-new-window` / `after-new-session` hooks all call this one command instead of needing an open-only variant, which is what makes "show it everywhere by default" a two-line config. It finds the panel by the `mux watch` in tmux's recorded `pane_start_command` and resolves its own path with `os.Executable()`, so the config no longer hardcodes where the binary lives.
 - Clicking a session row in the `mux watch` panel switches to that session. Enabling mouse reporting costs that pane tmux's own wheel-scroll and drag-select, which Shift still bypasses at the terminal level. Rows carry their owning session through rendering rather than having the click handler re-walk the layout: an approval row is followed by an extra reason line and each session by a blank that clicks to the same session, so a second copy of that loop would silently pick the wrong one. Switching hands focus back to the pane you were working in first — tmux makes the panel active to deliver the click, and the window left behind would otherwise report the panel's command and directory as its session's own.

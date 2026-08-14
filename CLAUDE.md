@@ -31,7 +31,7 @@ CI (`.github/workflows/ci.yml`) runs test + build + arm64 cross-build. Releases 
 
 Three layers, strictly one-directional:
 
-- `cmd/mux` — cobra CLI: root (TUI), `popup`, `setup-keybind`, `status`.
+- `cmd/mux` — cobra CLI: root (TUI), `popup`, `setup-keybind`, `status`, `watch`, `panel`, `nav`.
 - `tmux/` — everything that shells out or reads the filesystem. No UI dependencies.
 - `ui/` — Bubble Tea model, rendering, preferences. Depends on `tmux`.
 
@@ -73,15 +73,27 @@ Never attach from inside the Bubble Tea loop. `Update` records `attachTarget` / 
 
 `mode` selects which `updateX` handles input. Sub-models (`create`, `rename`, `filter`, `confirmKill`, `order`) are plain structs with their own `Update`/`View`; they report completion by emitting a message (`sessionCreatedMsg`, `sessionRenamedMsg`, `sessionOrderMsg`, …) that the *top-level* `Update` handles before mode dispatch — that is where mode is reset to `modeList` and side effects like preference writes happen.
 
-### The notification panel lives in `mux watch`
+### The sidebar lives in `mux watch`
 
-`ui/notify.go`'s `notifyLines` renders the whole panel, borderless — the tmux pane it fills already draws one — and `watchModel.View` (`ui/watch.go`) drops it into `fixedBox`. It used to also float over the TUI's preview; that overlay is gone, and with it `overlayTopRight`. The panel has one home now.
+The panel is a pane on the **left** of the window (`split-window -hb`, `tmux/panel.go`), and above `watchTwoColumnMinWidth` (76) it splits again inside itself: `notifySessionLines` on the left, `watchDetail` (`ui/watchdetail.go`) on the right, joined by `joinHorizontalFixed`. Below that width the pane falls back to `notifyLines` — the single column the panel has always been. Everything is borderless; the tmux pane already draws one, and the detail column's own rule is a single `│` per row rather than a `drawBorder` that would cost two cells and two lines.
 
-Blank lines in `notifyLines` are layout, not decoration: a session's trailing blank carries that session's name, which is what makes a click target two rows tall. The blank before the event separator carries none, so it does not stretch the last session's block.
+`defaultPanelWidth` opens a first-time panel at 84 on a window at or over `MinWindowWidth` and 48 below it. A width remembered in `@mux_panel_width` beats both.
 
-`mux watch` is a pane and not a popup for a reason worth not re-litigating: tmux has no floating window that leaves the keyboard alone. `display-popup` is documented as "Panes are not updated while a popup is present" — it freezes what is behind it and takes input. A pane is the only always-visible tmux surface that still lets you type, which is also why the companion `my-mux` widget lives in a browser Picture-in-Picture window instead.
+**Selection is two-stage, and held by name.** Clicking a session points the detail column at it; clicking the one already selected is what calls `switchToSession`. Reading what another session is asking must not cost the pane you are typing in — that is the whole reason the detail column exists. In single-column mode there is nothing to read, so the first click switches, as before. The selection is a session *name* because rows are ordered by how long a state has held (`sortByDisplayedAge`), so a row index means something different two seconds later; `reselect` re-anchors it every refresh and falls back to the top row when the session is gone.
 
-It runs as a **separate process**, so it shares no state with the TUI: its own `prevAIStates` — the codebase's only cross-tick history, since a transition can only be seen by diffing — its own event log, its own TTL caches, and a slower 2s tick (the 500ms rate exists for the cursor row's preview, which a display-only pane does not have).
+Only the selected session is captured, only when there is a column to draw it in, and a `previewLoadedMsg` whose key no longer matches the selection is dropped — the same guard `viewMain` uses.
+
+Blank lines in the session column are layout, not decoration: a session's trailing blank carries that session's name, which is what makes a click target two rows tall. Group and section breaks carry none, so they do not stretch the block above them.
+
+**`restoreFocus` is guarded by `PaneActive`, and the guard is load-bearing.** tmux's `MouseDown1Pane` runs `select-pane` before forwarding a click, so after a click the panel *is* active and `select-pane -l` is exactly the undo — without it, the window keeps reporting the panel's directory as its session's own (`tmux/panel.go`'s `-c` comment). Keys arrive by `send-keys` and never make it active, and restoring there selects whatever the window visited before the pane the user is in. Measured: `enter` from a three-pane window moved focus to the third pane.
+
+**Keys reach the panel without focus reaching it.** `mux nav <up|down|top|bottom|enter>` resolves the window's panel pane and `send-keys` to it. The directions are a vocabulary, not raw key names, so `handleKey` can change without every user's tmux.conf changing. A window with no panel exits 0 — the binding is global and a failing `run-shell` writes to the status line on every press.
+
+The panel speaks Korean and the TUI speaks English. `aiStateLabel` (`ui/notify.go`) is the panel's side of that, used by both the detail column and the event log; `AIState.String()` is the TUI's. Do not mix them in one pane.
+
+`mux watch` is a pane and not a popup for a reason worth not re-litigating: tmux has no floating window that leaves the keyboard alone. `display-popup` is documented as "Panes are not updated while a popup is present" — it freezes what is behind it and takes input. A pane is the only always-visible tmux surface that still lets you type, which is also why the companion `my-mux` widget is a GTK3 dock window on the desktop rather than anything inside a terminal.
+
+It runs as a **separate process**, so it shares no state with the TUI: its own `prevAIStates` — the codebase's only cross-tick history, since a transition can only be seen by diffing — its own event log, its own TTL caches, and a slower 2s tick (the 500ms rate exists for the TUI cursor row's preview, which reacts to a keystroke; this one reacts to a click).
 
 Every tmux call it makes must name its own pane (`selfPane()`, from `$TMUX_PANE`). tmux resolves an omitted target to the window's *active* pane, which is the one the user works in — the panel is created detached and never becomes active on its own. A width correction sent without a target shrank the wrong pane, and the panel grew to fill what it gave up.
 

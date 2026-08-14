@@ -44,6 +44,12 @@ Running Claude in one session, Codex in another, and a dev server in a third? Sw
   (`✦ ◈ ⬡ ✧`). The preview adds why it is blocked (permission prompt, input
   needed, and so on), and `mux status` puts the same badge in your tmux status
   bar.
+- **An always-on sidebar** — `mux watch` keeps a pane on the left of the window
+  with every session and a log of what they just finished. Pick one and its live
+  output appears in the column beside the list; pick it again to actually go
+  there. Drive it with the mouse, or with `mux nav` from a tmux binding, which
+  moves the selection without taking the keyboard away from the pane you are
+  typing in.
 
 If you want the original release and Homebrew package without these personal
 changes, use [lunemis/mux](https://github.com/lunemis/mux).
@@ -193,22 +199,39 @@ This runs `mux status` which outputs a compact summary like `✦ ◈` when AI se
 
 ### Always-on panel — `mux watch`
 
-The list shows what each session is doing *now*, but not what it just finished. `mux watch` fills a dedicated pane with the live AI sessions and a log of recent state changes, so it is on screen while you work rather than only while the TUI is open:
+The list shows what each session is doing *now*, but not what it just finished. `mux watch` fills a dedicated pane on the left of the window with your sessions, a log of recent state changes, and the live output of whichever session you pick — so it is on screen while you work rather than only while the TUI is open:
 
 ```
- 🔔 AI 세션
-
- ⏳ mux 2m                       ⌥ main
-
- ❗ api 30s                 ⌥ feature/auth
-    Bash: git push --force
-
- ── 최근 이벤트
- 13:42:06 api ❗ 승인 대기 · Bash: git...
- 13:40:46 mux ✅ 작업 완료
+ 🔔 AI 세션                      │  api-server                          ⌥ feat/auth
+                                 │  ❗ 승인 대기 · permission prompt  12s
+ ❗ api-server 12s   ⌥ feat/auth │ ────────────────────────────────────────────────
+    permission prompt            │ > npm test
+                                 │ ✓ 42 passed
+ ⏳ mux 3m                ⌥ main │
+                                 │ ❯ Allow edit to config.ts?
+ ✅ web 2h             ⌥ release │   1. Yes
+                                 │   2. No, tell Claude what to do differently
+ ── 세션                         │
+                                 │ ────────────────────────────────────────────────
+    notes 3h              ⌥ main │  13:00:47 api-server ❗ 승인 대기 · permission...
+                                 │  12:59:47 web ✅ 작업 완료
 ```
+
+Sessions running an AI CLI come first; the rest sit under `── 세션` so every session is reachable without opening the TUI.
 
 Transitions into "working" are deliberately not logged: the badge already says that, and a line per turn would bury the two that matter.
+
+**Click a session to read it, click it again to go there.** The first click only points the right column at it, which is the point — finding out what another session is asking should not cost you the pane you are typing in. A pane too narrow to split (below 76 columns) shows the list alone, and there a single click switches, since there is nothing to read first.
+
+For the keyboard, bind `mux nav`. It reaches the panel with `send-keys`, so the selection moves without the focus leaving your own pane:
+
+```tmux
+bind -n M-Up    run-shell "/absolute/path/to/mux nav -t #{pane_id} up"
+bind -n M-Down  run-shell "/absolute/path/to/mux nav -t #{pane_id} down"
+bind -n M-Enter run-shell "/absolute/path/to/mux nav -t #{pane_id} enter"
+```
+
+`up`, `down`, `top`, `bottom` and `enter` are the directions it takes. A window with no panel does nothing and exits cleanly, so the binding is safe to make global.
 
 ```tmux
 # Add to ~/.tmux.conf — prefix+a toggles the panel in the current window
@@ -233,11 +256,11 @@ Hiding it per client is not possible — a pane belongs to a window, not a clien
 
 `mux panel` closes the panel if the window already has one and opens it otherwise, so the key hides it as readily as it shows it and pressing twice cannot leave two. A window that was just created cannot already hold a panel, which is why the hooks call the same command rather than needing an open-only variant.
 
-The focus stays in the pane you were working in. **Click a session row to switch to it.** The bottom row shows the refresh cadence and when it last ran.
+The focus stays in the pane you were working in, both when the panel opens and after you click it.
 
-Drag the pane border to resize the panel — that still works, because tmux handles a border drag itself rather than forwarding it to the pane. The width is remembered per session (in a tmux user option, so it lives exactly as long as the session does) and the panel reopens at it.
+Drag the pane border to resize the panel — that still works, because tmux handles a border drag itself rather than forwarding it to the pane. The width is remembered per session (in a tmux user option, so it lives exactly as long as the session does) and the panel reopens at it. A first-time panel opens at 84 columns on a window with room to spare, which is enough for both columns, and at 48 on one that has not.
 
-Sessions are listed newest-first by creation, and the order does not change while you watch. Sorting by anything live — the AI state's age, say — would reshuffle the rows every couple of seconds, and with click-to-switch a moving row means clicking the wrong session.
+Rows are ordered by the number they print — how long the session has held its state — most recent first. Sorting by anything else makes that column non-monotonic, and a session at 41m listed under two at 3h reads as a bug. Rows do move as states change, which is why a session's block includes the blank line under it: the click target is two rows tall, not one.
 
 Enabling clicks means tmux hands this pane every mouse event, so its own wheel-scroll into copy-mode and drag-to-select stop working *there*; hold Shift for the terminal's native selection.
 
