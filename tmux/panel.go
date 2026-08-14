@@ -8,18 +8,28 @@ import (
 )
 
 const (
-	// panelWidth is the panel pane's column count when the session has no
-	// remembered width — every new session, and every session after a tmux
-	// server restart.
-	panelWidth = "48"
+	// defaultPanelWidth is the panel pane's column count when nothing has ever
+	// been dragged — the very first panel on a machine, and nothing else.
+	//
+	// The panel is a sidebar, so the number to beat is how little it can take
+	// and still answer its questions. At 36 a session row keeps its badge, its
+	// full name and its age, and still leaves ten cells for the branch (the
+	// renderer drops the branch below six); the event log keeps its timestamp,
+	// a name and a state label. Below about 32 the branch goes and event text
+	// starts being cut, so this is the floor worth defaulting to rather than the
+	// floor the panel survives — that one is MinPanelWidth, and it is much
+	// lower because a user dragging deliberately gets to choose.
+	defaultPanelWidth = 36
 
 	// panelWidthOption remembers a session's panel width as a tmux user option.
 	//
-	// Deliberately not preferences.json. `mux watch` is a separate process from
-	// the TUI, which holds its preferences in memory from startup and writes the
-	// whole file back — a width saved by the panel would be silently clobbered.
-	// A tmux option also needs no cleanup: it dies with the session, and so does
-	// the panel, since neither survives a server restart.
+	// This is the *live* half of the memory and it is per session: two sessions
+	// on one server can want different widths, and the option dies with its
+	// session so nothing has to clean it up.
+	//
+	// It cannot be the whole story, because it does not survive a tmux server
+	// restart — see SavedPanelWidth, which is the disk half. Neither is
+	// preferences.json, for the reason spelled out on panelState.
 	panelWidthOption = "@mux_panel_width"
 
 	// panelCommand identifies the panel among a window's panes. tmux records
@@ -75,7 +85,7 @@ func TogglePanel(target string, auto bool) error {
 		if sessionErr == nil && SessionOnlyInVSCode(session) {
 			return nil
 		}
-		if w, err := WindowWidth(target); err == nil && w < MinWindowWidth {
+		if w, err := WindowWidth(target); err == nil && w < MinWindowWidth() {
 			return nil
 		}
 	} else {
@@ -88,13 +98,20 @@ func TogglePanel(target string, auto bool) error {
 		return fmt.Errorf("locate mux binary: %w", err)
 	}
 
-	// Open at the width this session was last dragged to. Doing it here rather
-	// than resizing after the fact means the pane never appears at the wrong
-	// size first, and `mux watch` has no startup race with its own resize.
-	width := panelWidth
+	// Open at the width the user last dragged to. Doing it here rather than
+	// resizing after the fact means the pane never appears at the wrong size
+	// first, and `mux watch` has no startup race with its own resize.
+	//
+	// Three sources, most specific first: what this session was dragged to, what
+	// any panel was last dragged to (which is what carries across a tmux server
+	// restart), and only then the built-in default.
+	width := defaultPanelWidth
+	if w := SavedPanelWidth(); w > 0 {
+		width = w
+	}
 	if sessionErr == nil {
 		if w := PanelWidth(session); w > 0 {
-			width = strconv.Itoa(w)
+			width = w
 		}
 	}
 
@@ -102,7 +119,7 @@ func TogglePanel(target string, auto bool) error {
 	// before the current one, which for a horizontal split means the left edge:
 	// the list is what you glance at, and a glance goes left before it goes
 	// right.
-	args := []string{"split-window", "-d", "-hb", "-l", width}
+	args := []string{"split-window", "-d", "-hb", "-l", strconv.Itoa(width)}
 	if dir != "" {
 		// Start the panel in the window's own directory. Without -c the new pane
 		// inherits the cwd of whatever invoked `mux panel` — a shell, or tmux
@@ -157,6 +174,36 @@ func NavPanel(target, direction string) error {
 		return nil
 	}
 	return runner.Run("tmux", "send-keys", "-t", pane, key)
+}
+
+// FocusPanel moves the focus into the window's panel, or back out of it when the
+// panel already holds it. One key both ways, because the panel is somewhere you
+// visit rather than somewhere you work.
+//
+// Going back is `select-pane -l` rather than "the pane to the right": that is
+// the same mechanism restoreFocus uses after a click, and it returns to the pane
+// you actually came from however many panes sit beside the panel.
+//
+// A window with no panel does nothing and reports no error, exactly as NavPanel
+// does — the binding is global, most windows will not have one, and a failing
+// run-shell writes to the status line on every press. Opening one is a different
+// key's job.
+func FocusPanel(target string) error {
+	window, _, err := panelWindow(target)
+	if err != nil {
+		return err
+	}
+	pane, err := findPanelPane(window)
+	if err != nil {
+		return err
+	}
+	if pane == "" {
+		return nil
+	}
+	if PaneActive(pane) {
+		return RestoreLastPane(pane)
+	}
+	return runner.Run("tmux", "select-pane", "-t", pane)
 }
 
 // RestoreLastPane moves focus back to the pane that was active before, in
@@ -234,20 +281,47 @@ func PanelWidth(session string) int {
 // shell it starts, and so into a tmux client started from one.
 const vscodeEnvMarker = "TERM_PROGRAM=vscode"
 
-// MinWindowWidth is the narrowest window worth putting a panel in.
+// DefaultMinWindowWidth is the narrowest window worth putting a panel in.
 //
 // This is how "small screen" is decided, and it covers what environment cannot.
 // A phone over SSH has no marker to match on — every client app differs — and
 // the device was never the point: measured, a phone lands near 54 columns,
-// where `aggressive-resize` shrank the window and the panel held its 48,
-// leaving the work pane 5.
+// where `aggressive-resize` shrank the window and the panel held the 48 it
+// defaulted to then, leaving the work pane 5.
 //
-// The value separates the terminals actually in use: VS Code's integrated
-// terminal sits at 149-150 columns, Windows Terminal at 269. 200 leaves margin
-// on both sides. The width rule reaches where SessionOnlyInVSCode cannot — a
-// window with no client attached has nobody to inspect, but it still has a
-// size.
-const MinWindowWidth = 200
+// The value is the panel's own columns plus enough left over to work in. It is
+// not derived from defaultPanelWidth, because the panel's actual width is
+// whatever the user dragged it to; TestDefaultMinWindowWidthLeavesRoomToWork
+// only pins that the default cannot grow past what this bar can seat.
+//
+// It was 200, chosen to also exclude VS Code's integrated terminal (149-150
+// columns) on width alone. That cost more than it bought: a Windows Terminal
+// running at 188 — an ordinary window anyone would work in — was silently
+// refused a panel, and a stand-down is indistinguishable from a broken feature.
+// VS Code is SessionOnlyInVSCode's job anyway. The width rule now only stands
+// alone for a window with nobody attached to inspect, and there it may open a
+// panel in a 149-column window it used to skip. That is the trade.
+const DefaultMinWindowWidth = 140
+
+// minWindowWidthOption moves the bar for a screen the default was not measured
+// on. Global rather than per-session: it describes the terminal you attach with,
+// not any one session.
+const minWindowWidthOption = "@mux_panel_min_width"
+
+// MinWindowWidth is the bar in force. A missing, unparseable or non-positive
+// option falls back to the default — a typo in a tmux.conf must not disable the
+// panel everywhere, since nothing would say why.
+func MinWindowWidth() int {
+	out, err := runner.Output("tmux", "show-options", "-gqv", minWindowWidthOption)
+	if err != nil {
+		return DefaultMinWindowWidth
+	}
+	w, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || w <= 0 {
+		return DefaultMinWindowWidth
+	}
+	return w
+}
 
 // clientEnvHas is the /proc lookup, replaceable in tests.
 var clientEnvHas = procEnvHas

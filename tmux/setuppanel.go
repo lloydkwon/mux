@@ -10,6 +10,11 @@ const (
 	// DefaultPanelKey toggles the panel in the current window.
 	DefaultPanelKey = "a"
 
+	// DefaultFocusKey steps into the panel and back out again. Tab because the
+	// gesture is "the other pane" rather than a direction, and because tmux
+	// leaves it unbound in the prefix table.
+	DefaultFocusKey = "Tab"
+
 	// panelBlockBegin and panelBlockEnd fence the region of the config mux owns.
 	//
 	// A fence rather than the per-line tag `muxKeybindMarker` uses, because this
@@ -19,6 +24,16 @@ const (
 	panelBlockBegin = "# mux panel {"
 	panelBlockEnd   = "# mux panel }"
 )
+
+// navBinds are the keys that steer the panel's cursor without moving the focus.
+// The directions are NavPanel's vocabulary, so the binding says what it means
+// and the panel's own key handling can change without every user's tmux.conf
+// changing with it.
+var navBinds = []struct{ key, direction string }{
+	{"M-Up", "up"},
+	{"M-Down", "down"},
+	{"M-Enter", "enter"},
+}
 
 // panelHooks are the tmux events after which a window may be on screen without
 // a panel. Each one calls the same ensure — `mux panel --auto` opens a missing
@@ -55,7 +70,7 @@ var panelHooks = []string{
 // Companion to SetupKeybind, and the same shape: an absolute path resolved at
 // runtime, an idempotent owned region, and oh-my-tmux routed to
 // .tmux.conf.local before the sentinel.
-func SetupPanel(key string) error {
+func SetupPanel(key, focusKey string) error {
 	muxPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to find mux executable: %w", err)
@@ -70,7 +85,7 @@ func SetupPanel(key string) error {
 	if isOhMyTmux(confPath) {
 		target = findTmuxConfLocal(confPath)
 	}
-	if err := upsertBlock(target, panelBlockLines(muxPath, key)); err != nil {
+	if err := upsertBlock(target, panelBlockLines(muxPath, key, focusKey)); err != nil {
 		return err
 	}
 
@@ -80,9 +95,33 @@ func SetupPanel(key string) error {
 		fmt.Printf("Added the panel block to %s\n\n", target)
 	}
 	fmt.Printf("Reload tmux config:\n  tmux source-file %s\n\n", target)
-	fmt.Printf("Then press: prefix + %s to toggle the panel in a window.\n", key)
+	fmt.Printf("Then press: prefix + %s to toggle the panel in a window,\n", key)
+	fmt.Printf("            prefix + %s to step into it and back out again.\n", focusKey)
 	fmt.Printf("New windows, new sessions and session switches get one on their own.\n")
+	if !MouseEnabled() {
+		fmt.Printf("\nNote: `mouse` is off, so the panel's border cannot be dragged and its\n")
+		fmt.Printf("      rows cannot be clicked. Enable it with:\n")
+		fmt.Printf("  set -g mouse on\n")
+	}
 	return nil
+}
+
+// MouseEnabled reports whether tmux is forwarding mouse events.
+//
+// Read, never written. Dragging the panel's border and clicking its rows both go
+// through tmux's own mouse handling, so with `mouse off` the panel looks broken
+// rather than merely reduced — worth saying once at setup. Turning it on is
+// still the user's call: it also takes over wheel scrolling and text selection
+// in every pane, which is not a side effect to hand someone unasked.
+//
+// Unreadable reads as enabled: the point is to warn, and a warning that fires
+// because tmux was not running would be noise.
+func MouseEnabled() bool {
+	out, err := runner.Output("tmux", "show-options", "-gqv", "mouse")
+	if err != nil {
+		return true
+	}
+	return strings.TrimSpace(string(out)) != "off"
 }
 
 // panelBlockLines renders the owned region, fences included.
@@ -90,12 +129,20 @@ func SetupPanel(key string) error {
 // The hook value is single-quoted and the run-shell argument double-quoted, so
 // the `#` in `#{pane_id}` stays inside quotes — tmux only treats it as a comment
 // outside them. The path is quoted because it may contain spaces.
-func panelBlockLines(muxPath, key string) []string {
+func panelBlockLines(muxPath, key, focusKey string) []string {
 	ensure := fmt.Sprintf(`'run-shell "%s panel --auto -t #{pane_id}"'`, muxPath)
 
 	lines := []string{
 		panelBlockBegin,
 		fmt.Sprintf(`bind %s run-shell "%s panel -t #{pane_id}"`, key, muxPath),
+		fmt.Sprintf(`bind %s run-shell "%s panel --focus -t #{pane_id}"`, focusKey, muxPath),
+	}
+	// The keyboard that never takes the focus. Alt combinations without a
+	// prefix, so they cost one keystroke and cannot collide with tmux's own
+	// prefix + arrow pane navigation.
+	for _, n := range navBinds {
+		lines = append(lines, fmt.Sprintf(`bind -n %-7s run-shell "%s nav -t #{pane_id} %s"`,
+			n.key, muxPath, n.direction))
 	}
 	width := 0
 	for _, h := range panelHooks {

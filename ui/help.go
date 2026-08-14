@@ -23,9 +23,12 @@ const (
 const (
 	helpGlyphCol  = 6
 	helpLegendCol = 20
-	helpKeyCol    = 13
-	helpDescCol   = 14
-	helpKey2Col   = 7
+	// The key column holds "enter 더블클릭", which is what set its width: Korean
+	// runes draw two cells, and at 13 it was cutting that label mid-glyph and
+	// running the next column into it.
+	helpKeyCol  = 15
+	helpDescCol = 12
+	helpKey2Col = 7
 )
 
 // aiLegendOrder fixes the order tools appear in the legend. Ranging over
@@ -81,7 +84,7 @@ func aiStateLegend() string {
 
 	var parts []string
 	for _, s := range states {
-		glyph := lipgloss.NewStyle().Foreground(aiStateColor(s.state, false)).Render(s.state.Icon())
+		glyph := lipgloss.NewStyle().Foreground(aiStateColor(s.state)).Render(s.state.Icon())
 		parts = append(parts, glyph+" "+helpStyle.Render(s.label))
 	}
 	return " " + strings.Join(parts, "   ")
@@ -94,7 +97,7 @@ func renderHelpBody() string {
 	lines := []string{
 		titleStyle.Render(" mux 도움말") + helpStyle.Render(" · 아무 키나 누르면 닫힙니다"),
 		"",
-		helpLegendRow("▶ ▼", "접힘 / 펼침", "* ○", "attach 중 / detach 상태"),
+		helpLegendRow("▶ ▼", "접힘 / 펼침", "이름", "밝은 이름 = attach 중"),
 		helpLegendRow("#3", "고정 정렬 순서", "12m", "세션 나이 (AI 상태면 유지 시간)"),
 		helpLegendRow("⌥", "git 브랜치", "⌥⌥", "연결된 worktree"),
 		"",
@@ -103,11 +106,11 @@ func renderHelpBody() string {
 		aiStateLegend(),
 		"",
 		titleStyle.Render(" 단축키"),
-		helpKeyRow("↑↓ jk", "이동", "n", "새 세션"),
+		helpKeyRow("↑↓ jk 클릭", "이동", "n", "새 세션"),
 		helpKeyRow("tab l", "펼침", "r", "이름 변경"),
 		helpKeyRow("shift+tab h", "접기", "x", "세션 종료"),
 		helpKeyRow("g G", "처음 / 끝", "0-9", "순서 지정 (0 해제)"),
-		helpKeyRow("enter", "attach", "o", "정렬 순환"),
+		helpKeyRow("enter 더블클릭", "attach", "o", "정렬 순환"),
 		helpKeyRow("/", "검색", "esc", "검색 해제"),
 		helpKeyRow("?", "도움말", "q", "종료"),
 	}

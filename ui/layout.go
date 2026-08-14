@@ -35,31 +35,6 @@ func fixedBox(content string, width, height int) string {
 	return strings.Join(result, "\n")
 }
 
-// joinHorizontalFixed joins two blocks of text side-by-side, line by line
-func joinHorizontalFixed(left, right string) string {
-	leftLines := strings.Split(left, "\n")
-	rightLines := strings.Split(right, "\n")
-
-	maxLen := len(leftLines)
-	if len(rightLines) > maxLen {
-		maxLen = len(rightLines)
-	}
-
-	result := make([]string, maxLen)
-	for i := 0; i < maxLen; i++ {
-		l := ""
-		r := ""
-		if i < len(leftLines) {
-			l = leftLines[i]
-		}
-		if i < len(rightLines) {
-			r = rightLines[i]
-		}
-		result[i] = l + r
-	}
-	return strings.Join(result, "\n")
-}
-
 // rowSeg is one span of a list row. Segments carry plain text plus an optional
 // color, applied per-span.
 //
@@ -74,14 +49,17 @@ type rowSeg struct {
 }
 
 // rowBaseStyle returns the style every segment builds on.
+//
+// A selected row is reverse video and nothing else: the terminal swaps its own
+// foreground and background, so the highlight is legible in any scheme without
+// mux picking either colour. An unselected row sets no colour at all, leaving
+// the terminal's foreground — which is the one colour guaranteed to be readable
+// on its background.
 func rowBaseStyle(selected bool) lipgloss.Style {
 	if selected {
-		return lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorCursor).
-			Background(colorSelected)
+		return lipgloss.NewStyle().Reverse(true)
 	}
-	return lipgloss.NewStyle().Foreground(colorListRow)
+	return lipgloss.NewStyle()
 }
 
 // renderRow concatenates segments into exactly width measured cells, padding
@@ -106,7 +84,12 @@ func renderRow(segs []rowSeg, width int, selected bool) string {
 			w = ansi.StringWidth(text)
 		}
 		style := base
-		if sg.color != nil {
+		// Colours are dropped on a selected row, not merely overridden. Under
+		// reverse video a foreground is painted as the *background*, so a
+		// coloured span would come out as a green or red block sitting in the
+		// middle of the highlight. The row inverts as one piece; the state
+		// glyphs (⏳❗✅) still say what the colour would have.
+		if sg.color != nil && !selected {
 			style = base.Foreground(sg.color)
 		}
 		b.WriteString(style.Render(text))
@@ -144,31 +127,42 @@ func fitCells(s string, width int) string {
 	return padOrTruncate(ansi.Truncate(s, width-3, "")+"...", width)
 }
 
-// drawBorder wraps content lines with a rounded border
-func drawBorder(content string, width, height int) string {
-	innerWidth := width - 2
-	lines := strings.Split(content, "\n")
+// drawFrame wraps the two columns in a single frame with one divider between
+// them.
+//
+// Two separate boxes put two border characters side by side in the middle of the
+// screen, which reads as a seam rather than a division. One frame says the same
+// thing in half the ink, and the divider lines up with the corners.
+//
+// Both blocks must already be exactly their width and their height. The frame
+// does not pad or clip: a renderer returning the wrong size is a bug that should
+// show as a broken frame rather than as content quietly cut off.
+func drawFrame(left, right string, leftWidth, rightWidth, height int) string {
+	leftLines := strings.Split(left, "\n")
+	rightLines := strings.Split(right, "\n")
 
-	// Build bordered output
-	result := make([]string, 0, height+2)
-
-	// Top border
-	result = append(result, "╭"+strings.Repeat("─", innerWidth)+"╮")
-
-	// Content lines (pad/truncate to exactly height)
+	rows := make([]string, 0, height+2)
+	rows = append(rows, "╭"+strings.Repeat("─", leftWidth)+"┬"+strings.Repeat("─", rightWidth)+"╮")
 	for i := 0; i < height; i++ {
-		line := ""
-		if i < len(lines) {
-			line = lines[i]
+		l, r := "", ""
+		if i < len(leftLines) {
+			l = leftLines[i]
 		}
-		line = padOrTruncate(line, innerWidth)
-		result = append(result, "│"+line+"│")
+		if i < len(rightLines) {
+			r = rightLines[i]
+		}
+		rows = append(rows, edge()+padOrTruncate(l, leftWidth)+edge()+padOrTruncate(r, rightWidth)+edge())
 	}
+	rows = append(rows, "╰"+strings.Repeat("─", leftWidth)+"┴"+strings.Repeat("─", rightWidth)+"╯")
 
-	// Bottom border
-	result = append(result, "╰"+strings.Repeat("─", innerWidth)+"╯")
-
-	return lipgloss.NewStyle().
-		Foreground(colorBorder).
-		Render(strings.Join(result, "\n"))
+	// Only the horizontal rules are rendered as one block; the verticals are
+	// styled per character because the content between them carries its own
+	// colours, and a style wrapping the whole row would reset them.
+	rows[0] = borderStyle.Render(rows[0])
+	rows[len(rows)-1] = borderStyle.Render(rows[len(rows)-1])
+	return strings.Join(rows, "\n")
 }
+
+// edge is one vertical frame character, styled on its own so it cannot reset the
+// colours of the row it sits beside.
+func edge() string { return borderStyle.Render("│") }

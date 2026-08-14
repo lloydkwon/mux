@@ -18,7 +18,7 @@ var allAIStates = []tmux.AIState{
 }
 
 // Every decorative rune the list emits must measure what the terminal draws.
-// drawBorder re-pads each line to the panel width, so any compensation a row
+// The frame re-pads each line to the column width, so any compensation a row
 // tries to apply is undone — the only workable rule is that measured width
 // equals drawn width.
 func TestGlyphWidthsAreStable(t *testing.T) {
@@ -109,10 +109,14 @@ func TestFormatSessionRowWidthInvariant(t *testing.T) {
 										AISince:       now.Add(-3 * time.Minute),
 									}
 									for _, w := range widths {
-										row := formatSessionRow(s, order, expanded, selected, w)
-										if got := ansi.StringWidth(ansi.Strip(row)); got != w {
-											t.Fatalf("width=%d state=%v name=%q branch=%q cmd=%s order=%d: got %d cells (%q)",
-												w, st, name, branch, cmd, order, got, ansi.Strip(row))
+										for _, showOrder := range []bool{false, true} {
+											for _, nameWidth := range []int{sessionNameMin, 20, sessionNameMax} {
+												row := formatSessionRow(s, order, expanded, selected, showOrder, nameWidth, w)
+												if got := ansi.StringWidth(ansi.Strip(row)); got != w {
+													t.Fatalf("width=%d name column=%d state=%v name=%q branch=%q cmd=%s order=%d: got %d cells (%q)",
+														w, nameWidth, st, name, branch, cmd, order, got, ansi.Strip(row))
+												}
+											}
 										}
 									}
 								}
@@ -134,7 +138,7 @@ func TestFormatSessionRowKeepsStateWhenNarrow(t *testing.T) {
 		AIState: tmux.AIStateApproval,
 		AISince: time.Now().Add(-3 * time.Minute),
 	}
-	row := ansi.Strip(formatSessionRow(s, 0, false, false, 30))
+	row := ansi.Strip(formatSessionRow(s, 0, false, false, false, sessionNameMin, 30))
 
 	if !strings.Contains(row, tmux.AIStateApproval.Icon()) {
 		t.Errorf("approval glyph missing at width 30: %q", row)
@@ -155,7 +159,7 @@ func TestFormatSessionRowLeavesNonAIAlone(t *testing.T) {
 		Created:       time.Now().Add(-2 * time.Hour),
 		ActiveCommand: "bash",
 	}
-	row := ansi.Strip(formatSessionRow(s, 0, false, false, 46))
+	row := ansi.Strip(formatSessionRow(s, 0, false, false, false, 20, 46))
 
 	for _, st := range []tmux.AIState{
 		tmux.AIStateWorking, tmux.AIStateApproval, tmux.AIStateReady,
@@ -192,7 +196,7 @@ func TestFormatSessionRowColumnsAlign(t *testing.T) {
 
 	wantName, wantBranch := -1, -1
 	for _, s := range sessions {
-		row := ansi.Strip(formatSessionRow(s, 0, false, false, 46))
+		row := ansi.Strip(formatSessionRow(s, 0, false, false, false, 20, 46))
 
 		got := cellOffset(row, s.Name)
 		if got < 0 {
@@ -244,5 +248,60 @@ func TestTimeAgoWidth(t *testing.T) {
 		if got := ansi.StringWidth(timeAgo(now.Add(-age))); got != 4 {
 			t.Errorf("timeAgo(-%v) measures %d cells, want 4", age, got)
 		}
+	}
+}
+
+// The order column was four blank cells on every row of every list, spent so
+// that the handful of people pinning an order could see it. It now appears only
+// when the list has one to show.
+func TestOrderColumnAppearsOnlyWhenUsed(t *testing.T) {
+	s := tmux.Session{Name: "mux", Created: time.Now()}
+
+	off := ansi.Strip(formatSessionRow(s, 0, false, false, false, 20, 60))
+	on := ansi.Strip(formatSessionRow(s, 3, false, false, true, 20, 60))
+
+	if want := "▶ mux"; !strings.HasPrefix(off, want) {
+		t.Errorf("without an order the row starts %q, want it to start %q", off[:12], want)
+	}
+	if want := "▶ #3 mux"; !strings.HasPrefix(on, want) {
+		t.Errorf("with an order the row starts %q, want it to start %q", on[:12], want)
+	}
+
+	// The column is the only difference, so the name moves by exactly its width.
+	if got := strings.Index(on, "mux") - strings.Index(off, "mux"); got != orderWidth {
+		t.Errorf("the name moved %d cells, want %d", got, orderWidth)
+	}
+}
+
+// One column for every row in the list, decided once: a per-row width would let
+// the age wander as names came and went.
+func TestSessionNameWidthIsSharedAndBounded(t *testing.T) {
+	now := time.Now()
+	items := []listItem{
+		{kind: itemNewShell},
+		{kind: itemNewSession},
+		{kind: itemSession, session: &tmux.Session{Name: "a", Created: now}},
+		{kind: itemSession, session: &tmux.Session{Name: "a-longer-session-name", Created: now}},
+	}
+
+	// Wide enough for everything: the column is the longest label, and the
+	// action rows count — they share it.
+	if got, want := sessionNameWidth(items, 80, false), len("a-longer-session-name"); got != want {
+		t.Errorf("width = %d, want the longest name %d", got, want)
+	}
+
+	// Narrow: bounded by what is left after the gutter, the tail and a branch.
+	narrow := sessionNameWidth(items, 40, false)
+	if narrow >= 40-rowGutter-sessionTailReserve {
+		t.Errorf("width %d leaves nothing for the tail at 40 cells", narrow)
+	}
+	if narrow < sessionNameMin {
+		t.Errorf("width %d is below the floor %d", narrow, sessionNameMin)
+	}
+
+	// Short names do not leave a hole: the column shrinks to fit them.
+	short := []listItem{{kind: itemSession, session: &tmux.Session{Name: "a", Created: now}}}
+	if got := sessionNameWidth(short, 80, false); got != sessionNameMin {
+		t.Errorf("width for one short name = %d, want the floor %d", got, sessionNameMin)
 	}
 }

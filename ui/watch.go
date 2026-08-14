@@ -43,21 +43,34 @@ type watchModel struct {
 	// so an index points at a different session two seconds later.
 	selected string
 
-	// ownSession is the session this pane lives in — the one already on screen
-	// in the pane beside the panel. Its row is marked, and the auto-selection
-	// looks past it, so the cursor never opens on the one session you can
-	// already see.
+	// ownSession is the session this pane lives in — the one on screen in the
+	// pane beside the panel. Its row is marked ◀ and is where the cursor opens,
+	// so the panel says where you are before it says anything else.
 	//
-	// Empty means "could not tell", and the panel then behaves as it did before
-	// it could: no mark, no skipping. Resolved once at startup — a pane can be
-	// moved between sessions, but being wrong costs a stale marker, not
-	// correctness.
+	// Empty means "could not tell", and the panel then falls back to the top row.
+	// Resolved once at startup — a pane can be moved between sessions, but being
+	// wrong costs a stale marker, not correctness.
 	ownSession string
 
 	// Held so a re-layout can be told from a drag. winWidth is the window size
 	// this pane was last seen in; targetWidth is the width to hold it at.
 	winWidth    int
 	targetWidth int
+
+	// minWindowWidth is the window width below which this pane leaves, resolved
+	// once at startup so applyResizeWith stays pure and a resize costs no extra
+	// tmux call. Zero means "not resolved" and reads as the default.
+	minWindowWidth int
+}
+
+// minWidth is the bar this pane leaves below. The same number decides whether a
+// panel is opened at all (tmux.MinWindowWidth): a window mux would refuse to
+// open one in is a window an open one should not stay in.
+func (m watchModel) minWidth() int {
+	if m.minWindowWidth > 0 {
+		return m.minWindowWidth
+	}
+	return tmux.DefaultMinWindowWidth
 }
 
 // RunWatch renders the panel until the user quits. Used by `mux watch`.
@@ -75,7 +88,8 @@ func RunWatch() error {
 		own = "" // not knowing is a state; see watchModel.ownSession
 	}
 
-	_, err = tea.NewProgram(watchModel{ownSession: own},
+	_, err = tea.NewProgram(
+		watchModel{ownSession: own, minWindowWidth: tmux.MinWindowWidth()},
 		tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
@@ -151,6 +165,10 @@ func (m watchModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+	case "esc":
+		// Leave without choosing. Only reachable when the focus key put the
+		// cursor here, which is also when restoreFocus's guard lets it act.
+		return m, leaveFocus()
 	case "up", "k":
 		return m.moveSelection(-1)
 	case "down", "j":
@@ -220,22 +238,28 @@ func (m watchModel) reselect() watchModel {
 	return m
 }
 
-// autoSelect picks the row the cursor lands on when nothing is selected: the top
-// of the list, but looking past this pane's own session.
+// autoSelect picks the row the cursor lands on when nothing is selected: the
+// session this pane lives in, so the highlight and the ◀ mark agree on where you
+// are.
 //
-// Left alone it would land there nearly every time — the list is ordered by how
-// recently a state changed, and the session you are working in is the one whose
-// state keeps changing. The cursor would then start on the one session already
-// on screen beside the panel, where pressing enter goes nowhere. Choosing it is
-// still allowed; this is only what happens when nobody chose.
+// It used to skip that session, on the reasoning that pressing enter there would
+// go nowhere. Wrong on both counts. The list is one panel per window, so
+// switching sessions lands you in front of a *different* panel — one that had
+// never been told anything — and skipping meant it opened with some unrelated
+// session highlighted, which is a sidebar failing at the one thing a sidebar is
+// for. And enter there does do something: switchToSession restores the focus
+// before it switches, so on the session you are already in it hands you back to
+// the pane you were working in.
+//
+// Falls back to the top row when ownSession is empty ("could not tell") or has
+// gone from the list.
 func (m watchModel) autoSelect() string {
 	order := m.sessionOrder()
 	for _, name := range order {
-		if name != m.ownSession {
+		if name == m.ownSession {
 			return name
 		}
 	}
-	// One session, and it is this one. Nothing better to point at.
 	if len(order) > 0 {
 		return order[0]
 	}
@@ -256,6 +280,16 @@ func restoreFocus() {
 	self := selfPane()
 	if tmux.PaneActive(self) {
 		_ = tmux.RestoreLastPane(self)
+	}
+}
+
+// leaveFocus hands the focus back to the pane the user came from, without
+// choosing anything. The counterpart to the focus key, for the times you looked
+// and did not want to go anywhere.
+func leaveFocus() tea.Cmd {
+	return func() tea.Msg {
+		restoreFocus()
+		return nil
 	}
 }
 
@@ -315,7 +349,7 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth int) (watchModel, tea.Cm
 		}
 		return m, nil
 
-	case winWidth < tmux.MinWindowWidth:
+	case winWidth < m.minWidth():
 		// The window shrank past what it can spare — a phone attached, most
 		// likely. Leave, so the work pane gets its columns back; `prefix+a`
 		// brings the panel back on a wide screen.
@@ -365,17 +399,24 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth int) (watchModel, tea.Cm
 // is what is left over, and that scales with the window.
 func maxPanelWidth(winWidth int) int { return winWidth / 2 }
 
-// rememberPanelWidth records the pane's width for its session, so reopening the
-// panel there brings back the size the user dragged it to.
+// rememberPanelWidth records the pane's width, so reopening the panel brings
+// back the size the user dragged it to.
 //
-// Failure is deliberately silent: this is a convenience, and a session that
-// cannot be resolved (the pane is going away, tmux is shutting down) is not
+// Both halves, because they answer different questions. The tmux option is the
+// live one and is per session, so two sessions on one server can differ — but it
+// dies with the server, and a width the user dragged once should not have to be
+// dragged again after a reboot. The disk copy is that: one width, the last one
+// chosen, seeding every panel that has nothing more specific to go on.
+//
+// Failure is deliberately silent on both: this is a convenience, and a session
+// that cannot be resolved (the pane is going away, tmux is shutting down) is not
 // worth a line in the event log.
 func rememberPanelWidth(width int) tea.Cmd {
 	return func() tea.Msg {
 		if session, err := tmux.SessionForPane(selfPane()); err == nil {
 			_ = tmux.SetPanelWidth(session, width)
 		}
+		_ = tmux.SavePanelWidth(width)
 		return nil
 	}
 }
@@ -449,7 +490,7 @@ func (m watchModel) body() string {
 		return errorStyle.Render(fitCells(m.err.Error(), m.width))
 	}
 
-	lines := notifyLines(m.sessions, m.events, m.width, m.selected, m.ownSession)
+	lines := m.sessionLines()
 	if len(lines) == 0 {
 		return helpStyle.Render(fitCells(" AI 세션 없음", m.width))
 	}

@@ -1,7 +1,9 @@
 package tmux
 
 import (
+	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -59,9 +61,16 @@ func withMock(t *testing.T, fn func(m *mockRunner)) {
 	claudeStatusCacheMu.Unlock()
 	oldHome := homeDir
 	homeDir = func() (string, error) { return t.TempDir(), nil }
+	// Same reason, for the panel's remembered width: TogglePanel consults it to
+	// pick a split width, so left alone every panel test would assert against
+	// whatever the developer last dragged their own panel to.
+	oldPanelState := panelStateFile
+	stateDir := t.TempDir()
+	panelStateFile = func() (string, error) { return filepath.Join(stateDir, "panel.json"), nil }
 	defer func() {
 		runner = old
 		homeDir = oldHome
+		panelStateFile = oldPanelState
 		claudeStatusCacheMu.Lock()
 		claudeStatusCache = cachedClaudeStatuses{}
 		claudeStatusCacheMu.Unlock()
@@ -151,4 +160,36 @@ func TestKillSessionWithMock(t *testing.T) {
 			t.Errorf("expected %q, got %q", expected, m.runs[0])
 		}
 	})
+}
+
+// "exit status 1" is the one message that explains nothing, and it is what a
+// user saw when tmux had in fact said exactly what was wrong.
+func TestWithStderrCarriesTheReason(t *testing.T) {
+	base := errors.New("exit status 1")
+
+	got := withStderr(base, []byte("duplicate session: mux\n"))
+	if want := "exit status 1: duplicate session: mux"; got.Error() != want {
+		t.Errorf("error = %q, want %q", got.Error(), want)
+	}
+	// Wrapped, not replaced: callers may still want the ExitError.
+	if !errors.Is(got, base) {
+		t.Error("the original error was lost")
+	}
+
+	if got := withStderr(base, []byte("  \n")); got != base {
+		t.Errorf("empty stderr changed the error to %v", got)
+	}
+	if got := withStderr(nil, []byte("noise")); got != nil {
+		t.Errorf("success turned into an error: %v", got)
+	}
+}
+
+// ListSessions tells "no server running" apart by looking for "exit status" in
+// the message, so the reason has to be appended rather than substituted.
+func TestWithStderrKeepsTheNoServerCheckWorking(t *testing.T) {
+	err := withStderr(errors.New("exit status 1"),
+		[]byte("no server running on /tmp/tmux-1000/default"))
+	if !strings.Contains(err.Error(), "exit status") {
+		t.Errorf("error %q no longer reads as an exit status", err)
+	}
 }

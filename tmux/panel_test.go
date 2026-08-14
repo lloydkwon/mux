@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -37,7 +38,8 @@ func TestTogglePanelOpens(t *testing.T) {
 		}
 
 		self, _ := os.Executable()
-		want := "tmux split-window -d -hb -l 48 -c /work/dir -t @7 " + self + " watch"
+		want := "tmux split-window -d -hb -l " + strconv.Itoa(defaultPanelWidth) +
+			" -c /work/dir -t @7 " + self + " watch"
 		if !ran(m, want) {
 			t.Errorf("ran %v,\nwant one of them to be %q", m.runs, want)
 		}
@@ -233,7 +235,7 @@ func TestTogglePanelWidthFallsBack(t *testing.T) {
 				if err := TogglePanel("%3", false); err != nil {
 					t.Fatalf("TogglePanel: %v", err)
 				}
-				if !ran(m, "-l 48 ") {
+				if !ran(m, "-l "+strconv.Itoa(defaultPanelWidth)+" ") {
 					t.Errorf("ran %v, want the default width", m.runs)
 				}
 			})
@@ -257,6 +259,54 @@ func TestTogglePanelRememberedWidthWins(t *testing.T) {
 		}
 		if !ran(m, "-l 40 ") {
 			t.Errorf("ran %v, want the remembered width 40", m.runs)
+		}
+	})
+}
+
+// The disk copy is what carries a dragged width across a tmux server restart,
+// where the session option cannot: the option dies with the server, and every
+// panel would otherwise reopen at the default the user had already rejected.
+func TestTogglePanelFallsBackToSavedWidth(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
+			"-F", "#{pane_id} #{pane_start_command}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
+		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
+		// A fresh server: the session remembers nothing.
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
+
+		if err := SavePanelWidth(52); err != nil {
+			t.Fatalf("SavePanelWidth: %v", err)
+		}
+		if err := TogglePanel("%3", false); err != nil {
+			t.Fatalf("TogglePanel: %v", err)
+		}
+		if !ran(m, "-l 52 ") {
+			t.Errorf("ran %v, want the saved width 52", m.runs)
+		}
+	})
+}
+
+// The session's own width is the more specific fact, so it outranks the disk
+// copy — two sessions on one server are allowed to differ.
+func TestTogglePanelSessionWidthOutranksSavedWidth(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
+			"-F", "#{pane_id} #{pane_start_command}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
+		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
+		m.OnOutput([]byte("40\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
+
+		if err := SavePanelWidth(52); err != nil {
+			t.Fatalf("SavePanelWidth: %v", err)
+		}
+		if err := TogglePanel("%3", false); err != nil {
+			t.Fatalf("TogglePanel: %v", err)
+		}
+		if !ran(m, "-l 40 ") {
+			t.Errorf("ran %v, want the session's own width 40", m.runs)
 		}
 	})
 }
@@ -320,6 +370,102 @@ func TestWindowWidth(t *testing.T) {
 		m.OnOutput([]byte("wide\n"), nil, "tmux", "display-message", "-p", "#{window_width}")
 		if _, err := WindowWidth(""); err == nil {
 			t.Error("unparsable width was accepted")
+		}
+	})
+}
+
+// The bar has to be movable, because the default was measured on somebody
+// else's terminal — but a bad value must not silently disable the panel
+// everywhere, since a stand-down says nothing about why.
+func TestMinWindowWidth(t *testing.T) {
+	tests := []struct {
+		name   string
+		option string
+		want   int
+	}{
+		{name: "no option set", option: "", want: DefaultMinWindowWidth},
+		{name: "an explicit bar", option: "120", want: 120},
+		{name: "whitespace is trimmed", option: "  96  ", want: 96},
+		{name: "zero falls back", option: "0", want: DefaultMinWindowWidth},
+		{name: "negative falls back", option: "-40", want: DefaultMinWindowWidth},
+		{name: "a typo falls back", option: "wide", want: DefaultMinWindowWidth},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			withMock(t, func(m *mockRunner) {
+				m.OnOutput([]byte(tc.option+"\n"), nil, "tmux",
+					"show-options", "-gqv", "@mux_panel_min_width")
+				if got := MinWindowWidth(); got != tc.want {
+					t.Errorf("MinWindowWidth() = %d, want %d", got, tc.want)
+				}
+			})
+		})
+	}
+
+	// tmux itself failing is not a reason to stop opening panels.
+	withMock(t, func(m *mockRunner) {
+		if got := MinWindowWidth(); got != DefaultMinWindowWidth {
+			t.Errorf("MinWindowWidth() with no tmux = %d, want %d", got, DefaultMinWindowWidth)
+		}
+	})
+}
+
+// The default has to leave room for what it lets in: the panel's own columns
+// plus a work pane worth working in.
+func TestDefaultMinWindowWidthLeavesRoomToWork(t *testing.T) {
+	if work := DefaultMinWindowWidth - defaultPanelWidth; work < 80 {
+		t.Errorf("a window at the minimum leaves the work pane %d columns, want at least 80", work)
+	}
+}
+
+// One key both ways. The panel is somewhere you visit, so the binding that
+// takes you there is the binding that brings you back.
+func TestFocusPanel(t *testing.T) {
+	// Focus is elsewhere: step into the panel.
+	withMock(t, func(m *mockRunner) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 \n%5 mux watch\n"), nil, "tmux", "list-panes", "-t", "@7",
+			"-F", "#{pane_id} #{pane_start_command}")
+		m.OnOutput([]byte("0\n"), nil, "tmux", "display-message", "-p", "-t", "%5", "#{pane_active}")
+
+		if err := FocusPanel("%3"); err != nil {
+			t.Fatalf("FocusPanel: %v", err)
+		}
+		if !ran(m, "select-pane -t %5") {
+			t.Errorf("did not select the panel: %v", m.runs)
+		}
+	})
+
+	// The panel already has it: go back to wherever the user came from. Not
+	// "the pane to the right" — select-pane -l returns to the actual previous
+	// pane however many sit beside the panel.
+	withMock(t, func(m *mockRunner) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 \n%5 mux watch\n"), nil, "tmux", "list-panes", "-t", "@7",
+			"-F", "#{pane_id} #{pane_start_command}")
+		m.OnOutput([]byte("1\n"), nil, "tmux", "display-message", "-p", "-t", "%5", "#{pane_active}")
+
+		if err := FocusPanel("%3"); err != nil {
+			t.Fatalf("FocusPanel: %v", err)
+		}
+		if !ran(m, "select-pane -l") {
+			t.Errorf("did not step back out: %v", m.runs)
+		}
+	})
+
+	// No panel in this window: nothing, and no error. The binding is global and
+	// a failing run-shell writes to the status line on every press.
+	withMock(t, func(m *mockRunner) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
+			"-F", "#{pane_id} #{pane_start_command}")
+
+		if err := FocusPanel("%3"); err != nil {
+			t.Fatalf("FocusPanel with no panel: %v", err)
+		}
+		if ran(m, "select-pane") {
+			t.Errorf("moved the focus with no panel to move it to: %v", m.runs)
 		}
 	})
 }
@@ -450,6 +596,7 @@ func TestTogglePanelAutoSkipsNarrowWindow(t *testing.T) {
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 		m.OnOutput([]byte("27\n"), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
 		m.OnOutput([]byte(width+"\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-gqv", "@mux_panel_min_width")
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 	}
 	notVSCode := func(int, string) bool { return false }
@@ -461,9 +608,15 @@ func TestTogglePanelAutoSkipsNarrowWindow(t *testing.T) {
 		wantSplit bool
 	}{
 		{name: "a phone-sized window is skipped", width: "54", auto: true, wantSplit: false},
-		{name: "one column short is still skipped", width: "199", auto: true, wantSplit: false},
-		{name: "exactly the minimum is wide enough", width: "200", auto: true, wantSplit: true},
-		{name: "a VS Code-sized window is skipped", width: "150", auto: true, wantSplit: false},
+		{name: "one column short is still skipped", width: "139", auto: true, wantSplit: false},
+		{name: "exactly the minimum is wide enough", width: "140", auto: true, wantSplit: true},
+		// The regression: an ordinary Windows Terminal window was refused a panel
+		// while the bar sat at 200, and a stand-down says nothing about why.
+		{name: "an ordinary terminal window gets one", width: "188", auto: true, wantSplit: true},
+		// A VS Code-sized window now clears the width bar. That case belongs to
+		// SessionOnlyInVSCode, which inspects the client rather than guessing from
+		// columns — see TestTogglePanelAutoSkipsVSCode.
+		{name: "a VS Code-sized window passes on width alone", width: "150", auto: true, wantSplit: true},
 		{name: "a desktop window is fine", width: "269", auto: true, wantSplit: true},
 		{name: "pressing the key overrides the width", width: "54", auto: false, wantSplit: true},
 	}

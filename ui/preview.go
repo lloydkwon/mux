@@ -10,26 +10,24 @@ import (
 	"github.com/lloydkwon/mux/tmux"
 )
 
-func renderPreview(item *listItem, captured string, width, height int, tokenUsage *tmux.TokenUsage) string {
-	innerWidth := width - 2
-	innerHeight := height - 2
-
+// renderPreview renders the right column as exactly innerHeight lines of exactly
+// innerWidth cells. Unframed: the caller draws one frame around both columns.
+func renderPreview(item *listItem, captured string, innerWidth, innerHeight int, tokenUsage *tmux.TokenUsage) string {
 	if item == nil {
 		lines := make([]string, innerHeight)
 		mid := innerHeight / 2
 		msg := "No session selected"
 		for i := range lines {
 			if i == mid {
-				lines[i] = padOrTruncate(centerText(msg, innerWidth), innerWidth)
+				lines[i] = helpStyle.Render(padOrTruncate(centerText(fitCells(msg, innerWidth), innerWidth), innerWidth))
 			} else {
 				lines[i] = strings.Repeat(" ", innerWidth)
 			}
 		}
-		content := strings.Join(lines, "\n")
-		return drawBorder(content, width, innerHeight)
+		return strings.Join(lines, "\n")
 	}
 	if item.session == nil {
-		return renderActionPreview(item.kind, width, innerWidth, innerHeight)
+		return renderActionPreview(item.kind, innerWidth, innerHeight)
 	}
 
 	session := item.session
@@ -97,11 +95,10 @@ func renderPreview(item *listItem, captured string, width, height int, tokenUsag
 		}
 	}
 
-	content := strings.Join(allLines, "\n")
-	return drawBorder(content, width, innerHeight)
+	return strings.Join(allLines, "\n")
 }
 
-func renderActionPreview(kind itemKind, width, innerWidth, innerHeight int) string {
+func renderActionPreview(kind itemKind, innerWidth, innerHeight int) string {
 	title := "New shell"
 	description := "Close mux and continue in the current SSH login shell."
 	if os.Getenv("TMUX") != "" {
@@ -127,7 +124,7 @@ func renderActionPreview(kind itemKind, width, innerWidth, innerHeight int) stri
 	if innerHeight > 5 {
 		lines[5] = helpStyle.Render(padOrTruncate("Press Enter to continue.", innerWidth))
 	}
-	return drawBorder(strings.Join(lines, "\n"), width, innerHeight)
+	return strings.Join(lines, "\n")
 }
 
 // previewLabel returns the header label for the previewed target. For session
@@ -162,7 +159,7 @@ func aiLabelPlain(s tmux.Session) labelInfo {
 	glyph, _ := aiGlyph(s)
 	text := "  " + glyph + " " + tool.Name
 	// The preview panel is never a selected row, so the base tint always fits.
-	style := lipgloss.NewStyle().Foreground(aiBadgeColor(s, false)).Bold(true)
+	style := lipgloss.NewStyle().Foreground(aiBadgeColor(s)).Bold(true)
 	return labelInfo{text: text, styled: "  " + style.Render(glyph+" "+tool.Name)}
 }
 
@@ -200,7 +197,7 @@ func formatStatusLine(s tmux.Session, u *tmux.TokenUsage, width int) string {
 
 	muted := lipgloss.NewStyle().Foreground(colorMuted)
 	stateStyle := muted
-	if c := aiStateColor(s.AIState, false); c != nil {
+	if c := aiStateColor(s.AIState); c != nil {
 		stateStyle = lipgloss.NewStyle().Foreground(c)
 	}
 

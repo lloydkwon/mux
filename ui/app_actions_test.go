@@ -73,6 +73,25 @@ func TestCreatedSessionInAttachModeQuitsWithTarget(t *testing.T) {
 	}
 }
 
+// `mux new` and the panel's "새 세션" row open the same screen `n` opens in the
+// list — the point of the subcommand is that there is no second create flow.
+func TestNewSessionModelOpensOnTheCreatePrompt(t *testing.T) {
+	m := NewSessionModel()
+	if m.mode != modeCreate {
+		t.Errorf("mode = %v, want create", m.mode)
+	}
+	if !m.createModel.attach {
+		t.Error("a session created this way should be attached to")
+	}
+
+	// And cancelling leaves the ordinary list behind, exactly as cancelling `n`
+	// does — nothing about the entry point changes what esc means.
+	cancelled, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := cancelled.(Model).mode; got != modeList {
+		t.Errorf("mode after esc = %v, want list", got)
+	}
+}
+
 func TestDigitStartsOrderInputForSession(t *testing.T) {
 	m := menuTestModel()
 	m.cursor = 2

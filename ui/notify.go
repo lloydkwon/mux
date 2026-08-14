@@ -16,7 +16,12 @@ const (
 
 	// notifyMinWidth is the narrowest pane the panel can say anything useful in.
 	// Below it the columns collide, so the pane shows a notice instead.
-	notifyMinWidth = 24
+	//
+	// The number itself lives in tmux, which is the side that refuses to restore
+	// a remembered width below it — the floor has to be the same on both ends of
+	// that round trip, or a hand-edited panel.json opens a pane this renderer
+	// immediately gives up on.
+	notifyMinWidth = tmux.MinPanelWidth
 )
 
 // aiEvent is one observed AI state transition.
@@ -192,7 +197,7 @@ func notifySessionLines(sessions []tmux.Session, width int, selected, own string
 
 	if len(other) > 0 {
 		lines = append(lines, blank,
-			notifyLine{text: helpStyle.Render(padOrTruncate(" ── 세션", width))}, blank)
+			notifyLine{text: sectionRule("세션", width)}, blank)
 		lines = append(lines, sessionBlocks(other, width, selected, own, true)...)
 	}
 	return lines
@@ -200,7 +205,7 @@ func notifySessionLines(sessions []tmux.Session, width int, selected, own string
 
 // notifyEventLines builds the transition log half.
 func notifyEventLines(events []aiEvent, width int) []notifyLine {
-	lines := []notifyLine{{text: helpStyle.Render(padOrTruncate(" ── 최근 이벤트", width))}}
+	lines := []notifyLine{{text: sectionRule("최근 이벤트", width)}}
 	if len(events) == 0 {
 		return append(lines, notifyLine{text: helpStyle.Render(padOrTruncate(" 아직 없음", width))})
 	}
@@ -245,7 +250,7 @@ func sessionBlocks(ss []tmux.Session, width int, selected, own string, dim bool)
 			// row that looks attached but does nothing.
 			lines = append(lines, notifyLine{
 				text: renderRow([]rowSeg{
-					{text: fitCells("    "+s.AIWaitingFor, width), color: mutedUnless(sel)},
+					{text: fitCells("    "+s.AIWaitingFor, width), color: colorMuted},
 				}, width, sel),
 				session: s.Name,
 			})
@@ -261,21 +266,27 @@ func sessionBlocks(ss []tmux.Session, width int, selected, own string, dim bool)
 	return lines
 }
 
+// sectionRule renders " ── label ────…" across the pane.
+//
+// The label used to sit on its own with two dashes in front of it, which reads
+// as a line of text rather than as a division — the panel stacks three of these
+// blocks and needed the breaks between them to be visible at a glance. The rule
+// stops one cell short so it lines up with the right margin every row keeps.
+func sectionRule(label string, width int) string {
+	head := " ── " + label + " "
+	rest := width - ansi.StringWidth(head) - 1
+	if rest < 1 {
+		return helpStyle.Render(fitCells(head, width))
+	}
+	return helpStyle.Render(padOrTruncate(head+strings.Repeat("─", rest), width))
+}
+
 // blankRow is a full-width empty row in the list's base style.
 func blankRow(width int) string {
 	if width <= 0 {
 		return ""
 	}
 	return strings.Repeat(" ", width)
-}
-
-// mutedUnless returns the dim foreground, or nil once the row is selected —
-// dimming a highlighted row fights the highlight it is drawn on.
-func mutedUnless(selected bool) lipgloss.TerminalColor {
-	if selected {
-		return nil
-	}
-	return colorMuted
 }
 
 // notifyTexts flattens rendered rows for callers that do not care about clicks.
@@ -377,15 +388,15 @@ func notifySessionLine(s tmux.Session, width int, f rowFlags) string {
 	// selected, where the highlight has to win over the dimming.
 	faded := lipgloss.TerminalColor(nil)
 	if dim {
-		faded = mutedUnless(selected)
+		faded = colorMuted
 	}
-	ageColor := aiStateColor(s.AIState, selected)
+	ageColor := aiStateColor(s.AIState)
 	if ageColor == nil {
 		ageColor = faded
 	}
 
 	segs := []rowSeg{
-		{text: head, color: aiBadgeColor(s, selected)},
+		{text: head, color: aiBadgeColor(s)},
 		{text: name, color: faded},
 		{text: age, color: ageColor},
 		{text: mark, color: colorAccent},
@@ -422,7 +433,7 @@ func notifyEventLine(e aiEvent, width int) string {
 	segs := []rowSeg{
 		{text: head},
 		{text: name},
-		{text: " " + fitCells(e.text, textWidth), color: aiStateColor(e.state, false)},
+		{text: " " + fitCells(e.text, textWidth), color: aiStateColor(e.state)},
 	}
 	return renderRow(segs, width, false)
 }

@@ -27,7 +27,7 @@ func readConf(t *testing.T, path string) string {
 	return string(b)
 }
 
-func testBlock(muxPath string) []string { return panelBlockLines(muxPath, "a") }
+func testBlock(muxPath string) []string { return panelBlockLines(muxPath, "a", "Tab") }
 
 func TestUpsertBlockAppendsToPlainConf(t *testing.T) {
 	path := writeConf(t, "set -g mouse on\n")
@@ -210,7 +210,7 @@ func TestUpsertBlockIgnoresUnclosedFence(t *testing.T) {
 // tmux only treats `#` as a comment outside quotes, so #{pane_id} has to stay
 // inside them — otherwise every hook silently becomes a no-op.
 func TestPanelBlockQuotingKeepsPaneIDInsideQuotes(t *testing.T) {
-	for _, line := range panelBlockLines("/path with space/mux", "a") {
+	for _, line := range panelBlockLines("/path with space/mux", "a", "Tab") {
 		if !strings.Contains(line, "#{pane_id}") {
 			continue
 		}
@@ -225,8 +225,38 @@ func TestPanelBlockQuotingKeepsPaneIDInsideQuotes(t *testing.T) {
 }
 
 func TestPanelBlockUsesTheGivenKey(t *testing.T) {
-	lines := panelBlockLines("/bin/mux", "F1")
-	if !strings.Contains(strings.Join(lines, "\n"), "bind F1 run-shell") {
-		t.Errorf("the key was ignored:\n%s", strings.Join(lines, "\n"))
+	block := strings.Join(panelBlockLines("/bin/mux", "F1", "F2"), "\n")
+	if !strings.Contains(block, "bind F1 run-shell") {
+		t.Errorf("the toggle key was ignored:\n%s", block)
+	}
+	if !strings.Contains(block, "bind F2 run-shell") {
+		t.Errorf("the focus key was ignored:\n%s", block)
+	}
+}
+
+// The panel has two keyboards, and the block has to install both: one that
+// steps into it, and one that steers it from where you are already typing.
+func TestPanelBlockBindsBothKeyboards(t *testing.T) {
+	block := strings.Join(panelBlockLines("/bin/mux", "a", "Tab"), "\n")
+
+	if !strings.Contains(block, `bind Tab run-shell "/bin/mux panel --focus -t #{pane_id}"`) {
+		t.Errorf("no focus binding:\n%s", block)
+	}
+	for _, n := range navBinds {
+		want := "bind -n " + n.key
+		if !strings.Contains(block, want) {
+			t.Errorf("no %q binding:\n%s", want, block)
+		}
+		if !strings.Contains(block, "nav -t #{pane_id} "+n.direction) {
+			t.Errorf("%s does not steer %q:\n%s", n.key, n.direction, block)
+		}
+	}
+
+	// Without -n they would need the prefix, which defeats the point of a
+	// keyboard that does not interrupt what you are typing.
+	for _, line := range strings.Split(block, "\n") {
+		if strings.Contains(line, " nav -t ") && !strings.HasPrefix(line, "bind -n ") {
+			t.Errorf("nav binding needs the prefix: %q", line)
+		}
 	}
 }

@@ -56,25 +56,20 @@ func branchGlyph(s tmux.Session) string {
 	return "⌥"
 }
 
-// aiStateColor returns the foreground for a live state, using a lighter tint
-// when the row is selected so it stays legible against colorSelected. Returns
-// nil for a session with no live state, meaning "use the row's base color".
-func aiStateColor(st tmux.AIState, selected bool) lipgloss.TerminalColor {
+// aiStateColor returns the foreground for a live state, or nil for a session
+// with no live state — meaning "use the row's own colour".
+//
+// It took a `selected` argument once, to return a lighter tint that survived the
+// highlight's dark background. A reverse-video highlight has no background of
+// its own, and renderRow drops segment colours there anyway, so whether a row is
+// selected is no longer this function's business.
+func aiStateColor(st tmux.AIState) lipgloss.TerminalColor {
 	switch st {
 	case tmux.AIStateWorking:
-		if selected {
-			return colorStateWorkingSel
-		}
 		return colorStateWorking
 	case tmux.AIStateApproval:
-		if selected {
-			return colorStateApprovalSel
-		}
 		return colorStateApproval
 	case tmux.AIStateReady:
-		if selected {
-			return colorStateReadySel
-		}
 		return colorStateReady
 	default:
 		return nil
@@ -82,9 +77,9 @@ func aiStateColor(st tmux.AIState, selected bool) lipgloss.TerminalColor {
 }
 
 // aiBadgeColor colors the badge by state when there is one, falling back to the
-// tool's own hex so ✦/◈/⬡/✧ keep the colors they have always had.
-func aiBadgeColor(s tmux.Session, selected bool) lipgloss.TerminalColor {
-	if c := aiStateColor(s.AIState, selected); c != nil {
+// tool's own colour so ✦/◈/⬡/✧ stay told apart.
+func aiBadgeColor(s tmux.Session) lipgloss.TerminalColor {
+	if c := aiStateColor(s.AIState); c != nil {
 		return c
 	}
 	if tool, ok := tmux.SessionAITool(s); ok {

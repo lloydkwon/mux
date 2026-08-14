@@ -2,6 +2,7 @@
 package ui
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/lloydkwon/mux/tmux"
 )
 
@@ -22,6 +24,11 @@ const (
 
 	// Timing
 	refreshInterval = 500 * time.Millisecond
+
+	// doubleClickWindow is how long a second press on the same row still counts
+	// as one gesture. A single press only moves the cursor, so this is the gap in
+	// which the user can commit without reaching for the keyboard.
+	doubleClickWindow = 400 * time.Millisecond
 
 	// Display limits
 	maxSessionNameDisplay = 18
@@ -41,6 +48,13 @@ const (
 	modeOrder
 	modeHelp
 )
+
+// clickMark remembers the last left press, so the next one can be told apart
+// from a double click.
+type clickMark struct {
+	item int
+	at   time.Time
+}
 
 // Model is the top-level Bubble Tea model for the session manager TUI.
 type Model struct {
@@ -62,6 +76,7 @@ type Model struct {
 	prefs           preferences
 	attachTarget    previewKey       // set when we want to attach after quitting (zero value = no attach)
 	detachRequested bool             // set when New shell is selected from inside tmux
+	lastClick       clickMark        // for telling a double click from two clicks
 	focusSession    string           // session name to focus cursor on after next load
 	previewContent  string           // cached capture-pane output
 	previewKey      previewKey       // (session, window, pane) the cache belongs to
@@ -147,6 +162,20 @@ func loadTokenUsage(sessionName string, panePID int) tea.Cmd {
 func NewModel() Model {
 	prefs, err := loadPreferences()
 	return Model{tree: newTreeState(), prefs: prefs, err: err}
+}
+
+// NewSessionModel returns a Model that opens straight on the create prompt and
+// attaches to what it makes.
+//
+// The same screen `n` opens from the list, reached without going through the
+// list first — which is what lets the panel offer "새 세션" without building a
+// second create flow of its own. `esc` still drops to the list, exactly as
+// cancelling `n` does.
+func NewSessionModel() Model {
+	m := NewModel()
+	m.mode = modeCreate
+	m.createModel = newCreateModel(true)
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
@@ -302,21 +331,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 
 		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-				return m, m.refreshCurrentPreview()
-			}
+			return m.moveCursor(-1)
 		case "down", "j":
-			if m.cursor < len(m.items)-1 {
-				m.cursor++
-				return m, m.refreshCurrentPreview()
-			}
+			return m.moveCursor(1)
 		case "g":
 			m.cursor = 0
 			return m, m.refreshCurrentPreview()
@@ -333,20 +359,7 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.collapseCurrent()
 
 		case "enter":
-			if it := m.currentItem(); it != nil {
-				switch it.kind {
-				case itemNewShell:
-					m.detachRequested = os.Getenv("TMUX") != ""
-					return m, tea.Quit
-				case itemNewSession:
-					m.mode = modeCreate
-					m.createModel = newCreateModel(true)
-					return m, m.createModel.nameInput.Focus()
-				default:
-					m.attachTarget = previewKeyForItem(*it)
-					return m, tea.Quit
-				}
-			}
+			return m.activateCurrent()
 
 		case "n":
 			m.mode = modeCreate
@@ -402,6 +415,88 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// activateCurrent commits the row under the cursor: attach for a session,
+// window or pane, and the two action rows do what they say.
+//
+// Shared by `enter` and the double click so the two cannot drift — a click that
+// attached to a different target than the key would be a bug nobody would think
+// to look for.
+func (m Model) activateCurrent() (tea.Model, tea.Cmd) {
+	it := m.currentItem()
+	if it == nil {
+		return m, nil
+	}
+	switch it.kind {
+	case itemNewShell:
+		m.detachRequested = os.Getenv("TMUX") != ""
+		return m, tea.Quit
+	case itemNewSession:
+		m.mode = modeCreate
+		m.createModel = newCreateModel(true)
+		return m, m.createModel.nameInput.Focus()
+	default:
+		m.attachTarget = previewKeyForItem(*it)
+		return m, tea.Quit
+	}
+}
+
+// handleMouse turns a press into a cursor move, or into an activation when it is
+// the second press on the same row.
+//
+// A single click only moves the cursor, unlike the watch panel where a click
+// switches outright: that panel shows nothing to read first, while here the
+// right column is exactly that. Clicking to read and clicking to leave must not
+// be the same gesture.
+func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		return m.moveCursor(-1)
+	case tea.MouseButtonWheelDown:
+		return m.moveCursor(1)
+	case tea.MouseButtonLeft:
+		// Press only. A release carries the same button under SGR, and a drag
+		// arrives as motion — neither is a click.
+		if msg.Action != tea.MouseActionPress {
+			return m, nil
+		}
+	default:
+		return m, nil
+	}
+
+	// Correct for the chrome above the columns and the column's own border, then
+	// for however far the list has scrolled.
+	row := msg.Y - m.chromeTop() - 1
+	idx := row + listOffset(m.cursor, m.panelHeight()-2)
+	// x==0 is the frame and x==listInnerWidth+1 the divider; neither is a row.
+	if msg.X < 1 || msg.X > m.listInnerWidth() || row < 0 || idx < 0 || idx >= len(m.items) {
+		return m, nil
+	}
+
+	if m.lastClick.item == idx && time.Since(m.lastClick.at) <= doubleClickWindow {
+		m.cursor = idx
+		return m.activateCurrent()
+	}
+	m.lastClick = clickMark{item: idx, at: time.Now()}
+	if idx == m.cursor {
+		return m, nil
+	}
+	m.cursor = idx
+	return m, m.refreshCurrentPreview()
+}
+
+// moveCursor steps the cursor delta rows, stopping at either end.
+func (m Model) moveCursor(delta int) (tea.Model, tea.Cmd) {
+	if len(m.items) == 0 {
+		return m, nil
+	}
+	next := clampInt(m.cursor+delta, 0, len(m.items)-1)
+	if next == m.cursor {
+		return m, nil
+	}
+	m.cursor = next
+	return m, m.refreshCurrentPreview()
 }
 
 // expandCurrent expands the row under the cursor and dispatches the loader.
@@ -626,44 +721,88 @@ func (m Model) View() string {
 	}
 }
 
+// extraBar is the line between the title and the columns: the filter prompt, the
+// kill confirmation, the active filter, or an error. Empty when there is none.
+func (m Model) extraBar() string {
+	switch {
+	case m.mode == modeFilter:
+		return m.filterMod.View()
+	case m.mode == modeConfirmKill:
+		return m.confirmKillMod.View()
+	case m.filterText != "":
+		return helpStyle.Render(fmt.Sprintf("filter: %s (esc clear)", m.filterText))
+	case m.err != nil:
+		return errorStyle.Render(m.err.Error())
+	}
+	return ""
+}
+
+// chromeTop is how many rows sit above the columns — the offset a mouse row has
+// to be corrected by.
+func (m Model) chromeTop() int {
+	if m.extraBar() != "" {
+		return 2
+	}
+	return 1
+}
+
+// panelHeight is how many rows each column gets, borders included.
+func (m Model) panelHeight() int {
+	// title(1+margin1) + help(1), plus the filter/error bar when there is one.
+	chrome := 3
+	if m.extraBar() != "" {
+		chrome++
+	}
+	if h := m.height - chrome; h > minPanelHeight {
+		return h
+	}
+	return minPanelHeight
+}
+
+// listWidth is the left column including the frame characters on either side of
+// it — what a mouse column has to be compared against.
+func (m Model) listWidth() int {
+	return m.width * listWidthPercent / listWidthDenom
+}
+
+// listInnerWidth is the drawable width of the left column, inside the frame.
+func (m Model) listInnerWidth() int {
+	return m.listWidth() - 2
+}
+
+// titleBar is the heading: what you are looking at on the left, how it is
+// ordered on the right.
+//
+// The sort was in brackets beside the count, where it competed with the title
+// for the same glance. Flush right and dim, it is there when looked for and out
+// of the way when not.
+func (m Model) titleBar() string {
+	// Sessions only — windows and panes are not what the number is about.
+	left := fmt.Sprintf("⚡ tmux sessions %d", len(m.filtered))
+	right := fmt.Sprintf("sort: %s", m.prefs.Sort)
+
+	gap := m.width - ansi.StringWidth(left) - ansi.StringWidth(right) - 1
+	if gap < 1 {
+		return titleStyle.Render(fitCells(left, m.width))
+	}
+	return titleStyle.Render(left) + strings.Repeat(" ", gap) + helpStyle.Render(right)
+}
+
 func (m Model) viewMain() string {
-	// Title — count sessions only, not windows/panes
-	count := fmt.Sprintf("(%d)", len(m.filtered))
-	title := titleStyle.Render(fmt.Sprintf("⚡ tmux sessions %s  [sort: %s]", count, m.prefs.Sort))
+	title := m.titleBar()
 
 	// Help bar
 	help := renderHelp()
 
-	// Filter / confirm bar
-	var extraBar string
-	if m.mode == modeFilter {
-		extraBar = m.filterMod.View()
-	} else if m.mode == modeConfirmKill {
-		extraBar = m.confirmKillMod.View()
-	} else if m.filterText != "" {
-		extraBar = helpStyle.Render(fmt.Sprintf("filter: %s (esc clear)", m.filterText))
-	} else if m.err != nil {
-		extraBar = errorStyle.Render(m.err.Error())
-	}
+	extraBar := m.extraBar()
 
-	// Chrome: title(1+margin1) + help(1) + extraBar(0 or 1)
-	chrome := 3
-	if extraBar != "" {
-		chrome++
-	}
+	// One frame around both columns: three vertical characters in total, so the
+	// two inner widths and those three are the whole terminal.
+	innerHeight := m.panelHeight() - 2
+	leftWidth := m.listInnerWidth()
+	rightWidth := m.width - leftWidth - 3
 
-	// Panel height = total height for both borders + content
-	panelHeight := m.height - chrome
-	if panelHeight < minPanelHeight {
-		panelHeight = minPanelHeight
-	}
-
-	// Layout: list on left, preview on right
-	listWidth := m.width * listWidthPercent / listWidthDenom
-	previewWidth := m.width - listWidth
-
-	// Render both panels (each returns exactly panelHeight lines)
-	list := renderListView(m.items, m.cursor, m.filterText, &m.tree, listWidth, panelHeight)
+	list := renderListView(m.items, m.cursor, m.filterText, &m.tree, leftWidth, innerHeight)
 
 	currentItem := m.currentItem()
 	currentSession := m.currentSession()
@@ -675,10 +814,9 @@ func (m Model) viewMain() string {
 	if currentSession != nil && m.tokenSession == currentSession.Name {
 		tokenUsage = m.tokenUsage
 	}
-	preview := renderPreview(currentItem, cachedContent, previewWidth, panelHeight, tokenUsage)
+	preview := renderPreview(currentItem, cachedContent, rightWidth, innerHeight, tokenUsage)
 
-	// Join line-by-line for exact alignment
-	content := joinHorizontalFixed(list, preview)
+	content := drawFrame(list, preview, leftWidth, rightWidth, innerHeight)
 
 	// Assemble
 	var b strings.Builder
@@ -710,9 +848,10 @@ func (m Model) viewWithOverlay(overlay string) string {
 func renderHelp() string {
 	keys := []struct{ key, desc string }{
 		{"↑↓/jk", "navigate"},
+		{"click", "select"},
 		{"tab", "expand"},
 		{"⇧tab", "collapse"},
-		{"enter", "attach"},
+		{"enter/2click", "attach"},
 		{"n", "new"},
 		{"x", "kill"},
 		{"r", "rename"},
@@ -766,7 +905,26 @@ func DetachClient() error {
 	if err != nil {
 		return fmt.Errorf("tmux not found: %w", err)
 	}
-	return exec.Command(tmuxPath, "detach-client").Run()
+	return runTmux(tmuxPath, "detach-client")
+}
+
+// runTmux runs a tmux command and carries what it said into any error.
+//
+// These calls bypass the tmux package's runner on purpose — they must reach the
+// real process — so they need their own copy of what runner.go does with
+// stderr. Without it an attach that tmux refused for a reason it was happy to
+// state arrives as "failed to attach: exit status 1".
+func runTmux(tmuxPath string, args ...string) error {
+	cmd := exec.Command(tmuxPath, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return fmt.Errorf("%w: %s", err, msg)
+		}
+		return err
+	}
+	return nil
 }
 
 // AttachToSession switches to the target session, optionally focusing a
@@ -784,12 +942,12 @@ func AttachToSession(name string, windowIdx, paneIdx int) error {
 	// replaces our process and we can't run anything afterwards.
 	if windowIdx >= 0 {
 		windowTarget := fmt.Sprintf("%s:%d", name, windowIdx)
-		if err := exec.Command(tmuxPath, "select-window", "-t", windowTarget).Run(); err != nil {
+		if err := runTmux(tmuxPath, "select-window", "-t", windowTarget); err != nil {
 			return fmt.Errorf("select-window %s: %w", windowTarget, err)
 		}
 		if paneIdx >= 0 {
 			paneTarget := fmt.Sprintf("%s.%d", windowTarget, paneIdx)
-			if err := exec.Command(tmuxPath, "select-pane", "-t", paneTarget).Run(); err != nil {
+			if err := runTmux(tmuxPath, "select-pane", "-t", paneTarget); err != nil {
 				return fmt.Errorf("select-pane %s: %w", paneTarget, err)
 			}
 		}
@@ -798,7 +956,7 @@ func AttachToSession(name string, windowIdx, paneIdx int) error {
 	// "=" forces an exact match. Plain tmux target matching falls back to
 	// prefix and then glob, so "mux" would be ambiguous next to "mux-old".
 	if os.Getenv("TMUX") != "" {
-		return exec.Command(tmuxPath, "switch-client", "-t", "="+name).Run()
+		return runTmux(tmuxPath, "switch-client", "-t", "="+name)
 	}
 	return syscall.Exec(tmuxPath, []string{"tmux", "attach-session", "-t", "=" + name}, os.Environ())
 }

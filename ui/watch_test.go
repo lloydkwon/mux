@@ -368,19 +368,20 @@ func TestWatchWidthIgnoresSqueeze(t *testing.T) {
 	}
 }
 
+// quits reports whether a command is the panel leaving its window.
+func quits(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	_, ok := cmd().(tea.QuitMsg)
+	return ok
+}
+
 // Attaching from a phone shrinks the window and the panel would hold its 48
 // columns, leaving the work pane almost none. It leaves instead. The first size
 // is exempt: a panel opened by hand in an already narrow window stays, the same
 // way the key overrides the hook.
 func TestWatchQuitsWhenWindowGetsNarrow(t *testing.T) {
-	quits := func(cmd tea.Cmd) bool {
-		if cmd == nil {
-			return false
-		}
-		_, ok := cmd().(tea.QuitMsg)
-		return ok
-	}
-
 	// Opened by hand in a 54-column window: stays.
 	m := watchTestModel(40, 20)
 	narrowFirst, cmd := m.applyResizeWith(40, 54)
@@ -399,18 +400,40 @@ func TestWatchQuitsWhenWindowGetsNarrow(t *testing.T) {
 	}
 
 	// Still wide enough: hold the width as before, do not leave. Expressed
-	// against the constant so it follows when the threshold moves.
-	if _, cmd := wide.applyResizeWith(52, tmux.MinWindowWidth); quits(cmd) {
+	// against the bar itself so it follows when the threshold moves.
+	if _, cmd := wide.applyResizeWith(52, wide.minWidth()); quits(cmd) {
 		t.Error("quit on a window that is exactly the minimum")
 	}
 }
 
-// The session this pane lives in is already on screen beside the panel, so
-// starting the cursor there means the first enter goes nowhere. It is also
-// almost always the top row — the list is ordered by how recently a state
-// changed, and the session you are working in is the one whose state keeps
-// changing — so this is the default case, not an edge one.
-func TestWatchAutoSelectSkipsOwnSession(t *testing.T) {
+// The bar the panel leaves below is resolved once at startup, so a model that
+// never got the chance has to behave as it always did rather than as if every
+// window were wide enough.
+func TestWatchMinWidthFallsBackToTheDefault(t *testing.T) {
+	if got := (watchModel{}).minWidth(); got != tmux.DefaultMinWindowWidth {
+		t.Errorf("unresolved minWidth = %d, want %d", got, tmux.DefaultMinWindowWidth)
+	}
+	if got := (watchModel{minWindowWidth: 96}).minWidth(); got != 96 {
+		t.Errorf("resolved minWidth = %d, want 96", got)
+	}
+
+	// And the resolved bar is what a resize is judged against, not the default.
+	m := watchTestModel(48, 20)
+	m.minWindowWidth = 96
+	m.winWidth, m.targetWidth = 269, 48
+	if _, cmd := m.applyResizeWith(48, 100); quits(cmd) {
+		t.Error("quit at 100 columns with the bar set to 96")
+	}
+	if _, cmd := m.applyResizeWith(48, 90); !quits(cmd) {
+		t.Error("did not quit at 90 columns with the bar set to 96")
+	}
+}
+
+// One panel per window means switching sessions puts you in front of a panel
+// that has never been told anything, and what it opens on is the only thing it
+// says about where you are. So it opens on the session it lives in — the same
+// row it marks ◀.
+func TestWatchAutoSelectPrefersOwnSession(t *testing.T) {
 	now := time.Now()
 	mk := func(name string, since time.Duration) tmux.Session {
 		s := sess(name, tmux.AIStateWorking)
@@ -425,29 +448,38 @@ func TestWatchAutoSelectSkipsOwnSession(t *testing.T) {
 		want     string
 	}{
 		{
-			name:     "the freshest row is this pane's own session",
+			name:     "this pane's own session is also the top row",
 			own:      "project",
-			sessions: []tmux.Session{mk("project", time.Second), mk("api", time.Hour)},
-			want:     "api",
-		},
-		{
-			name:     "own session is not the top row and nothing changes",
-			own:      "api",
 			sessions: []tmux.Session{mk("project", time.Second), mk("api", time.Hour)},
 			want:     "project",
 		},
 		{
-			// One session, and it is this one. Nothing better to point at.
+			// The row order follows elapsed time, so "where you are" is regularly
+			// not the top row — and it is still what the cursor opens on.
+			name:     "own session is further down the list",
+			own:      "api",
+			sessions: []tmux.Session{mk("project", time.Second), mk("api", time.Hour)},
+			want:     "api",
+		},
+		{
 			name:     "only this session exists",
 			own:      "project",
 			sessions: []tmux.Session{mk("project", time.Second)},
 			want:     "project",
 		},
 		{
-			// Not knowing must not be guessed either way — this is exactly how
-			// the panel behaved before it could tell.
+			// Not knowing must not be guessed at: the top row is the same thing
+			// the panel picked before it could tell.
 			name:     "own session unknown",
 			own:      "",
+			sessions: []tmux.Session{mk("project", time.Second), mk("api", time.Hour)},
+			want:     "project",
+		},
+		{
+			// The pane outlived its session, or was moved. Nothing to anchor on,
+			// so the fallback has to hold rather than leave the cursor nowhere.
+			name:     "own session is gone from the list",
+			own:      "vanished",
 			sessions: []tmux.Session{mk("project", time.Second), mk("api", time.Hour)},
 			want:     "project",
 		},
@@ -465,8 +497,9 @@ func TestWatchAutoSelectSkipsOwnSession(t *testing.T) {
 	}
 }
 
-// Skipping is what happens when nobody chose. Choosing this pane's own session
-// is allowed, and a refresh two seconds later must not take it back.
+// Auto-selection is what happens when nobody chose. A deliberate choice — here
+// the session the panel lives in, but any of them — must survive the refresh
+// two seconds later.
 func TestWatchOwnSessionCanBeChosen(t *testing.T) {
 	now := time.Now()
 	mk := func(name string, since time.Duration) tmux.Session {

@@ -80,11 +80,19 @@ func main() {
 		Use:     "mux",
 		Short:   "TUI tmux session manager",
 		Version: resolveVersion(version, info, ok),
-		RunE:    runTUI,
+		RunE:    func(cmd *cobra.Command, args []string) error { return runTUI(ui.NewModel()) },
 		// Suppress cobra's default completion and help subcommands
 		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	}
 	rootCmd.SetVersionTemplate("mux {{.Version}}\n")
+
+	newCmd := &cobra.Command{
+		Use:   "new",
+		Short: "Open mux on the new-session prompt and attach to what it creates",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTUI(ui.NewSessionModel())
+		},
+	}
 
 	popupCmd := &cobra.Command{
 		Use:   "popup",
@@ -109,15 +117,19 @@ func main() {
 
 	var statusJSON bool
 	setupPanelCmd := &cobra.Command{
-		Use:   "setup-panel [key]",
-		Short: fmt.Sprintf("Add the panel keybinding and hooks to tmux config (default: %s)", tmux.DefaultPanelKey),
-		Args:  cobra.MaximumNArgs(1),
+		Use: "setup-panel [key] [focus-key]",
+		Short: fmt.Sprintf("Add the panel keybindings and hooks to tmux config (defaults: %s, %s)",
+			tmux.DefaultPanelKey, tmux.DefaultFocusKey),
+		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			key := tmux.DefaultPanelKey
+			key, focusKey := tmux.DefaultPanelKey, tmux.DefaultFocusKey
 			if len(args) > 0 {
 				key = args[0]
 			}
-			return tmux.SetupPanel(key)
+			if len(args) > 1 {
+				focusKey = args[1]
+			}
+			return tmux.SetupPanel(key, focusKey)
 		},
 	}
 
@@ -143,10 +155,14 @@ func main() {
 
 	var panelTarget string
 	var panelAuto bool
+	var panelFocus bool
 	panelCmd := &cobra.Command{
 		Use:   "panel",
 		Short: "Toggle the AI session panel pane in a tmux window",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if panelFocus {
+				return tmux.FocusPanel(panelTarget)
+			}
 			return tmux.TogglePanel(panelTarget, panelAuto)
 		},
 	}
@@ -154,6 +170,9 @@ func main() {
 		"pane whose window to toggle (default: current)")
 	panelCmd.Flags().BoolVar(&panelAuto, "auto", false,
 		"for hooks: skip windows whose session is only viewed from VS Code")
+	panelCmd.Flags().BoolVar(&panelFocus, "focus", false,
+		"move focus into the panel, or back out of it; opens and closes nothing")
+	panelCmd.MarkFlagsMutuallyExclusive("auto", "focus")
 
 	var navTarget string
 	navCmd := &cobra.Command{
@@ -171,7 +190,7 @@ func main() {
 	navCmd.Flags().StringVarP(&navTarget, "target", "t", "",
 		"pane whose window holds the panel (default: current)")
 
-	rootCmd.AddCommand(popupCmd, setupKeybindCmd, setupPanelCmd, statusCmd,
+	rootCmd.AddCommand(newCmd, popupCmd, setupKeybindCmd, setupPanelCmd, statusCmd,
 		watchCmd, panelCmd, navCmd)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -277,8 +296,18 @@ func joinWith(parts []string, sep string) string {
 	return result
 }
 
-func runTUI(cmd *cobra.Command, args []string) error {
-	p := tea.NewProgram(ui.NewModel(), tea.WithAltScreen())
+// runTUI drives the Bubble Tea program and carries out whatever the model asked
+// for on its way out.
+//
+// The starting model is a parameter so `mux` and `mux new` differ only in where
+// they open — the attach and detach handling below is shared, and a second copy
+// of it is how one of them would quietly stop attaching.
+func runTUI(model ui.Model) error {
+	// Mouse reporting is on so list rows can be clicked. The cost is that the
+	// terminal hands mux every mouse event instead of handling it itself, so
+	// wheel-scroll and drag-to-select stop working here; holding Shift still
+	// gets the terminal's own selection.
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	result, err := p.Run()
 	if err != nil {

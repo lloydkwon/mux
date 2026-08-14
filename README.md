@@ -72,6 +72,9 @@ See the actual terminal output of any session *before* you switch. Press `Tab` t
 ### AI CLI detection
 `claude`, `codex`, `aider`, `gemini` are automatically detected and highlighted with badges — instantly find the right session. Where the tool publishes its own state, that same badge shows what it is doing (see below).
 
+### Colours come from your terminal
+mux names roles and lets your scheme fill them in — it draws with ANSI palette colours rather than hex, so it reads correctly on a light scheme and a dark one without a setting to change. The selected row is reverse video, which is legible in any scheme.
+
 ### Git branch & worktree display
 Each session shows its current git branch. Linked worktrees are visually distinguished so you can tell at a glance which sessions are working on isolated branches.
 
@@ -227,22 +230,30 @@ Transitions into "working" are deliberately not logged: the badge already says t
 
 **Click a session to switch to it.** There is nothing here to read first — the panel deliberately does not render a copy of any session's screen, because the one you would want is usually the pane already sitting next to it.
 
-The session the panel itself sits in is marked `◀`. It is also skipped when the panel picks a starting row for the keyboard cursor: it is nearly always the top row — the list is ordered by how recently a state changed, and the session you are working in is the one whose state keeps changing — so the cursor would otherwise open on the one session where pressing enter goes nowhere.
+The session the panel itself sits in is marked `◀`, and it is where the cursor opens — the highlight and the mark agree on where you are. There is one panel per window, so switching sessions puts you in front of a fresh one, and what it opens on is the only thing it says about where you landed. Pressing enter there is not wasted either: it hands the focus back to the pane you were working in.
 
-For the keyboard, bind `mux nav`. It reaches the panel with `send-keys`, so the cursor moves without the focus leaving your own pane, and `enter` commits:
+**For the keyboard there are two ways in, and `mux setup-panel` installs both.**
+
+`prefix + Tab` steps into the panel and back out again. While you are in it the panel's own keys apply — `j`/`k` to move, `enter` to go to that session, `esc` to leave without choosing. Pressing `enter` hands the focus back to the pane you came from on its way to the new session, so the round trip needs no thought.
+
+`M-Up` / `M-Down` / `M-Enter` do the same steering **without ever moving the focus**: they reach the panel with `send-keys`, so the cursor moves while you keep typing in your own pane. That is still the panel's default mode; the focus key is for when you want to look through the list properly.
 
 ```tmux
+bind Tab        run-shell "/absolute/path/to/mux panel --focus -t #{pane_id}"
 bind -n M-Up    run-shell "/absolute/path/to/mux nav -t #{pane_id} up"
 bind -n M-Down  run-shell "/absolute/path/to/mux nav -t #{pane_id} down"
 bind -n M-Enter run-shell "/absolute/path/to/mux nav -t #{pane_id} enter"
 ```
 
-`up`, `down`, `top`, `bottom` and `enter` are the directions it takes. A window with no panel does nothing and exits cleanly, so the binding is safe to make global.
+`up`, `down`, `top`, `bottom` and `enter` are the directions `nav` takes. A window with no panel does nothing and exits cleanly, so both bindings are safe to make global.
+
+Note that `q` inside the panel *closes* it rather than leaving it — `esc` is the way out. A panel closed by accident comes back on the next window or session change, or immediately with `prefix + a`.
 
 The panel is a pane, and a pane belongs to one window — so a window that has never had one shows none. Switching sessions from the panel lands you in exactly such a window, which looks like the panel vanishing. `mux setup-panel` installs the binding and the hooks that keep one in every window you end up looking at:
 
 ```bash
-mux setup-panel                 # prefix + a toggles the panel; default key is `a`
+mux setup-panel                 # prefix + a toggles the panel, prefix + Tab steps into it
+                                # override both: mux setup-panel a Tab
 tmux source-file ~/.tmux.conf
 ```
 
@@ -258,7 +269,13 @@ set-hook -g client-session-changed 'run-shell "/absolute/path/to/mux panel --aut
 # … and the same line for each of the other hooks above
 ```
 
-`--auto` marks the hook path. It is an *ensure* rather than a toggle — it opens a missing panel and never closes one — which is what lets the resize hooks call the same command without the panel flapping. It stands down in three cases: a window narrower than 200 columns, a session only being viewed from a VS Code integrated terminal, and a window where you closed the panel yourself. Pressing the key overrides all three, since that is a decision rather than a default, and it clears the manual-off mark so the hooks resume.
+`--auto` marks the hook path. It is an *ensure* rather than a toggle — it opens a missing panel and never closes one — which is what lets the resize hooks call the same command without the panel flapping. It stands down in three cases: a window narrower than 140 columns, a session only being viewed from a VS Code integrated terminal, and a window where you closed the panel yourself. Pressing the key overrides all three, since that is a decision rather than a default, and it clears the manual-off mark so the hooks resume.
+
+**If the panel does not appear, suspect the width first** — the stand-down is silent by design, since these hooks fire constantly and an error per window would be worse. 140 is the panel's own 48 columns plus a work pane worth working in; the same number is what an open panel leaves below, so it cannot squeeze you out of a window it would not have opened in. Move the bar for your own screen:
+
+```bash
+tmux set -g @mux_panel_min_width 120
+```
 
 The width rule is how "not on a small screen" is decided. A mobile SSH client cannot be identified by environment the way VS Code can, and the real problem was never the device: with `aggressive-resize`, attaching from a phone shrinks the window to around 54 columns while the panel holds its 48, leaving the work pane five. The threshold also separates the terminals in use — VS Code's integrated terminal sits at about 150 columns, a full one at 269 — and it reaches where the environment check cannot, since a window with no client attached has nobody to inspect but still has a size.
 
@@ -294,6 +311,8 @@ Pair with [skimd](https://github.com/lunemis/skimd) to review AI-generated markd
 | Key | Action |
 |---|---|
 | `j` / `k` | Move down / up |
+| Click | Move the cursor to that row and preview it |
+| Double-click | Attach — same as `Enter` on that row |
 | `g` / `G` | Jump to first / last |
 | `Tab` / `→` / `l` | Expand session → windows → panes |
 | `Shift+Tab` / `←` / `h` | Collapse one level |
@@ -308,7 +327,7 @@ Pair with [skimd](https://github.com/lunemis/skimd) to review AI-generated markd
 | `?` | Help — marker legend and the full key list |
 | `q` | Quit |
 
-`?` opens a full-screen page explaining every marker a row can carry (`▶`/`▼`, `*`/`○`, `#N`, the elapsed column, `⌥`, the AI badge) alongside the keys above — the footer bar can list a key but cannot explain a glyph. The page is written in Korean, matching `README.ko.md`.
+`?` opens a full-screen page explaining every marker a row can carry (`▶`/`▼`, the brighter name of the attached session, `#N`, the elapsed column, `⌥`, the AI badge) alongside the keys above — the footer bar can list a key but cannot explain a glyph. The page is written in Korean, matching `README.ko.md`.
 
 ## Requirements
 

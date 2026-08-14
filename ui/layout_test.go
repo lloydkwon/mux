@@ -6,6 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
+
 	"github.com/lloydkwon/mux/tmux"
 )
 
@@ -117,4 +121,119 @@ func truncStr(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// One frame around both columns rather than two boxes side by side: the seam of
+// two adjacent border characters is what this replaced, so the shape is worth
+// pinning.
+func TestDrawFrameShape(t *testing.T) {
+	for _, tc := range []struct{ left, right, height int }{
+		{10, 20, 3}, {1, 1, 1}, {40, 60, 12},
+	} {
+		leftBlock := blockOf(tc.left, tc.height, "L")
+		rightBlock := blockOf(tc.right, tc.height, "R")
+
+		out := ansi.Strip(drawFrame(leftBlock, rightBlock, tc.left, tc.right, tc.height))
+		lines := strings.Split(out, "\n")
+
+		if want := tc.height + 2; len(lines) != want {
+			t.Fatalf("%+v: %d lines, want %d", tc, len(lines), want)
+		}
+		wantWidth := tc.left + tc.right + 3
+		for i, l := range lines {
+			if got := ansi.StringWidth(l); got != wantWidth {
+				t.Errorf("%+v: line %d measures %d cells, want %d", tc, i, got, wantWidth)
+			}
+		}
+		if got := lines[0]; !strings.HasPrefix(got, "╭") || !strings.HasSuffix(got, "╮") {
+			t.Errorf("%+v: top rule = %q", tc, got)
+		}
+		// The divider sits between the columns, once, on every row.
+		for i, l := range lines {
+			divider := []rune(l)[tc.left+1]
+			want := map[bool]rune{true: '┬', false: '│'}[i == 0]
+			if i == len(lines)-1 {
+				want = '┴'
+			}
+			if divider != want {
+				t.Errorf("%+v: line %d divider = %q, want %q", tc, i, divider, want)
+			}
+		}
+	}
+}
+
+// blockOf builds a w×h block of fill for the frame to wrap.
+func blockOf(w, h int, fill string) string {
+	lines := make([]string, h)
+	for i := range lines {
+		lines[i] = strings.Repeat(fill, w)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// The palette is the terminal's, not mux's. A hex value creeping back in is the
+// regression this guards: it would be picked against whichever background the
+// author happened to be using, and be unreadable on the other one.
+func TestPaletteIsTheTerminalScheme(t *testing.T) {
+	for name, c := range map[string]lipgloss.TerminalColor{
+		"colorAccent":   colorAccent,
+		"colorSuccess":  colorSuccess,
+		"colorDanger":   colorDanger,
+		"colorPrimary":  colorPrimary,
+		"colorMuted":    colorMuted,
+		"colorBorder":   colorBorder,
+		"stateWorking":  colorStateWorking,
+		"stateReady":    colorStateReady,
+		"stateApproval": colorStateApproval,
+	} {
+		if _, ok := c.(lipgloss.ANSIColor); !ok {
+			t.Errorf("%s is %T, want an ANSI palette index", name, c)
+		}
+	}
+
+	// The AI tools' colours go through the same rule, from the other package.
+	for _, name := range []string{"claude", "codex", "aider", "gemini"} {
+		tool, ok := tmux.LookupAITool(name)
+		if !ok {
+			t.Fatalf("%s is missing from the registry", name)
+		}
+		if strings.HasPrefix(tool.Color, "#") {
+			t.Errorf("%s is %q, want an ANSI palette index", name, tool.Color)
+		}
+	}
+}
+
+// Reverse video swaps the terminal's own two colours, so a foreground set on top
+// of it is painted as a *background* — a coloured span inside a selected row
+// would come out as a block. renderRow drops segment colours there, and this is
+// what stops someone from putting the state colours back.
+func TestSelectedRowDropsSegmentColors(t *testing.T) {
+	// Tests do not run on a terminal, so lipgloss would otherwise strip every
+	// escape and the assertions below would pass on an empty string.
+	restore := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI)
+	t.Cleanup(func() { lipgloss.SetColorProfile(restore) })
+
+	segs := []rowSeg{
+		{text: "name"},
+		{text: " state", color: colorDanger},
+		{text: " branch", color: colorMuted},
+	}
+
+	selected := renderRow(segs, 30, true)
+	if !strings.Contains(selected, "\x1b[7m") {
+		t.Errorf("selected row is not reverse video: %q", selected)
+	}
+	// ANSI 1 as a foreground is "31"; the muted grey is "90". Neither may appear.
+	for _, sgr := range []string{"31", "90"} {
+		if strings.Contains(selected, "\x1b["+sgr+"m") {
+			t.Errorf("selected row still sets colour %s: %q", sgr, selected)
+		}
+	}
+
+	// Unselected, the same segments keep their colours — the drop is about the
+	// highlight, not about giving up colour.
+	if plain := renderRow(segs, 30, false); !strings.Contains(plain, "\x1b[31m") {
+		t.Errorf("unselected row lost its colour: %q", plain)
+	}
 }

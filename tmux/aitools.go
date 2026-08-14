@@ -8,11 +8,17 @@ type AITool struct {
 }
 
 // aiToolMap is the single source of truth for known AI CLI tools.
+//
+// The colours are ANSI palette indices rather than hex, for the reason spelled
+// out on ui's palette: the terminal's own scheme knows what reads on its own
+// background. As hex these were amber, blue, mint and lilac — all of them picked
+// against a dark terminal, and all of them near-invisible on a light one (the
+// worst reached 1.7:1). What matters here is only that the four are told apart.
 var aiToolMap = map[string]AITool{
-	"claude": {Name: "claude", Icon: "✦", Color: "#F59E0B"},
-	"codex":  {Name: "codex", Icon: "◈", Color: "#60A5FA"},
-	"aider":  {Name: "aider", Icon: "⬡", Color: "#34D399"},
-	"gemini": {Name: "gemini", Icon: "✧", Color: "#A78BFA"},
+	"claude": {Name: "claude", Icon: "✦", Color: "3"}, // yellow
+	"codex":  {Name: "codex", Icon: "◈", Color: "4"},  // blue
+	"aider":  {Name: "aider", Icon: "⬡", Color: "2"},  // green
+	"gemini": {Name: "gemini", Icon: "✧", Color: "5"}, // magenta
 }
 
 // AIState is the coarse, display-oriented state of an AI CLI session. Only a
