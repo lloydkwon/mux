@@ -8,10 +8,15 @@ import (
 )
 
 const (
-	// panelWidth is the panel pane's column count when the session has no
-	// remembered width — every new session, and every session after a tmux
-	// server restart.
-	panelWidth = "48"
+	// panelWidthNarrow is the panel pane's column count on a window that cannot
+	// spare more: the session list alone, which is all the panel ever showed.
+	panelWidthNarrow = 48
+
+	// panelWidthWide also fits the detail column beside the list, which is the
+	// point of the panel now — pick a session and read what it is asking without
+	// leaving the pane you are typing in. Splits into a 33-column list and a
+	// 51-column detail, both comfortably above their minimums.
+	panelWidthWide = 84
 
 	// panelWidthOption remembers a session's panel width as a tmux user option.
 	//
@@ -30,6 +35,19 @@ const (
 	// panel.
 	panelCommand = "mux watch"
 )
+
+// defaultPanelWidth is how wide a panel opens in a window that has never had
+// one. A remembered width always wins over this.
+//
+// An unreadable window width counts as narrow. Opening too small is a panel the
+// user drags wider once; opening too large on a window that cannot spare it is
+// the failure mode MinWindowWidth exists to prevent.
+func defaultPanelWidth(windowWidth int) int {
+	if windowWidth >= MinWindowWidth {
+		return panelWidthWide
+	}
+	return panelWidthNarrow
+}
 
 // TogglePanel opens or closes the AI session panel in target's window. Pass ""
 // for the current pane.
@@ -70,12 +88,17 @@ func TogglePanel(target string, auto bool) error {
 		return nil
 	}
 
+	// The window's width answers two questions at once: whether a hook-created
+	// panel is worth the columns, and how wide a first-time panel should open.
+	// Read once — an error leaves it 0, which reads as "narrow" to both.
+	winWidth, _ := WindowWidth(target)
+
 	session, sessionErr := SessionForPane(target)
 	if auto {
 		if sessionErr == nil && SessionOnlyInVSCode(session) {
 			return nil
 		}
-		if w, err := WindowWidth(target); err == nil && w < MinWindowWidth {
+		if winWidth > 0 && winWidth < MinWindowWidth {
 			return nil
 		}
 	} else {
@@ -91,15 +114,18 @@ func TogglePanel(target string, auto bool) error {
 	// Open at the width this session was last dragged to. Doing it here rather
 	// than resizing after the fact means the pane never appears at the wrong
 	// size first, and `mux watch` has no startup race with its own resize.
-	width := panelWidth
+	width := defaultPanelWidth(winWidth)
 	if sessionErr == nil {
 		if w := PanelWidth(session); w > 0 {
-			width = strconv.Itoa(w)
+			width = w
 		}
 	}
 
-	// -d keeps the focus in the pane you were working in.
-	args := []string{"split-window", "-d", "-h", "-l", width}
+	// -d keeps the focus in the pane you were working in. -b puts the new pane
+	// before the current one, which for a horizontal split means the left edge:
+	// the list is what you glance at, and a glance goes left before it goes
+	// right.
+	args := []string{"split-window", "-d", "-hb", "-l", strconv.Itoa(width)}
 	if dir != "" {
 		// Start the panel in the window's own directory. Without -c the new pane
 		// inherits the cwd of whatever invoked `mux panel` — a shell, or tmux
