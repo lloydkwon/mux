@@ -26,12 +26,15 @@ func ListSessions() ([]Session, error) {
 		return nil, nil
 	}
 
-	// One scan covers every session, so it is hoisted out of the loop.
+	// One scan covers every session, so it is hoisted out of the loop. Screen
+	// detection is hoisted for the same reason and costs one more round trip:
+	// it batches every pane's capture into a single tmux invocation.
 	statuses := ClaudeStatuses()
+	screens := ScreenStates()
 
 	sessions := make([]Session, 0, len(lines))
 	for _, line := range lines {
-		s, err := parseLine(line, statuses)
+		s, err := parseLine(line, statuses, screens)
 		if err != nil {
 			continue
 		}
@@ -77,8 +80,9 @@ func SessionForTarget(target string) (Session, error) {
 }
 
 // parseLine builds a Session from one list-sessions line. statuses maps tmux
-// session names to live Claude state and may be nil.
-func parseLine(line string, statuses map[string]ClaudeStatus) (Session, error) {
+// session names to live Claude state and screens to screen-detected state;
+// either may be nil.
+func parseLine(line string, statuses map[string]ClaudeStatus, screens map[string]ScreenState) (Session, error) {
 	parts := strings.SplitN(line, "|", 8)
 	if len(parts) < 8 {
 		return Session{}, fmt.Errorf("unexpected format: %s", line)
@@ -106,8 +110,20 @@ func parseLine(line string, statuses map[string]ClaudeStatus) (Session, error) {
 		IsWorktree:    gitInfo.IsWorktree,
 	}
 
+	// Screen detection first, then the state file over the top of it. A tool
+	// reporting its own state is better evidence than reading its screen: it
+	// knows the difference between thinking and waiting for a tool call, and it
+	// does not go blind when the user opens a transcript. Screen detection is
+	// what covers the other nineteen agents, and Claude in the moments before
+	// its state file exists.
+	if sc, ok := screens[s.Name]; ok && sc.State != AIStateNone {
+		s.AIState = sc.State
+		s.AITool = sc.Tool
+	}
+
 	if st, ok := statuses[s.Name]; ok {
 		s.AIState = st.State
+		s.AITool = "claude"
 		s.AIWaitingFor = st.WaitingFor
 		s.AISince = st.Since
 		s.AIPID = st.PID

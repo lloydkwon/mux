@@ -64,6 +64,9 @@ func withMock(t *testing.T, fn func(m *mockRunner)) {
 	claudeStatusCacheMu.Lock()
 	claudeStatusCache = cachedClaudeStatuses{}
 	claudeStatusCacheMu.Unlock()
+	// Screen detection caches a whole map for a second, so without this the
+	// first test to run would keep answering for every test after it.
+	resetScreenCache()
 	oldHome := homeDir
 	homeDir = func() (string, error) { return t.TempDir(), nil }
 	// Same reason, for the panel's remembered width: TogglePanel consults it to
@@ -79,6 +82,7 @@ func withMock(t *testing.T, fn func(m *mockRunner)) {
 		claudeStatusCacheMu.Lock()
 		claudeStatusCache = cachedClaudeStatuses{}
 		claudeStatusCacheMu.Unlock()
+		resetScreenCache()
 	}()
 	fn(m)
 }

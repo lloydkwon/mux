@@ -59,7 +59,7 @@ func TestParseLine(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s, err := parseLine(tt.line, nil)
+			s, err := parseLine(tt.line, nil, nil)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")

@@ -18,10 +18,15 @@ type Session struct {
 	GitBranch     string // current git branch, empty if not a git repo
 	IsWorktree    bool   // true if Directory is a linked git worktree
 
-	// Live AI CLI state, published by the tool itself (today only Claude, via
-	// ~/.claude/sessions). Unlike ActiveCommand these cover the whole session,
-	// not just its active pane.
-	AIState      AIState   // AIStateNone when no live AI state
+	// Live AI CLI state. Two providers reach this: the tool's own state file
+	// (today only Claude, via ~/.claude/sessions) and screen detection
+	// (tmux/detect, twenty agents). The state file wins where both answer,
+	// because a tool reporting on itself beats reading its screen.
+	AIState AIState // AIStateNone when no live AI state
+	// AITool names the tool the state belongs to, as an aiToolMap key. Empty
+	// when no provider answered, in which case the tool is inferred from
+	// ActiveCommand instead.
+	AITool       string
 	AIWaitingFor string    // why the tool is blocked; only for AIStateApproval
 	AISince      time.Time // when the current state began; zero if unknown
 	AIPID        int       // pid of the process publishing the state; 0 if none

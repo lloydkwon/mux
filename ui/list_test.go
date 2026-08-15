@@ -23,6 +23,12 @@ var allAIStates = []tmux.AIState{
 // equals drawn width.
 func TestGlyphWidthsAreStable(t *testing.T) {
 	oneCell := []string{"▶", "▼", "◀", "○", "*", "✦", "◈", "⬡", "✧", "⌥", "─"}
+	// Screen detection brought sixteen more tools, and every one of their icons
+	// shares the same badge slot. Taken from the map rather than copied here, so
+	// a tool added later cannot skip this check.
+	for _, tool := range tmux.AITools() {
+		oneCell = append(oneCell, tool.Icon)
+	}
 	for _, g := range oneCell {
 		if w := ansi.StringWidth(g); w != 1 {
 			t.Errorf("glyph %q measures %d cells, want 1", g, w)
