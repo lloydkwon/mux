@@ -72,6 +72,12 @@ type watchModel struct {
 	winWidth    int
 	targetWidth int
 
+	// showHeader turns the session header on. Off unless @mux_panel_header says
+	// otherwise, and resolved once at startup for the same reason
+	// minWindowWidth is: a preference does not change between ticks, and the
+	// panel should not spend a show-options every two seconds asking.
+	showHeader bool
+
 	// minWindowWidth is the window width below which this pane leaves, resolved
 	// once at startup so applyResizeWith stays pure and a resize costs no extra
 	// tmux call. Zero means "not resolved" and reads as the default.
@@ -112,7 +118,11 @@ func RunWatch() error {
 	_ = tmux.MarkPanelPane(selfPane())
 
 	_, err = tea.NewProgram(
-		watchModel{ownSession: own, minWindowWidth: tmux.MinWindowWidth()},
+		watchModel{
+			ownSession:     own,
+			minWindowWidth: tmux.MinWindowWidth(),
+			showHeader:     tmux.PanelHeaderEnabled(),
+		},
 		tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
@@ -514,7 +524,7 @@ func (m watchModel) sessionAtRow(y int) string {
 // takes come off the bottom of the event log, and fixedBox does that clipping
 // silently.
 func (m watchModel) sessionLines() []notifyLine {
-	return notifyLines(m.sessions, m.events, m.width, m.height, m.selected, m.ownSession)
+	return notifyLines(m.sessions, m.events, m.width, m.height, m.selected, m.ownSession, m.showHeader)
 }
 
 func (m watchModel) View() string {

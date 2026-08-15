@@ -142,7 +142,7 @@ type notifyLine struct {
 //
 // The two halves stay separate functions because they answer different questions
 // and degrade differently, not because anything places them apart.
-func notifyLines(sessions []tmux.Session, events []aiEvent, width, height int, selected, own string) []notifyLine {
+func notifyLines(sessions []tmux.Session, events []aiEvent, width, height int, selected, own string, showHeader bool) []notifyLine {
 	lines := notifySessionLines(sessions, width, selected, own)
 	if len(lines) == 0 && len(events) == 0 {
 		return nil
@@ -155,6 +155,9 @@ func notifyLines(sessions []tmux.Session, events []aiEvent, width, height int, s
 		lines = append(lines, notifyLine{text: blankRow(width)})
 	}
 	lines = append(lines, notifyEventLines(events, width)...)
+	if !showHeader {
+		return lines
+	}
 	return append(panelHeaderLines(sessions, width, height, selected), lines...)
 }
 
@@ -184,6 +187,14 @@ const (
 // indexes the same slice, so clicks keep landing on the rows they name, and
 // sessionOrder skips empty-session lines, so the keyboard cursor cannot stop
 // here.
+//
+// Off unless @mux_panel_header says otherwise, and the default is the honest
+// one: `mux border` now puts these same facts on the top border of the pane you
+// are in, so in the state the panel opens in — cursor on your own session, per
+// autoSelect — the header is a second copy of the line right beside it. What it
+// still answers is the case the border cannot reach: move the cursor with
+// M-Up/M-Down and it describes a session you are *not* in, which nothing else
+// shows. That is worth keeping and not worth showing by default.
 func panelHeaderLines(sessions []tmux.Session, width, height int, selected string) []notifyLine {
 	if width <= 0 || height < panelHeaderShortHeight || selected == "" {
 		return nil

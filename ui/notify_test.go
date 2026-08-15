@@ -151,7 +151,7 @@ func TestPushEventsCapsAndOrders(t *testing.T) {
 func notifyOrder(ss []tmux.Session) []string {
 	var got []string
 	var last string
-	for _, l := range notifyLines(ss, nil, 40, 0, "", "") {
+	for _, l := range notifyLines(ss, nil, 40, 0, "", "", false) {
 		if l.session != "" && l.session != last {
 			got = append(got, l.session)
 		}
@@ -213,7 +213,7 @@ func TestNotifySpacingIsClickable(t *testing.T) {
 	blocked.AIWaitingFor = "Bash: git push"
 	sessions := []tmux.Session{first, blocked}
 
-	rows := notifyLines(sessions, nil, 40, 0, "", "")
+	rows := notifyLines(sessions, nil, 40, 0, "", "", false)
 	owners := map[string]int{}
 	for _, l := range rows {
 		if l.session != "" {
@@ -240,7 +240,7 @@ func TestNotifyWorktreeGlyph(t *testing.T) {
 	tree.GitBranch = "feat"
 	tree.IsWorktree = true
 
-	out := ansi.Strip(strings.Join(notifyTexts(notifyLines([]tmux.Session{plain, tree}, nil, 60, 0, "", "")), "\n"))
+	out := ansi.Strip(strings.Join(notifyTexts(notifyLines([]tmux.Session{plain, tree}, nil, 60, 0, "", "", false)), "\n"))
 	if !strings.Contains(out, "⌥ main") {
 		t.Errorf("a plain repo did not render a single glyph:\n%s", out)
 	}
@@ -473,4 +473,41 @@ func TestPanelHeaderRowWidths(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The header is off unless asked for. With it off the panel must be exactly what
+// it was before the header existed — including the row the first session lands
+// on, which is what every click maps through.
+func TestNotifyLinesHeaderIsOptIn(t *testing.T) {
+	ss := []tmux.Session{headerSession("mux")}
+
+	off := notifyLines(ss, nil, 40, 30, "mux", "", false)
+	on := notifyLines(ss, nil, 40, 30, "mux", "", true)
+
+	// The path is the tell: the session row carries a name, a state and a branch
+	// of its own, but only the header prints the directory.
+	offText := ansi.Strip(strings.Join(notifyTexts(off), "\n"))
+	if strings.Contains(offText, "/work/projects/mux") {
+		t.Errorf("the header drew with showHeader=false:\n%s", offText)
+	}
+	if !strings.Contains(ansi.Strip(strings.Join(notifyTexts(on), "\n")), "/work/projects/mux") {
+		t.Error("the header did not draw with showHeader=true")
+	}
+
+	// Row 0 is the 🔔 heading and row 1 the blank under it, exactly as before.
+	if got := firstSessionOf(off); got != 2 {
+		t.Errorf("first session row = %d with the header off, want 2", got)
+	}
+	if got := firstSessionOf(on); got <= 2 {
+		t.Errorf("first session row = %d with the header on, want it pushed down", got)
+	}
+}
+
+func firstSessionOf(lines []notifyLine) int {
+	for i, l := range lines {
+		if l.session != "" {
+			return i
+		}
+	}
+	return -1
 }

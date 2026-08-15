@@ -976,3 +976,41 @@ func TestPaneActive(t *testing.T) {
 		}
 	})
 }
+
+// Off unless asked for, and only for values a person would plausibly write.
+// A typo must leave the panel as it was rather than putting back chrome the
+// user turned off.
+func TestPanelHeaderEnabled(t *testing.T) {
+	tests := []struct {
+		value string
+		want  bool
+	}{
+		{"", false},
+		{"on", true},
+		{"On", true},
+		{"1", true},
+		{"true", true},
+		{"yes", true},
+		{" on \n", true},
+		{"off", false},
+		{"0", false},
+		{"banana", false},
+	}
+	for _, tc := range tests {
+		withMock(t, func(m *mockRunner) {
+			m.OnOutput([]byte(tc.value), nil, "tmux", "show-options", "-gqv", panelHeaderOption)
+			if got := PanelHeaderEnabled(); got != tc.want {
+				t.Errorf("value %q: enabled=%v, want %v", tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+// A tmux server that will not answer is not a reason to draw chrome.
+func TestPanelHeaderEnabledOnError(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		if PanelHeaderEnabled() {
+			t.Error("an unanswered show-options turned the header on")
+		}
+	})
+}

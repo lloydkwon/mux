@@ -362,6 +362,35 @@ func MinWindowWidth() int {
 	return w
 }
 
+// panelHeaderOption turns the panel's session header on. Off unless set.
+//
+// Global and read-only, like @mux_panel_min_width and unlike @mux_panel_width or
+// @mux_panel_off: this is a preference someone writes in their tmux.conf, not
+// state mux keeps.
+const panelHeaderOption = "@mux_panel_header"
+
+// PanelHeaderEnabled reports whether the panel should draw its session header.
+//
+// Default off, because `mux border` now puts the same facts on the top border of
+// the pane you are in. What the header still answers is the case the border
+// cannot reach — the details of a session you have *selected* but are not in —
+// so it stays available rather than being deleted.
+//
+// Anything unrecognised reads as off. A typo should leave the panel exactly as
+// it was, not put chrome back that the user turned off.
+func PanelHeaderEnabled() bool {
+	out, err := runner.Output("tmux", "show-options", "-gqv", panelHeaderOption)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(string(out))) {
+	case "on", "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
 // clientEnvHas is the /proc lookup, replaceable in tests.
 var clientEnvHas = procEnvHas
 
