@@ -133,8 +133,8 @@ func scanScreenStates() map[string]ScreenState {
 	return states
 }
 
-// activeAgentPanes lists the active pane of every session, keeping only those
-// running an agent the engine has rules for.
+// activeAgentPanes finds one agent pane per session: the first pane, in any
+// window, running something the engine has rules for.
 //
 // One `list-panes -a` covers the whole server. #{pane_title} is the pane's
 // terminal title, which is where six manifests keep their strongest rules —
@@ -156,10 +156,16 @@ func activeAgentPanes() []agentPane {
 			continue
 		}
 		session := fields[0]
-		// list-panes -a walks windows in order; the first pane seen for a
-		// session is its active one only if we ask for that, so instead take
-		// the first and accept the same blind spot ActiveCommand has: an agent
-		// in a background window is not seen.
+		// One pane per session, and it is the first that turns out to be
+		// running an agent — not simply the first pane, which is why the
+		// bookkeeping below happens after the Supported check.
+		//
+		// That detail is what makes this cover more than ActiveCommand does.
+		// `list-panes -a` walks every window, so an agent sitting in a
+		// background window is still found, and so is one sharing its window
+		// with something else — mux's own sidebar takes pane 0 of every window
+		// it manages, which would otherwise hide the agent beside it in every
+		// session the user has.
 		if seen[session] {
 			continue
 		}
