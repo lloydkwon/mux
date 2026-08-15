@@ -30,6 +30,12 @@ type Session struct {
 	AIWaitingFor string    // why the tool is blocked; only for AIStateApproval
 	AISince      time.Time // when the current state began; zero if unknown
 	AIPID        int       // pid of the process publishing the state; 0 if none
+
+	// WindowIndex and PaneIndex locate a pane inside the session. They are
+	// strings because nothing does arithmetic on them and tmux may render either
+	// as empty when it has nothing to report.
+	WindowIndex string
+	PaneIndex   string
 }
 
 // Window represents a single tmux window inside a session.

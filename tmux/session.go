@@ -8,7 +8,11 @@ import (
 	"time"
 )
 
-const listFormat = "#{session_name}|#{session_windows}|#{session_created}|#{session_attached}|#{pane_current_path}|#{session_activity}|#{pane_current_command}|#{pane_pid}"
+// The last two fields are the pane's own coordinates. From list-sessions they
+// name the active pane of the active window; read through display-message by
+// SessionForTarget they name the target pane, which is what a border drawn above
+// that pane should say.
+const listFormat = "#{session_name}|#{session_windows}|#{session_created}|#{session_attached}|#{pane_current_path}|#{session_activity}|#{pane_current_command}|#{pane_pid}|#{window_index}|#{pane_index}"
 
 // ListSessions returns all tmux sessions sorted by attached status and recent activity.
 func ListSessions() ([]Session, error) {
@@ -91,8 +95,10 @@ func SessionForTarget(target string) (Session, error) {
 // session names to live Claude state and screens to screen-detected state;
 // either may be nil.
 func parseLine(line string, statuses map[string]ClaudeStatus, screens map[string]ScreenState) (Session, error) {
-	parts := strings.SplitN(line, "|", 8)
-	if len(parts) < 8 {
+	// The path may contain the separator, so it is not split off by count — but
+	// it is field 5 of a fixed layout, and everything after it is separator-free.
+	parts := strings.SplitN(line, "|", 10)
+	if len(parts) < 10 {
 		return Session{}, fmt.Errorf("unexpected format: %s", line)
 	}
 
@@ -116,6 +122,8 @@ func parseLine(line string, statuses map[string]ClaudeStatus, screens map[string
 		PanePID:       panePID,
 		GitBranch:     gitInfo.Branch,
 		IsWorktree:    gitInfo.IsWorktree,
+		WindowIndex:   parts[8],
+		PaneIndex:     parts[9],
 	}
 
 	// Screen detection first, then the state file over the top of it. A tool

@@ -58,7 +58,11 @@ func TestBorderLineDropsDetailToFit(t *testing.T) {
 	}
 
 	// The branch goes before the tool's name does.
-	noBranch := BorderLine(s, 48)
+	//
+	// The widths here moved out when the line gained the state's age (and the
+	// pane's coordinates, when tmux reports them): the same rung now needs a few
+	// more cells. What the numbers pin is the order, not the arithmetic.
+	noBranch := BorderLine(s, 56)
 	if strings.Contains(noBranch, "⌥") {
 		t.Errorf("line %q kept a branch it had no room for", noBranch)
 	}
@@ -66,12 +70,19 @@ func TestBorderLineDropsDetailToFit(t *testing.T) {
 		t.Errorf("line %q dropped the tool before the branch", noBranch)
 	}
 
-	// Then the tool's name, leaving the glyph, which is the state.
-	noTool := BorderLine(s, 36)
-	if strings.Contains(noTool, "claude") {
+	// Then the tool's name, then the age, leaving the glyph — which is the state.
+	noTool := BorderLine(s, 48)
+	if !strings.Contains(noTool, "1m") {
+		t.Errorf("line %q dropped the age before the tool name", noTool)
+	}
+	noAge := BorderLine(s, 40)
+	if strings.Contains(noAge, "1m") {
+		t.Errorf("line %q kept an age it had no room for", noAge)
+	}
+	if strings.Contains(noAge, "claude") {
 		t.Errorf("line %q kept a tool name it had no room for", noTool)
 	}
-	if !strings.Contains(noTool, tmux.AIStateReady.Icon()) {
+	if !strings.Contains(noAge, tmux.AIStateReady.Icon()) {
 		t.Errorf("line %q dropped the state glyph before the tool name", noTool)
 	}
 
@@ -111,5 +122,41 @@ func TestBorderLineNeedsASession(t *testing.T) {
 	}
 	if got := BorderLine(borderSession(), 0); got != "" {
 		t.Errorf("zero width rendered %q", got)
+	}
+}
+
+// How long the state has held is the difference between "waiting on me" and
+// "waiting on me since twelve minutes ago". The pane below cannot say it — a
+// finished turn looks the same on screen after one second as after an hour.
+func TestBorderLineShowsHowLongTheStateHasHeld(t *testing.T) {
+	s := borderSession()
+	s.AISince = time.Now().Add(-12 * time.Minute)
+
+	if got := BorderLine(s, 120); !strings.Contains(got, "12m") {
+		t.Errorf("line %q does not say how long the state has held", got)
+	}
+
+	// No state, no age: an idle session has nothing to have been idle *since*.
+	plain := tmux.Session{Name: "shell", Directory: "/home/u/src"}
+	if got := BorderLine(plain, 120); strings.Contains(got, "m ") {
+		t.Errorf("line %q dated a state it does not have", got)
+	}
+}
+
+// Two panes of one session are otherwise the same line twice, so the pane's own
+// coordinates travel with the name rather than as a droppable extra.
+func TestBorderLineCarriesPaneCoordinates(t *testing.T) {
+	s := borderSession()
+	s.WindowIndex, s.PaneIndex = "2", "1"
+
+	got := BorderLine(s, 120)
+	if !strings.Contains(got, "[ mux ] 2:1") {
+		t.Errorf("line %q does not locate the pane", got)
+	}
+
+	// tmux may report neither, and half a coordinate says nothing.
+	s.PaneIndex = ""
+	if got := BorderLine(s, 120); strings.Contains(got, "2:") {
+		t.Errorf("line %q printed half a coordinate", got)
 	}
 }

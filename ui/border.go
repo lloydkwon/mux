@@ -46,16 +46,33 @@ func BorderLine(s tmux.Session, width int) string {
 
 	// Most complete first: the ladder returns the first line that fits, so each
 	// entry is one detail poorer than the one above it.
-	badgeFull, badgeShort := "", ""
-	if hasAI {
-		badgeFull, badgeShort = glyph+" "+tool, glyph
+	// How long the state has held. It is the difference between "waiting on me"
+	// and "waiting on me since twelve minutes ago", and the pane below cannot
+	// say it — a finished turn looks the same on screen after one second as
+	// after an hour.
+	elapsed := ""
+	if s.AIState != tmux.AIStateNone && !s.AISince.IsZero() {
+		elapsed = compactAgo(s.AISince)
 	}
+
+	badgeFull, badgeMid, badgeShort := "", "", ""
+	if hasAI {
+		badgeFull = borderJoinInner(glyph, elapsed, tool)
+		badgeMid = borderJoinInner(glyph, elapsed)
+		badgeShort = glyph
+	}
+	// The pane's own coordinates, kept with the name because together they are
+	// the identity: two panes of one session are otherwise the same line twice.
 	name := "[ " + s.Name + " ]"
+	if s.WindowIndex != "" && s.PaneIndex != "" {
+		name += " " + s.WindowIndex + ":" + s.PaneIndex
+	}
 	path := shortenPath(s.Directory)
 
 	for _, parts := range [][]string{
 		{name, path, badgeFull, branch},
 		{name, path, badgeFull},  // the branch is context, and the panel repeats it
+		{name, path, badgeMid},   // the tool's name goes before its state does
 		{name, path, badgeShort}, // the glyph is the state; the name is its label
 		{name, badgeShort},
 		{name},
@@ -84,4 +101,17 @@ func borderJoin(parts []string) string {
 		return ""
 	}
 	return " " + strings.Join(kept, "  ") + " "
+}
+
+// borderJoinInner joins the parts of one cluster with a single space, so an
+// absent one leaves no gap behind it. Clusters are separated by two spaces in
+// borderJoin; this is the space inside them.
+func borderJoinInner(parts ...string) string {
+	kept := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			kept = append(kept, p)
+		}
+	}
+	return strings.Join(kept, " ")
 }

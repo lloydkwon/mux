@@ -16,7 +16,7 @@ func TestParseLine(t *testing.T) {
 	}{
 		{
 			name: "valid line",
-			line: "my-session|2|1711900000|1|/home/user/project|1711900100|bash|12345",
+			line: "my-session|2|1711900000|1|/home/user/project|1711900100|bash|12345|0|1",
 			check: func(t *testing.T, s Session) {
 				if s.Name != "my-session" {
 					t.Errorf("Name = %q, want %q", s.Name, "my-session")
@@ -34,7 +34,7 @@ func TestParseLine(t *testing.T) {
 		},
 		{
 			name: "not attached",
-			line: "dev|1|1711900000|0|/tmp|1711900050|zsh|99999",
+			line: "dev|1|1711900000|0|/tmp|1711900050|zsh|99999|0|0",
 			check: func(t *testing.T, s Session) {
 				if s.Attached {
 					t.Error("Attached = true, want false")
@@ -48,7 +48,7 @@ func TestParseLine(t *testing.T) {
 		},
 		{
 			name: "session with pipe in path still works with SplitN",
-			line: "test|1|" + itoa(now) + "|0|/home/user|" + itoa(now) + "|bash|123",
+			line: "test|1|" + itoa(now) + "|0|/home/user|" + itoa(now) + "|bash|123|0|0",
 			check: func(t *testing.T, s Session) {
 				if s.Name != "test" {
 					t.Errorf("Name = %q, want %q", s.Name, "test")
