@@ -80,7 +80,7 @@ func main() {
 		Use:     "mux",
 		Short:   "TUI tmux session manager",
 		Version: resolveVersion(version, info, ok),
-		RunE:    func(cmd *cobra.Command, args []string) error { return runTUI(ui.NewModel()) },
+		RunE:    func(cmd *cobra.Command, args []string) error { return runRoot() },
 		// Suppress cobra's default completion and help subcommands
 		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	}
@@ -214,6 +214,41 @@ func main() {
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+// runRoot opens mux, from a popup when it can get one.
+//
+// `prefix + m` draws mux in a display-popup: no panel beside it, no border title
+// above it, just the list. Typed in a terminal that is not in tmux, mux drew
+// itself in that terminal instead — the same program, a different shape. This
+// makes the two agree by attaching first and popping up on the client that
+// creates.
+//
+// A bootstrap that cannot happen is not a reason to refuse to run: every failure
+// falls through to drawing here, which is exactly what mux did before.
+func runRoot() error {
+	if shouldBootstrap() {
+		// Returns only on failure — attach-session replaces this process.
+		_ = tmux.AttachAndPopup()
+	}
+	return runTUI(ui.NewModel())
+}
+
+// shouldBootstrap reports whether this mux should hand itself to a popup.
+//
+// Not when already inside tmux: there `prefix + m` is the popup and a bare `mux`
+// in a pane is a deliberate choice. Not when the guard is set — that is the
+// popup's own child, and bootstrapping there would open popups forever.
+//
+// And not when there are no sessions. There would be nothing to attach to, and
+// creating one to attach to means naming it on the user's behalf; the list mux
+// draws in that case already offers `New tmux session`, which asks.
+func shouldBootstrap() bool {
+	if os.Getenv(tmux.BootstrapGuardEnv) != "" || os.Getenv("TMUX") != "" {
+		return false
+	}
+	sessions, err := tmux.ListSessions()
+	return err == nil && len(sessions) > 0
 }
 
 func runStatus() error {

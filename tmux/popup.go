@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -29,6 +30,74 @@ const (
 
 // OpenPopup opens mux inside a tmux display-popup overlay.
 // Must be called from inside a tmux session.
+// BootstrapGuardEnv marks a mux that must not bootstrap again.
+//
+// The popup runs mux, so without a guard the child would bootstrap in turn and
+// open popups forever. Measured: $TMUX *is* set inside display-popup -E (it
+// reads back as the server socket and a pane id), so checking that would work
+// today — but the cost of being wrong is an unbounded loop, and an env var mux
+// sets itself depends on nothing.
+const BootstrapGuardEnv = "MUX_NO_BOOTSTRAP"
+
+// AttachAndPopup attaches this terminal to tmux and opens mux as a popup on it.
+//
+// It exists because a popup has to be drawn on a client, and outside tmux there
+// is none. Measured: with a server up and a client attached elsewhere,
+// display-popup succeeds with $TMUX unset — and draws on *that* client, in a
+// different terminal from the one you typed in. So attaching has to come first;
+// then the popup lands where you are looking.
+//
+// attach-session with no -t takes tmux's own most-recently-used session. Which
+// session to attach to is the question mux exists to answer, but asking it needs
+// a client, so tmux's default gets us on screen and the popup that follows is
+// where the answer is given.
+//
+// One exec of one tmux command list. attach-session replaces this process — the
+// same reason AttachToSession uses syscall.Exec outside tmux — so a second call
+// afterwards would never run.
+func AttachAndPopup() error {
+	version, err := getTmuxVersion()
+	if err != nil {
+		return fmt.Errorf("failed to detect tmux version: %w", err)
+	}
+	if version < minTmuxVersion {
+		return fmt.Errorf("tmux %.1f+ required for popup (current: %.1f)", minTmuxVersion, version)
+	}
+
+	tmuxPath, err := exec.LookPath("tmux")
+	if err != nil {
+		return fmt.Errorf("tmux not found: %w", err)
+	}
+	muxPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to find mux executable: %w", err)
+	}
+
+	argv := append([]string{"tmux"}, bootstrapArgs(muxPath)...)
+	return syscall.Exec(tmuxPath, argv, os.Environ())
+}
+
+// bootstrapArgs builds the tmux command list. Split out because it is the part
+// worth pinning: a semicolon in the wrong place attaches without ever opening
+// the popup, and nothing would say so.
+//
+// The popup's command is one string, not an argv. tmux runs a shell-command
+// through a shell, which is what makes the VAR=1 prefix take effect — verified
+// on an isolated server rather than assumed.
+func bootstrapArgs(muxPath string) []string {
+	return []string{
+		"attach-session", ";",
+		"display-popup", "-E", "-w", popupWidth, "-h", popupHeight,
+		BootstrapGuardEnv + "=1 exec " + shellQuote(muxPath),
+	}
+}
+
+// shellQuote makes one shell word of a path. Paths with spaces are ordinary on
+// macOS, and the popup's command is read by a shell.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func OpenPopup() error {
 	if os.Getenv("TMUX") == "" {
 		return fmt.Errorf("mux popup must be run inside a tmux session")
