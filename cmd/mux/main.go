@@ -163,8 +163,11 @@ func main() {
 			if panelFocus {
 				return tmux.FocusPanel(panelTarget)
 			}
-			return tmux.TogglePanel(panelTarget, panelAuto)
+			return runPanelAuto(panelTarget, panelAuto)
 		},
+		// Same reason navCmd carries it: the error from this command is read by
+		// tmux, and cobra's whole usage page on a status line helps nobody.
+		SilenceUsage: true,
 	}
 	panelCmd.Flags().StringVarP(&panelTarget, "target", "t", "",
 		"pane whose window to toggle (default: current)")
@@ -245,6 +248,38 @@ func runStatus() error {
 // defaultBorderWidth is what a border line is fitted to when tmux did not say.
 // Wide enough to be worth printing, narrow enough that a real pane clips little.
 const defaultBorderWidth = 80
+
+// runPanelAuto opens the panel, and on the hook path never reports a failure.
+//
+// `--auto` is what the seven panelHooks run, `client-resized` among them. Those
+// fire constantly, and a failing run-shell paints the status line of *every*
+// attached client every time — so one thing going wrong once goes wrong loudly
+// and forever.
+//
+// What goes wrong is almost always that the world moved on. tmux captures
+// `#{pane_id}` when the hook fires and runs the command a moment later, so the
+// pane named on the command line may already be gone by the time this process
+// starts. Measured: `display-message -p -t %53` on a dead pane exits 0 and
+// prints a space, which panelWindow correctly refuses — and that refusal became
+// `'mux panel --auto -t %53' returned 1` on the user's status line, twice, for
+// two panes that had closed a moment earlier.
+//
+// Nothing on this path is worth telling anyone about. The ensure already stands
+// down silently for its three designed cases — VS Code, a narrow window, a panel
+// closed by hand — so silence when the target has vanished is consistent rather
+// than new. Same shape as runBorder below, and swallowed here rather than in
+// tmux/ for the same reason: the package keeps reporting honestly, and "do not
+// paint this on the status line" is the caller's policy.
+//
+// Pressing prefix + a still reports. That is an answer to a key the user just
+// pressed, and it has somewhere to go.
+func runPanelAuto(target string, auto bool) error {
+	err := tmux.TogglePanel(target, auto)
+	if auto {
+		return nil
+	}
+	return err
+}
 
 // runBorder prints the one line tmux draws above a pane.
 //

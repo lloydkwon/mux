@@ -9,6 +9,16 @@ import (
 	"github.com/lloydkwon/mux/tmux"
 )
 
+// narrowSamplesBeforeLeaving is how many consecutive readings below the minimum
+// window width it takes for the panel to quit.
+//
+// Two, not one. A session switch re-lays-out every window tmux touches and a
+// window can report a width it holds for an instant; one reading was enough to
+// close panels during an ordinary switch. The cost is asymmetric — staying one
+// tick too long in a narrow window is a cramped sidebar, while leaving wrongly
+// takes the sidebar *and* the keyboard until the user finds prefix + a.
+const narrowSamplesBeforeLeaving = 2
+
 // watchInterval is how often the panel pane re-reads sessions.
 //
 // Slower than the TUI's 500ms on purpose. That rate exists to keep the cursor
@@ -82,6 +92,11 @@ type watchModel struct {
 	// once at startup so applyResizeWith stays pure and a resize costs no extra
 	// tmux call. Zero means "not resolved" and reads as the default.
 	minWindowWidth int
+
+	// narrowSamples counts consecutive readings below minWindowWidth. Leaving
+	// costs the user their sidebar and their keyboard until they press
+	// prefix + a, so it takes two readings; any wide one resets the count.
+	narrowSamples int
 }
 
 // minWidth is the bar this pane leaves below. The same number decides whether a
@@ -381,6 +396,12 @@ func (m watchModel) applyResize(paneWidth int) (tea.Model, tea.Cmd) {
 // applyResizeWith is the decision itself, split out so it can be tested without
 // a tmux server.
 func (m watchModel) applyResizeWith(paneWidth, winWidth int) (watchModel, tea.Cmd) {
+	// A window wide enough clears the tally: only *consecutive* narrow readings
+	// mean the window really shrank.
+	if winWidth >= m.minWidth() {
+		m.narrowSamples = 0
+	}
+
 	switch {
 	case m.winWidth == 0: // first size seen — adopt it
 		m.winWidth = winWidth
@@ -400,6 +421,11 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth int) (watchModel, tea.Cm
 		}
 		return m, nil
 
+	case winWidth <= 0:
+		// Not a width. tmux reports one mid-relayout, and quitting on it would
+		// close the panel because the server was busy for a moment.
+		return m, nil
+
 	case winWidth < m.minWidth():
 		// The window shrank past what it can spare — a phone attached, most
 		// likely. Leave, so the work pane gets its columns back; `prefix+a`
@@ -407,6 +433,19 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth int) (watchModel, tea.Cm
 		//
 		// Only on the *transition*: a panel opened by hand in an already narrow
 		// window stays, for the same reason the key overrides the hook.
+		//
+		// And only on the *second* narrow sample in a row. Switching sessions
+		// makes tmux re-lay-out every window it touches, and a window can report
+		// a width it will not keep for more than an instant; quitting on one
+		// reading closed panels during an ordinary session switch and left the
+		// user with no sidebar and, worse, no way to steer — `mux nav` sends
+		// keys to a pane that is no longer there and exits 0, so the panel
+		// stopped answering with nothing to say why. Leaving is not undoable
+		// from the keyboard, so it should take more evidence than staying.
+		m.narrowSamples++
+		if m.narrowSamples < narrowSamplesBeforeLeaving {
+			return m, nil
+		}
 		return m, tea.Quit
 
 	case winWidth == m.winWidth: // the user dragged the border

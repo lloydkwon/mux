@@ -408,11 +408,18 @@ func TestWatchQuitsWhenWindowGetsNarrow(t *testing.T) {
 		t.Errorf("winWidth = %d, want the narrow window adopted", narrowFirst.winWidth)
 	}
 
-	// A phone attaches to a window that was wide: leave.
+	// A phone attaches to a window that was wide: leave — but only once the
+	// narrow window has been seen twice. One reading is what a session switch
+	// produces mid-relayout, and quitting on it closed panels during an ordinary
+	// switch.
 	wide := watchTestModel(48, 20)
 	wide.winWidth, wide.targetWidth = 269, 48
-	if _, cmd := wide.applyResizeWith(48, 54); !quits(cmd) {
-		t.Error("did not quit when the window shrank past the minimum")
+	once, cmd := wide.applyResizeWith(48, 54)
+	if quits(cmd) {
+		t.Error("quit on a single narrow reading")
+	}
+	if _, cmd := once.applyResizeWith(48, 54); !quits(cmd) {
+		t.Error("did not quit after the window stayed narrow")
 	}
 
 	// Still wide enough: hold the width as before, do not leave. Expressed
@@ -440,7 +447,11 @@ func TestWatchMinWidthFallsBackToTheDefault(t *testing.T) {
 	if _, cmd := m.applyResizeWith(48, 100); quits(cmd) {
 		t.Error("quit at 100 columns with the bar set to 96")
 	}
-	if _, cmd := m.applyResizeWith(48, 90); !quits(cmd) {
+	narrow, cmd := m.applyResizeWith(48, 90)
+	if quits(cmd) {
+		t.Error("quit on a single reading at 90 columns")
+	}
+	if _, cmd := narrow.applyResizeWith(48, 90); !quits(cmd) {
 		t.Error("did not quit at 90 columns with the bar set to 96")
 	}
 }
@@ -602,5 +613,43 @@ func TestWatchWidthStillIgnoresSqueezeWithCeiling(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Error("a transient squeeze scheduled a resize")
+	}
+}
+
+// Leaving takes two narrow readings in a row, and it is the *in a row* that
+// matters: a session switch re-lays-out every window tmux touches, so a window
+// can report a width it does not keep. Quitting on one closed panels during an
+// ordinary switch and left the user without a sidebar and without a keyboard —
+// `mux nav` sends keys to a pane that is gone and exits 0, so nothing said why.
+func TestWatchNeedsTwoNarrowReadingsInARow(t *testing.T) {
+	m := watchTestModel(48, 20)
+	m.winWidth, m.targetWidth = 269, 48
+
+	// Narrow, then wide again: the tally resets and the panel stays.
+	narrow, cmd := m.applyResizeWith(48, 54)
+	if quits(cmd) {
+		t.Fatal("quit on the first narrow reading")
+	}
+	recovered, cmd := narrow.applyResizeWith(48, 269)
+	if quits(cmd) {
+		t.Fatal("quit on a wide reading")
+	}
+	if _, cmd := recovered.applyResizeWith(48, 54); quits(cmd) {
+		t.Error("a wide reading did not clear the count — one narrow reading quit again")
+	}
+}
+
+// A width of zero is not a narrow window, it is tmux mid-relayout. Counting it
+// would let two busy moments close the panel.
+func TestWatchIgnoresANonWidth(t *testing.T) {
+	m := watchTestModel(48, 20)
+	m.winWidth, m.targetWidth = 269, 48
+
+	zeroed, cmd := m.applyResizeWith(48, 0)
+	if quits(cmd) {
+		t.Fatal("quit on a zero width")
+	}
+	if _, cmd := zeroed.applyResizeWith(48, 0); quits(cmd) {
+		t.Error("two zero widths quit — a non-width must not count toward leaving")
 	}
 }
