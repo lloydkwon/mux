@@ -653,3 +653,112 @@ func TestWatchIgnoresANonWidth(t *testing.T) {
 		t.Error("two zero widths quit — a non-width must not count toward leaving")
 	}
 }
+
+// attachedSess is a session with a client sitting in it.
+func attachedSess(name string, st tmux.AIState, attached bool) tmux.Session {
+	s := sess(name, st)
+	s.Attached = attached
+	return s
+}
+
+// load drives the real per-tick path, which is where the cursor is decided.
+func load(m watchModel, sessions []tmux.Session) watchModel {
+	updated, _ := m.Update(sessionsLoadedMsg{sessions: sessions})
+	return updated.(watchModel)
+}
+
+// You move the cursor to another session in order to *leave*. Coming back, the
+// panel used to still be pointing at the session you went to — ◀ saying "you are
+// here" while the highlight said somewhere else. Arriving puts it back.
+func TestWatchReanchorsOnArrival(t *testing.T) {
+	m := watchTestModel(48, 20)
+	m.ownSession = "mux"
+
+	// Sitting in mux: the cursor opens on it.
+	m = load(m, []tmux.Session{
+		attachedSess("mux", tmux.AIStateWorking, true),
+		attachedSess("herdr", tmux.AIStateReady, false),
+	})
+	if m.selected != "mux" {
+		t.Fatalf("selected = %q on arrival, want mux", m.selected)
+	}
+
+	// Pick herdr and leave: the client is now elsewhere.
+	m = m.selectSession("herdr")
+	m = load(m, []tmux.Session{
+		attachedSess("mux", tmux.AIStateWorking, false),
+		attachedSess("herdr", tmux.AIStateReady, true),
+	})
+	if m.selected != "herdr" {
+		t.Errorf("selected = %q while away, want the cursor left alone", m.selected)
+	}
+
+	// Come back.
+	m = load(m, []tmux.Session{
+		attachedSess("mux", tmux.AIStateWorking, true),
+		attachedSess("herdr", tmux.AIStateReady, false),
+	})
+	if m.selected != "mux" {
+		t.Errorf("selected = %q after coming back, want mux — ◀ and the highlight disagree", m.selected)
+	}
+}
+
+// The arrival, not the state. "My session is attached" stays true the whole time
+// you sit in it, so acting on the level would drag the cursor back two seconds
+// after every M-Up.
+func TestWatchKeepsTheCursorYouMovedWhileHere(t *testing.T) {
+	here := []tmux.Session{
+		attachedSess("mux", tmux.AIStateWorking, true),
+		attachedSess("herdr", tmux.AIStateReady, false),
+	}
+
+	m := watchTestModel(48, 20)
+	m.ownSession = "mux"
+	m = load(m, here)
+
+	m = m.selectSession("herdr")
+	for i := 0; i < 3; i++ {
+		m = load(m, here)
+		if m.selected != "herdr" {
+			t.Fatalf("tick %d: selected = %q — the cursor was dragged back while the user was still here", i, m.selected)
+		}
+	}
+}
+
+// A panel in a session nobody is in has no arrival to react to.
+func TestWatchLeavesTheCursorAloneWhileDetached(t *testing.T) {
+	away := []tmux.Session{
+		attachedSess("mux", tmux.AIStateWorking, false),
+		attachedSess("herdr", tmux.AIStateReady, true),
+	}
+
+	m := watchTestModel(48, 20)
+	m.ownSession = "mux"
+	m = load(m, away)
+	m = m.selectSession("herdr")
+	m = load(m, away)
+
+	if m.selected != "herdr" {
+		t.Errorf("selected = %q, want the cursor untouched while no client is here", m.selected)
+	}
+}
+
+// "Could not tell" must not be guessed at, the same way autoSelect refuses to.
+func TestWatchDoesNotReanchorWithoutAnOwnSession(t *testing.T) {
+	m := watchTestModel(48, 20)
+	m.ownSession = ""
+
+	m = load(m, []tmux.Session{
+		attachedSess("mux", tmux.AIStateWorking, true),
+		attachedSess("herdr", tmux.AIStateReady, false),
+	})
+	m = m.selectSession("herdr")
+	m = load(m, []tmux.Session{
+		attachedSess("mux", tmux.AIStateWorking, true),
+		attachedSess("herdr", tmux.AIStateReady, false),
+	})
+
+	if m.selected != "herdr" {
+		t.Errorf("selected = %q, want the choice kept when the panel cannot tell where it lives", m.selected)
+	}
+}

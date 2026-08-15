@@ -97,6 +97,12 @@ type watchModel struct {
 	// costs the user their sidebar and their keyboard until they press
 	// prefix + a, so it takes two readings; any wide one resets the count.
 	narrowSamples int
+
+	// ownAttached is whether a client was in this pane's session as of the last
+	// refresh. Held so the *arrival* can be seen: a level would undo the user's
+	// own cursor two seconds after they moved it, an edge only fires when they
+	// come back.
+	ownAttached bool
 }
 
 // minWidth is the bar this pane leaves below. The same number decides whether a
@@ -218,6 +224,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// and Update is called directly by tests that must not touch the
 		// developer's own server. It runs even with nothing fresh — reading is
 		// how this panel learns what the others have seen.
+		m = m.reanchorOnArrival()
 		return m.reselect(), mergeEventsCmd(fresh)
 	}
 	return m, nil
@@ -290,6 +297,46 @@ func (m watchModel) selectSession(name string) watchModel {
 		m.selected = name
 	}
 	return m
+}
+
+// reanchorOnArrival puts the cursor back on this pane's own session when a
+// client arrives in it.
+//
+// Without this the cursor is wherever it was last left, which is precisely the
+// wrong place: you move it to another session in order to *leave*, and the panel
+// you come back to is still pointing at the session you went to. The ◀ mark and
+// the highlight then name different rows — ◀ says "you are here" while the
+// highlight says "herdr" — and nothing else in the panel reconciles them.
+//
+// It is deliberately the arrival and not the state. "My session is attached" is
+// true the whole time you are sitting in it, so acting on the level would drag
+// the cursor back two seconds after every M-Up. Acting on the false → true edge
+// leaves a cursor you moved while you are here alone, and only resets it once
+// you have been away.
+//
+// Session.Attached costs nothing — ListSessions already carries it every tick.
+// What it cannot tell is *which* client arrived: with two clients on one server
+// a second one landing in this session also re-anchors this cursor. Rare, and
+// not wrong in direction — someone did just arrive here.
+func (m watchModel) reanchorOnArrival() watchModel {
+	was := m.ownAttached
+	m.ownAttached = m.ownSessionAttached()
+
+	if m.ownSession == "" || was || !m.ownAttached {
+		return m
+	}
+	return m.selectSession(m.ownSession)
+}
+
+// ownSessionAttached reports whether any client is currently in this pane's
+// session, as of the sessions just loaded.
+func (m watchModel) ownSessionAttached() bool {
+	for _, s := range m.sessions {
+		if s.Name == m.ownSession {
+			return s.Attached
+		}
+	}
+	return false
 }
 
 // reselect keeps the cursor pointing at a session that still exists, and picks
