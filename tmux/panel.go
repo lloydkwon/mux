@@ -144,7 +144,21 @@ func TogglePanel(target string, auto bool) error {
 	// before the current one, which for a horizontal split means the left edge:
 	// the list is what you glance at, and a glance goes left before it goes
 	// right.
-	args := []string{"split-window", "-d", "-hb", "-l", strconv.Itoa(width)}
+	//
+	// -f is what makes that the *window's* left edge, and it is load-bearing.
+	// Without it tmux splits the window's active pane — `-t <window>` resolves to
+	// that pane, not to the window as a whole — so the panel is carved out of
+	// whichever pane the user happened to be in. Measured in a 236-column window
+	// already split three ways: the panel opened between two existing panes, and
+	// because the active one was 46 columns wide tmux could not spare the 48 it
+	// asked for and gave it 1. A sidebar that lands mid-window at one column is
+	// indistinguishable from a broken feature, and the hooks reopen it that way
+	// on every window.
+	//
+	// With -f the pane spans the full window height and takes its width from the
+	// window, so the only thing that has to be wide enough is the window — which
+	// MinWindowWidth already gates the auto path on.
+	args := []string{"split-window", "-d", "-f", "-hb", "-l", strconv.Itoa(width)}
 	if dir != "" {
 		// Start the panel in the window's own directory. Without -c the new pane
 		// inherits the cwd of whatever invoked `mux panel` — a shell, or tmux

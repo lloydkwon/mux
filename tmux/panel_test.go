@@ -38,10 +38,34 @@ func TestTogglePanelOpens(t *testing.T) {
 		}
 
 		self, _ := os.Executable()
-		want := "tmux split-window -d -hb -l " + strconv.Itoa(defaultPanelWidth) +
+		want := "tmux split-window -d -f -hb -l " + strconv.Itoa(defaultPanelWidth) +
 			" -c /work/dir -t @7 " + self + " watch"
 		if !ran(m, want) {
 			t.Errorf("ran %v,\nwant one of them to be %q", m.runs, want)
+		}
+	})
+}
+
+// The split must be full-width, not a split of whatever pane happened to be
+// active.
+//
+// Its own test because the failure is invisible in a single-pane window — which
+// is where the panel is usually opened — and only shows up once a window has
+// been split: tmux carves the panel out of the active pane, so an active pane
+// narrower than the panel width yields a one-column sidebar wedged between two
+// existing panes. -f is the whole fix, so -f is what this pins.
+func TestTogglePanelSplitsTheWindowNotTheActivePane(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
+			"-F", "#{pane_id} #{pane_start_command}")
+
+		if err := TogglePanel("%3", false); err != nil {
+			t.Fatalf("TogglePanel: %v", err)
+		}
+
+		if !ran(m, "split-window -d -f ") {
+			t.Errorf("ran %v, want the split to carry -f so it spans the window", m.runs)
 		}
 	})
 }
