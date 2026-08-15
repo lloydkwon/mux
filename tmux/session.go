@@ -76,7 +76,15 @@ func SessionForTarget(target string) (Session, error) {
 	if err != nil {
 		return Session{}, fmt.Errorf("resolve session: %w", err)
 	}
-	return parseLine(strings.TrimSpace(string(out)), ClaudeStatuses())
+	// No screen states, deliberately. ScreenStates costs two tmux spawns and
+	// captures every pane on the server; tmux runs this once per pane and
+	// re-runs them on redraw, so paying that here is quadratic in the number of
+	// panes on screen. Claude's statuses are file reads and cost nothing.
+	//
+	// The price is that an agent only screen detection recognises reaches the
+	// border with no live state — its tool icon, not a glyph. That is the
+	// budget for a renderer with no process to cache in, not an oversight.
+	return parseLine(strings.TrimSpace(string(out)), ClaudeStatuses(), nil)
 }
 
 // parseLine builds a Session from one list-sessions line. statuses maps tmux
