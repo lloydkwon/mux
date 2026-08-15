@@ -151,7 +151,7 @@ func TestPushEventsCapsAndOrders(t *testing.T) {
 func notifyOrder(ss []tmux.Session) []string {
 	var got []string
 	var last string
-	for _, l := range notifyLines(ss, nil, 40, "", "") {
+	for _, l := range notifyLines(ss, nil, 40, 0, "", "") {
 		if l.session != "" && l.session != last {
 			got = append(got, l.session)
 		}
@@ -213,7 +213,7 @@ func TestNotifySpacingIsClickable(t *testing.T) {
 	blocked.AIWaitingFor = "Bash: git push"
 	sessions := []tmux.Session{first, blocked}
 
-	rows := notifyLines(sessions, nil, 40, "", "")
+	rows := notifyLines(sessions, nil, 40, 0, "", "")
 	owners := map[string]int{}
 	for _, l := range rows {
 		if l.session != "" {
@@ -240,7 +240,7 @@ func TestNotifyWorktreeGlyph(t *testing.T) {
 	tree.GitBranch = "feat"
 	tree.IsWorktree = true
 
-	out := ansi.Strip(strings.Join(notifyTexts(notifyLines([]tmux.Session{plain, tree}, nil, 60, "", "")), "\n"))
+	out := ansi.Strip(strings.Join(notifyTexts(notifyLines([]tmux.Session{plain, tree}, nil, 60, 0, "", "")), "\n"))
 	if !strings.Contains(out, "⌥ main") {
 		t.Errorf("a plain repo did not render a single glyph:\n%s", out)
 	}
@@ -378,5 +378,99 @@ func TestNotifySessionLineWidthWithMarker(t *testing.T) {
 	}
 	if strings.Contains(narrow, "⌥") {
 		t.Errorf("row %q kept a branch it had no room for", narrow)
+	}
+}
+
+// headerSession is a session with everything the header can draw.
+func headerSession(name string) tmux.Session {
+	s := sess(name, tmux.AIStateWorking)
+	s.Directory = "/work/projects/mux"
+	s.GitBranch = "main"
+	s.AISince = time.Now().Add(-90 * time.Second)
+	return s
+}
+
+// The header answers the question the panel could not: which session the cursor
+// is on, what it is doing, and where it lives. A detached session has no pane to
+// read any of that off.
+func TestPanelHeaderDescribesSelectedSession(t *testing.T) {
+	ss := []tmux.Session{headerSession("mux"), sess("api", tmux.AIStateApproval)}
+
+	out := ansi.Strip(strings.Join(notifyTexts(panelHeaderLines(ss, 40, 30, "mux")), "\n"))
+
+	for _, want := range []string{"mux", "⌥ main", "작업 중", "1m", "/work/projects/mux"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("header dropped %q:\n%s", want, out)
+		}
+	}
+	// Korean, not the TUI's English — the event log below it speaks Korean and
+	// two names for one state in a single pane reads as a bug.
+	if strings.Contains(out, "working") {
+		t.Errorf("header used the TUI's English label:\n%s", out)
+	}
+}
+
+// The panel has no height budget — fixedBox clips from the bottom — so the
+// header has to ration itself or it eats the event log on a short pane.
+func TestPanelHeaderRationsByHeight(t *testing.T) {
+	ss := []tmux.Session{headerSession("mux")}
+
+	tests := []struct {
+		height int
+		rows   int // header rows including the section break
+		path   bool
+	}{
+		{30, 4, true},  // name, state, path, break
+		{12, 4, true},  // exactly the full-header floor
+		{11, 3, false}, // path is the first thing to yield
+		{8, 3, false},  // the short-header floor
+		{7, 0, false},  // below it the header yields entirely
+		{3, 0, false},
+	}
+	for _, tc := range tests {
+		lines := panelHeaderLines(ss, 40, tc.height, "mux")
+		if len(lines) != tc.rows {
+			t.Errorf("height=%d: %d header rows, want %d", tc.height, len(lines), tc.rows)
+		}
+		got := strings.Contains(ansi.Strip(strings.Join(notifyTexts(lines), "\n")), "/work/projects/mux")
+		if got != tc.path {
+			t.Errorf("height=%d: path shown=%v, want %v", tc.height, got, tc.path)
+		}
+	}
+}
+
+// Header rows must belong to no session. sessionAtRow indexes the same slice, so
+// a header row that claimed one would make a click land on a session nobody
+// aimed at; sessionOrder skips empty rows, which is what keeps the keyboard
+// cursor off them.
+func TestPanelHeaderRowsAreNotClickTargets(t *testing.T) {
+	for _, l := range panelHeaderLines([]tmux.Session{headerSession("mux")}, 40, 30, "mux") {
+		if l.session != "" {
+			t.Errorf("header row %q claims session %q", ansi.Strip(l.text), l.session)
+		}
+	}
+}
+
+// A selection naming a session that has gone must not draw a header for it — the
+// cursor is a name, and names outlive the sessions they point at by one refresh.
+func TestPanelHeaderSkipsUnknownSelection(t *testing.T) {
+	if got := panelHeaderLines([]tmux.Session{headerSession("mux")}, 40, 30, "gone"); got != nil {
+		t.Errorf("header drew %d rows for a session that is not there", len(got))
+	}
+	if got := panelHeaderLines([]tmux.Session{headerSession("mux")}, 40, 30, ""); got != nil {
+		t.Errorf("header drew %d rows with nothing selected", len(got))
+	}
+}
+
+// Every header row is exactly width cells, like every other row in the panel —
+// fixedBox pads the box but a short row inside it shears the columns.
+func TestPanelHeaderRowWidths(t *testing.T) {
+	s := headerSession("a-rather-long-session-name")
+	for _, width := range []int{24, 30, 36, 48, 84} {
+		for _, l := range panelHeaderLines([]tmux.Session{s}, width, 30, s.Name) {
+			if got := ansi.StringWidth(ansi.Strip(l.text)); got != width {
+				t.Errorf("width=%d: header row %q measures %d cells", width, ansi.Strip(l.text), got)
+			}
+		}
 	}
 }

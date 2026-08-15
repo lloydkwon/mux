@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -131,7 +132,7 @@ type notifyLine struct {
 //
 // The two halves stay separate functions because they answer different questions
 // and degrade differently, not because anything places them apart.
-func notifyLines(sessions []tmux.Session, events []aiEvent, width int, selected, own string) []notifyLine {
+func notifyLines(sessions []tmux.Session, events []aiEvent, width, height int, selected, own string) []notifyLine {
 	lines := notifySessionLines(sessions, width, selected, own)
 	if len(lines) == 0 && len(events) == 0 {
 		return nil
@@ -143,7 +144,154 @@ func notifyLines(sessions []tmux.Session, events []aiEvent, width int, selected,
 	if len(lines) > 0 {
 		lines = append(lines, notifyLine{text: blankRow(width)})
 	}
-	return append(lines, notifyEventLines(events, width)...)
+	lines = append(lines, notifyEventLines(events, width)...)
+	return append(panelHeaderLines(sessions, width, height, selected), lines...)
+}
+
+const (
+	// panelHeaderFullHeight is the shortest pane that still gets the path row,
+	// panelHeaderShortHeight the shortest that gets a header at all.
+	//
+	// The panel has no height budget: notifyLines generates as much as it likes
+	// and fixedBox clips from the bottom, so every row the header takes is a row
+	// off the end of the event log. These two numbers are the whole rationing
+	// policy — below them the header is what yields, not the log, because a
+	// twelve-row pane that is all header has stopped being a list.
+	panelHeaderFullHeight  = 12
+	panelHeaderShortHeight = 8
+)
+
+// panelHeaderLines describe the session under the cursor: its name and branch,
+// what it is doing, and where it lives.
+//
+// This is half of the detail column 85049e8 removed. The half that went for good
+// was the screen capture — fifty columns drawing a copy of the pane sitting
+// right beside the panel. This half draws what no pane can: a *detached* session
+// has no screen to look at, and without these rows nothing in the panel says
+// where the selected one is or what branch it is on.
+//
+// Every line carries no session, which is load-bearing twice over: sessionAtRow
+// indexes the same slice, so clicks keep landing on the rows they name, and
+// sessionOrder skips empty-session lines, so the keyboard cursor cannot stop
+// here.
+func panelHeaderLines(sessions []tmux.Session, width, height int, selected string) []notifyLine {
+	if width <= 0 || height < panelHeaderShortHeight || selected == "" {
+		return nil
+	}
+
+	var s tmux.Session
+	found := false
+	for _, c := range sessions {
+		if c.Name == selected {
+			s, found = c, true
+			break
+		}
+	}
+	if !found {
+		return nil
+	}
+
+	lines := []notifyLine{{text: panelHeaderName(s, width)}}
+	if text := panelStateText(s, width-1); text != "" {
+		lines = append(lines, notifyLine{text: renderRow([]rowSeg{
+			{text: " " + text, color: aiStateColor(s.AIState)},
+		}, width, false)})
+	}
+	if height >= panelHeaderFullHeight && s.Directory != "" {
+		lines = append(lines, notifyLine{text: renderRow([]rowSeg{
+			{text: fitCells(" "+panelPath(s.Directory), width-1), color: colorMuted},
+		}, width, false)})
+	}
+	// A section break, carrying no session for the same reason the one between
+	// the list and the log carries none.
+	return append(lines, notifyLine{text: blankRow(width)})
+}
+
+// panelHeaderName is the session's name, with its branch flush right.
+func panelHeaderName(s tmux.Session, width int) string {
+	branch := ""
+	if s.GitBranch != "" {
+		branch = branchGlyph(s) + " " + s.GitBranch
+	}
+	return renderRow(fitRight(
+		rowSeg{text: s.Name, color: colorAccent},
+		rowSeg{text: branch, color: colorMuted},
+		width,
+	), width, false)
+}
+
+// panelStateText drops detail until the cluster fits, in the order the TUI's
+// preview drops it: the blocking reason outranks the elapsed time, which
+// outranks the label.
+//
+// Built here rather than through aiStatusText because that one prints
+// AIState.String(), the English the TUI and `mux status` use. These rows sit
+// directly above the panel's own Korean, and the two naming the same state
+// differently in one pane reads as a bug.
+func panelStateText(s tmux.Session, width int) string {
+	if s.AIState == tmux.AIStateNone {
+		return ""
+	}
+	glyph, label := s.AIState.Icon(), aiStateLabel(s.AIState)
+
+	elapsed := ""
+	if !s.AISince.IsZero() {
+		elapsed = "  " + compactAgo(s.AISince)
+	}
+
+	candidates := []string{}
+	if s.AIWaitingFor != "" {
+		candidates = append(candidates, glyph+" "+label+" · "+s.AIWaitingFor+elapsed)
+	}
+	candidates = append(candidates,
+		glyph+" "+label+elapsed,
+		glyph+elapsed,
+		glyph,
+	)
+	for _, c := range candidates {
+		if ansi.StringWidth(c) <= width {
+			return c
+		}
+	}
+	return ""
+}
+
+// panelPath is the session's directory with $HOME collapsed to ~.
+//
+// Deliberately not shortenPath: that one truncates by byte length, which splits
+// a multi-byte rune down the middle on a path with Hangul in it. Clamping to the
+// column is fitCells' job here anyway, so this only does the substitution.
+func panelPath(dir string) string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" && strings.HasPrefix(dir, home) {
+		return "~" + dir[len(home):]
+	}
+	return dir
+}
+
+// fitRight lays a left and a right segment out across width cells, dropping the
+// right one whole rather than showing a stub of it.
+func fitRight(left, right rowSeg, width int) []rowSeg {
+	leftText := " " + left.text
+	rightText := right.text
+	if rightText != "" {
+		rightText += " "
+	}
+
+	gap := width - ansi.StringWidth(leftText) - ansi.StringWidth(rightText)
+	if gap < 1 && rightText != "" {
+		rightText = ""
+		gap = width - ansi.StringWidth(leftText)
+	}
+	if gap < 0 {
+		leftText = fitCells(leftText, width)
+		gap = 0
+	}
+
+	return []rowSeg{
+		{text: leftText, color: left.color},
+		{text: strings.Repeat(" ", gap)},
+		{text: rightText, color: right.color},
+	}
 }
 
 // notifySessionLines builds the session half: sessions running an AI CLI first,

@@ -474,9 +474,14 @@ func (m watchModel) sessionAtRow(y int) string {
 	return lines[y].session
 }
 
-// sessionLines is the panel's rows: the session list, then the event log.
+// sessionLines is the panel's rows: the selected session's header, the session
+// list, then the event log.
+//
+// The height goes in because the header rations itself against it — the rows it
+// takes come off the bottom of the event log, and fixedBox does that clipping
+// silently.
 func (m watchModel) sessionLines() []notifyLine {
-	return notifyLines(m.sessions, m.events, m.width, m.selected, m.ownSession)
+	return notifyLines(m.sessions, m.events, m.width, m.height, m.selected, m.ownSession)
 }
 
 func (m watchModel) View() string {

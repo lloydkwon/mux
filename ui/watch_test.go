@@ -14,6 +14,18 @@ func watchTestModel(w, h int) watchModel {
 	return watchModel{width: w, height: h}
 }
 
+// firstSessionRow is the pane row the first clickable session lands on. Tests
+// that care about clicking a session ask for it rather than counting the chrome
+// above it, which changes.
+func firstSessionRow(m watchModel) int {
+	for i, l := range m.sessionLines() {
+		if l.session != "" {
+			return i
+		}
+	}
+	return -1
+}
+
 var errRefreshTest = errTest("refresh failed")
 
 type errTest string
@@ -227,10 +239,14 @@ func TestWatchClickSwitchesImmediately(t *testing.T) {
 	m = m.reselect()
 	before := m.selected
 
-	// Row 0 is the heading and row 1 the blank under it; the first session is 2.
-	updated, cmd := m.Update(tea.MouseMsg{Y: 2, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	// Computed rather than hardcoded: reselect() gives this model a selection, so
+	// the header block sits above the heading and the first session row moves
+	// with it. A literal here would pin the header's height into a test about
+	// clicking.
+	row := firstSessionRow(m)
+	updated, cmd := m.Update(tea.MouseMsg{Y: row, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 	if cmd == nil {
-		t.Error("a click on a session row did not switch")
+		t.Errorf("a click on session row %d did not switch", row)
 	}
 	if got := updated.(watchModel).selected; got != before {
 		t.Errorf("the click moved the cursor to %q — it should switch, not select", got)
