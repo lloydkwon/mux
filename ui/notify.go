@@ -12,8 +12,10 @@ import (
 )
 
 const (
-	// maxEvents caps the transition log. Mirrors my-mux's MAX_EVENTS.
-	maxEvents = 20
+	// maxEvents caps the transition log. The number lives in tmux because that
+	// is where the log itself lives now — the panel and the shared store must
+	// agree on it, or a panel would draw rows the store has already dropped.
+	maxEvents = tmux.MaxPanelEvents
 
 	// notifyMinWidth is the narrowest pane the panel can say anything useful in.
 	// Below it the columns collide, so the pane shows a notice instead.
@@ -26,11 +28,17 @@ const (
 )
 
 // aiEvent is one observed AI state transition.
+//
+// since is the state's own start time, and it is what makes the shared log
+// possible: at is this process's clock at the moment it noticed, which differs
+// by up to a tick between panels, while since is a value they all read from the
+// same file and therefore agree on exactly.
 type aiEvent struct {
 	at      time.Time
 	session string
 	text    string
 	state   tmux.AIState
+	since   time.Time
 }
 
 // detectTransitions compares this refresh's sessions against the previous
@@ -66,10 +74,12 @@ func detectTransitions(prev map[string]tmux.AIState, sessions []tmux.Session, no
 			if s.AIWaitingFor != "" {
 				text += " · " + s.AIWaitingFor
 			}
-			events = append(events, aiEvent{at: now, session: s.Name, text: text, state: s.AIState})
+			events = append(events, aiEvent{at: now, session: s.Name, text: text,
+				state: s.AIState, since: s.AISince})
 		case s.AIState == tmux.AIStateReady && before != tmux.AIStateNone:
 			events = append(events, aiEvent{at: now, session: s.Name,
-				text: s.AIState.Icon() + " " + aiStateLabel(s.AIState), state: s.AIState})
+				text:  s.AIState.Icon() + " " + aiStateLabel(s.AIState),
+				state: s.AIState, since: s.AISince})
 		}
 	}
 

@@ -35,8 +35,23 @@ type watchModel struct {
 	width, height int
 	sessions      []tmux.Session
 	prevAIStates  map[string]tmux.AIState
-	events        []aiEvent
 	err           error
+
+	// events is what the panel draws: the shared log and this pane's own
+	// failures, interleaved by time.
+	events []aiEvent
+
+	// shared is the log every panel on the server reads and writes, held here as
+	// it was last merged. A panel that has just started gets the whole history on
+	// its first merge, which is the point — it observes nothing on its first tick
+	// (every session is "seen for the first time") and would otherwise open empty
+	// next to panels that have been up for hours.
+	shared []aiEvent
+
+	// local is the events that are true of this pane only — a click of ours that
+	// failed to switch. Sharing those would put a line nobody can act on in every
+	// other window on the server.
+	local []aiEvent
 
 	// selected is the cursor `mux nav` moves and enter commits, held by name
 	// rather than by row index: rows are ordered by how long a state has held,
@@ -139,10 +154,17 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case switchFailedMsg:
 		// Surface it in the log rather than failing silently: the session can
-		// vanish between the render and the click.
-		m.events = pushEvents(m.events, []aiEvent{{
+		// vanish between the render and the click. Local, not shared — it says
+		// this pane's click failed, which is not news in anyone else's window.
+		m.local = pushEvents(m.local, []aiEvent{{
 			at: time.Now(), session: msg.session, text: "⚠ 전환 실패: " + msg.err.Error(),
 		}})
+		m.events = combineEvents(m.shared, m.local)
+		return m, nil
+
+	case eventsMergedMsg:
+		m.shared = msg.events
+		m.events = combineEvents(m.shared, m.local)
 		return m, nil
 
 	case watchTickMsg:
@@ -153,14 +175,25 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, nil
 		}
-		// Same order as the TUI: diff before the slice is replaced. This process
-		// keeps its own history — it cannot share the TUI's, and a panel that
-		// only logs while mux is open would defeat the point.
+		// Same order as the TUI: diff before the slice is replaced. A transition
+		// can only be seen by diffing, so this stays per-process — but what it
+		// observes goes to the log every panel shares, which is why a panel
+		// created ten minutes from now still opens with this in it.
 		fresh, states := detectTransitions(m.prevAIStates, msg.sessions, time.Now())
 		m.prevAIStates = states
-		m.events = pushEvents(m.events, fresh)
 		m.sessions = msg.sessions
-		return m.reselect(), nil
+		// Show our own observation now rather than waiting for it to come back
+		// from the store — this pane saw it, and a two-second lag on the one
+		// event you were watching for is exactly the lag that matters. The merge
+		// then replaces this wholesale, so an optimistic row cannot survive as a
+		// duplicate of the shared one.
+		m.shared = pushEvents(m.shared, fresh)
+		m.events = combineEvents(m.shared, m.local)
+		// Merging is a command, not work done here: the store shells out to tmux,
+		// and Update is called directly by tests that must not touch the
+		// developer's own server. It runs even with nothing fresh — reading is
+		// how this panel learns what the others have seen.
+		return m.reselect(), mergeEventsCmd(fresh)
 	}
 	return m, nil
 }
