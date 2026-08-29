@@ -126,23 +126,37 @@ func MouseEnabled() bool {
 
 // panelBlockLines renders the owned region, fences included.
 //
-// The hook value is single-quoted and the run-shell argument double-quoted, so
-// the `#` in `#{pane_id}` stays inside quotes — tmux only treats it as a comment
-// outside them. The path is quoted because it may contain spaces.
+// Every line here carries two levels of quoting because there are two parsers.
+// The run-shell argument is double-quoted for tmux, which is what keeps the `#`
+// of #{pane_id} from starting a comment and what defers its expansion to when
+// the command runs. The path inside it is single-quoted for /bin/sh, which is
+// what actually runs it — the tmux quotes mean nothing there, and a path with a
+// space in it would otherwise be two arguments. Measured: an unquoted
+// `/…/my tools/mux panel --auto -t %2` through run-shell does not run at all,
+// and nothing says so beyond a line on the status bar.
+//
+// The hooks are a `{ }` block rather than a single-quoted string, and that is
+// forced rather than stylistic. tmux has no escape inside single quotes, so a
+// value holding the sh-level quotes cannot be written that way — measured, it
+// is a parse error ("too many arguments"), not a silent mis-parse. Braces defer
+// parsing wholesale, which is exactly what the hook needs: #{pane_id} must be
+// the pane the hook fires for, not the pane that was active when the config
+// loaded.
 func panelBlockLines(muxPath, key, focusKey string) []string {
-	ensure := fmt.Sprintf(`'run-shell "%s panel --auto -t #{pane_id}"'`, muxPath)
+	quoted := shellQuote(muxPath)
+	ensure := fmt.Sprintf(`{ run-shell "%s panel --auto -t #{pane_id}" }`, quoted)
 
 	lines := []string{
 		panelBlockBegin,
-		fmt.Sprintf(`bind %s run-shell "%s panel -t #{pane_id}"`, key, muxPath),
-		fmt.Sprintf(`bind %s run-shell "%s panel --focus -t #{pane_id}"`, focusKey, muxPath),
+		fmt.Sprintf(`bind %s run-shell "%s panel -t #{pane_id}"`, key, quoted),
+		fmt.Sprintf(`bind %s run-shell "%s panel --focus -t #{pane_id}"`, focusKey, quoted),
 	}
 	// The keyboard that never takes the focus. Alt combinations without a
 	// prefix, so they cost one keystroke and cannot collide with tmux's own
 	// prefix + arrow pane navigation.
 	for _, n := range navBinds {
 		lines = append(lines, fmt.Sprintf(`bind -n %-7s run-shell "%s nav -t #{pane_id} %s"`,
-			n.key, muxPath, n.direction))
+			n.key, quoted, n.direction))
 	}
 	width := 0
 	for _, h := range panelHooks {
@@ -180,8 +194,8 @@ func borderLines(muxPath string) []string {
 		// from starting a comment. The path inside #() is single-quoted for
 		// /bin/sh, which is what runs it — the outer quotes mean nothing there,
 		// and a path with a space in it would otherwise be two arguments.
-		fmt.Sprintf(`set -g pane-border-format "#{?#{m:*%s*,#{pane_start_command}},,#('%s' border -t #{pane_id} -w #{pane_width})}"`,
-			panelCommand, muxPath),
+		fmt.Sprintf(`set -g pane-border-format "#{?#{m:*%s*,#{pane_start_command}},,#(%s border -t #{pane_id} -w #{pane_width})}"`,
+			panelCommand, shellQuote(muxPath)),
 	}
 }
 

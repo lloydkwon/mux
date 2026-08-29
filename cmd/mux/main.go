@@ -411,7 +411,18 @@ func joinWith(parts []string, sep string) string {
 // The starting model is a parameter so `mux` and `mux new` differ only in where
 // they open — the attach and detach handling below is shared, and a second copy
 // of it is how one of them would quietly stop attaching.
+// repairOwnedConfig heals a tmux config that still names an older copy of mux.
+//
+// Failures are swallowed on purpose. This is housekeeping the user did not ask
+// for on this run, it has no bearing on the TUI about to open, and the only
+// place to report it would be over the screen they were reaching for.
+func repairOwnedConfig() {
+	_, _ = tmux.RepairOwnedConfig()
+}
+
 func runTUI(model ui.Model) error {
+	repairOwnedConfig()
+
 	// Mouse reporting is on so list rows can be clicked. The cost is that the
 	// terminal hands mux every mouse event instead of handling it itself, so
 	// wheel-scroll and drag-to-select stop working here; holding Shift still

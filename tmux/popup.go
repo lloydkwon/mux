@@ -210,6 +210,17 @@ func isOhMyTmux(confPath string) bool {
 	return strings.TrimSpace(string(buf[:n])) == ohMyTmuxSignature
 }
 
+// popupBindLine builds the bind that opens mux as a popup. Split out so the
+// repair path rebuilds exactly what setup installs.
+//
+// Double quotes for tmux, single quotes for the shell it hands the command to.
+// Without the inner pair a path with a space is split by /bin/sh and prefix + m
+// does nothing at all — measured, not inferred.
+func popupBindLine(key, muxPath string) string {
+	return fmt.Sprintf(`bind %s display-popup -E -w %s -h %s "%s"`,
+		key, popupWidth, popupHeight, shellQuote(muxPath))
+}
+
 // SetupKeybind adds a popup keybinding to the user's tmux config file.
 //
 // For oh-my-tmux installs the bind line is routed to .tmux.conf.local and
@@ -226,7 +237,7 @@ func SetupKeybind(key string) error {
 	if err != nil {
 		return err
 	}
-	bindLine := fmt.Sprintf(`bind %s display-popup -E -w %s -h %s "%s"`, key, popupWidth, popupHeight, muxPath)
+	bindLine := popupBindLine(key, muxPath)
 
 	if isOhMyTmux(confPath) {
 		localPath := findTmuxConfLocal(confPath)

@@ -74,18 +74,35 @@ install_binary() {
     if command -v go &>/dev/null; then
         if ask "  Go detected. Use 'go install'?"; then
             go install "github.com/${REPO}/cmd/${BINARY}@${INSTALL_REF}"
-            if command -v "${BINARY}" &>/dev/null; then
-                ok "${BINARY} installed via go install"
-            else
-                # go install succeeded but the binary isn't on PATH.
-                # This is common when GOPATH/bin (or GOBIN) is not in PATH.
-                local gobin
-                gobin="$(go env GOBIN)"
-                [ -z "$gobin" ] && gobin="$(go env GOPATH)/bin"
+
+            # Where go install actually put it. Asking `command -v` alone is not
+            # enough: it answers "some mux is on PATH", which an older copy
+            # installed another way satisfies just as well, and reporting that
+            # as success is how a user ends up running a binary they think they
+            # just replaced.
+            local gobin resolved
+            gobin="$(go env GOBIN)"
+            [ -z "$gobin" ] && gobin="$(go env GOPATH)/bin"
+            resolved="$(command -v "${BINARY}" 2>/dev/null || true)"
+
+            if [ -z "$resolved" ]; then
+                # Installed, but nothing on PATH can reach it.
                 ok "${BINARY} installed to ${gobin}/${BINARY}"
                 warn "${gobin} is not on your PATH"
                 warn "  Add this to your shell config (e.g. ~/.zshrc or ~/.bashrc):"
                 warn "  export PATH=\"${gobin}:\$PATH\""
+            elif [ "$resolved" -ef "${gobin}/${BINARY}" ]; then
+                ok "${BINARY} installed via go install (${resolved})"
+            else
+                # Both exist and the wrong one wins. Typing `mux` runs the old
+                # copy, and so does every absolute path baked into tmux by a
+                # previous `mux setup-keybind` / `setup-panel`.
+                ok "${BINARY} installed to ${gobin}/${BINARY}"
+                warn "but typing '${BINARY}' still runs ${resolved}"
+                warn "  Another copy sits earlier on your PATH. Remove it, or put"
+                warn "  ${gobin} ahead of it:"
+                warn "  export PATH=\"${gobin}:\$PATH\""
+                warn "  Then re-run '${BINARY} setup-keybind' and '${BINARY} setup-panel'."
             fi
             return
         fi

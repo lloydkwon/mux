@@ -244,7 +244,7 @@ func TestPanelBlockUsesTheGivenKey(t *testing.T) {
 func TestPanelBlockBindsBothKeyboards(t *testing.T) {
 	block := strings.Join(panelBlockLines("/bin/mux", "a", "Tab"), "\n")
 
-	if !strings.Contains(block, `bind Tab run-shell "/bin/mux panel --focus -t #{pane_id}"`) {
+	if !strings.Contains(block, `bind Tab run-shell "'/bin/mux' panel --focus -t #{pane_id}"`) {
 		t.Errorf("no focus binding:\n%s", block)
 	}
 	for _, n := range navBinds {
@@ -304,5 +304,59 @@ func TestSetupPanelBorderStaysSingleOnRerun(t *testing.T) {
 	}
 	if n := strings.Count(got, "pane-border-format"); n != 1 {
 		t.Errorf("pane-border-format appears %d times, want 1:\n%s", n, got)
+	}
+}
+
+// Every line the block writes is read by two parsers, and only the outer one is
+// tmux's. An unquoted path with a space in it reaches /bin/sh as two words and
+// the command does not run — measured through run-shell and display-popup
+// alike, and the only symptom is a line on the status bar. macOS puts spaces in
+// paths routinely, and `make install PREFIX=...` will take one anywhere.
+func TestPanelBlockQuotesAPathWithSpaces(t *testing.T) {
+	const path = "/Applications/My Tools/mux"
+	block := panelBlockLines(path, "a", "Tab")
+
+	for _, line := range block {
+		if !strings.Contains(line, path) {
+			continue // a fence, or the border-status line
+		}
+		if !strings.Contains(line, "'"+path+"'") {
+			t.Errorf("path reaches the shell unquoted and will split on the space:\n  %s", line)
+		}
+	}
+}
+
+// The hooks cannot be a single-quoted string once the path carries quotes of
+// its own: tmux has no escape inside single quotes, and the line is a parse
+// error rather than a silent mis-parse. Braces defer the whole value, which is
+// also what keeps #{pane_id} meaning the pane the hook fired for.
+func TestPanelBlockHooksUseABraceBlock(t *testing.T) {
+	block := panelBlockLines("/Applications/My Tools/mux", "a", "Tab")
+
+	for _, line := range block {
+		if !strings.HasPrefix(line, "set-hook ") {
+			continue
+		}
+		if !strings.Contains(line, "{ run-shell ") || !strings.HasSuffix(line, " }") {
+			t.Errorf("hook value is not a brace block:\n  %s", line)
+		}
+		if !strings.Contains(line, "#{pane_id}") {
+			t.Errorf("hook lost its deferred pane id:\n  %s", line)
+		}
+	}
+}
+
+// A path may hold an apostrophe, and POSIX has no escape inside single quotes —
+// the only way out is to close, emit an escaped quote, and reopen. shellQuote
+// does that; a hand-rolled "'"+p+"'" would end the quoting early and hand the
+// shell a broken command.
+func TestPanelBlockQuotesAnApostrophe(t *testing.T) {
+	block := strings.Join(panelBlockLines("/home/it's/mux", "a", "Tab"), "\n")
+
+	if strings.Contains(block, "'/home/it's/mux'") {
+		t.Errorf("apostrophe ended the quoting early:\n%s", block)
+	}
+	if !strings.Contains(block, `'/home/it'\''s/mux'`) {
+		t.Errorf("apostrophe not escaped for the shell:\n%s", block)
 	}
 }

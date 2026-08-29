@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- A mux installed at a path containing a space silently disabled `prefix + m`,
+  the panel bindings, the nav bindings and every panel hook. The generated lines
+  put the path into a shell command without quoting it, so `/bin/sh` split it in
+  two and the command never ran — the only symptom being a line on the status
+  bar. All of them now carry the shell-level quoting the border line already
+  had. The hooks became `{ }` blocks in the process, since tmux has no escape
+  inside single quotes and the quoted form is otherwise a parse error.
+- mux now repairs its own regions of the tmux config when they name an older
+  copy of itself — after installing to a new location, tmux kept calling the
+  binary you thought you had replaced, and deleting the old one turned every
+  window event into a status-line error. Keys are carried over, hand-edited
+  regions are left alone, and the running server picks the change up without a
+  config reload.
+- `install.sh` reported success whenever *some* `mux` was on PATH after
+  `go install`, which an older copy earlier on PATH satisfies just as well. It
+  now compares what it installed against what typing `mux` actually runs, and
+  says which one wins.
+
+### Fixed
 - Quitting the popup that a bare `mux` opens outside tmux left you attached to
   whichever session `attach-session` picked, rather than back in the terminal
   you typed in — `q` closed the popup and dropped you inside tmux, with no way
