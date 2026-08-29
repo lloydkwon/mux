@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- The panel opens on the **right** of the window (`split-window -h`), reversing
+  0.3.0's move to the left. "A glance goes left before it goes right" holds on a
+  monitor and not on a phone: a client narrower than the window shows the
+  leading columns, so a panel on the left is the half you can see and the
+  session you came to read is the half you cannot. The pane you type in gets the
+  left edge. An open panel does not move itself — close it and let the hooks
+  reopen it.
+
 ## [0.3.1] - 2026-08-14
 
 ### Added

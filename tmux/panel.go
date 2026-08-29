@@ -140,12 +140,16 @@ func TogglePanel(target string, auto bool) error {
 		}
 	}
 
-	// -d keeps the focus in the pane you were working in. -b puts the new pane
-	// before the current one, which for a horizontal split means the left edge:
-	// the list is what you glance at, and a glance goes left before it goes
-	// right.
+	// -d keeps the focus in the pane you were working in. No -b, so the panel
+	// lands *after* the current pane — the right edge.
 	//
-	// -f is what makes that the *window's* left edge, and it is load-bearing.
+	// It opened on the left for two releases, on the reasoning that a glance goes
+	// left before it goes right. That holds on a monitor and not on a phone: a
+	// client narrower than the window shows the leading columns, so a panel on
+	// the left is the half you can see and the session you came to read is the
+	// half you cannot. The pane the user types in has the better claim.
+	//
+	// -f is what makes that the *window's* right edge, and it is load-bearing.
 	// Without it tmux splits the window's active pane — `-t <window>` resolves to
 	// that pane, not to the window as a whole — so the panel is carved out of
 	// whichever pane the user happened to be in. Measured in a 236-column window
@@ -158,7 +162,7 @@ func TogglePanel(target string, auto bool) error {
 	// With -f the pane spans the full window height and takes its width from the
 	// window, so the only thing that has to be wide enough is the window — which
 	// MinWindowWidth already gates the auto path on.
-	args := []string{"split-window", "-d", "-f", "-hb", "-l", strconv.Itoa(width)}
+	args := []string{"split-window", "-d", "-f", "-h", "-l", strconv.Itoa(width)}
 	if dir != "" {
 		// Start the panel in the window's own directory. Without -c the new pane
 		// inherits the cwd of whatever invoked `mux panel` — a shell, or tmux

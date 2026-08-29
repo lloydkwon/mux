@@ -38,7 +38,7 @@ func TestTogglePanelOpens(t *testing.T) {
 		}
 
 		self, _ := os.Executable()
-		want := "tmux split-window -d -f -hb -l " + strconv.Itoa(defaultPanelWidth) +
+		want := "tmux split-window -d -f -h -l " + strconv.Itoa(defaultPanelWidth) +
 			" -c /work/dir -t @7 " + self + " watch"
 		if !ran(m, want) {
 			t.Errorf("ran %v,\nwant one of them to be %q", m.runs, want)

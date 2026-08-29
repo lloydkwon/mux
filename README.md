@@ -44,7 +44,7 @@ Running Claude in one session, Codex in another, and a dev server in a third? Sw
   (`✦ ◈ ⬡ ✧`). The preview adds why it is blocked (permission prompt, input
   needed, and so on), and `mux status` puts the same badge in your tmux status
   bar.
-- **An always-on sidebar** — `mux watch` keeps a narrow pane on the left of the
+- **An always-on sidebar** — `mux watch` keeps a narrow pane on the right of the
   window listing every session and what they just finished, while the rest of
   the window stays your terminal. Click a session to switch to it, or drive the
   cursor with `mux nav` from a tmux binding, which moves it without taking the
@@ -201,27 +201,27 @@ This runs `mux status` which outputs a compact summary like `✦ ◈` when AI se
 
 ### Always-on panel — `mux watch`
 
-The list shows what each session is doing *now*, but not what it just finished. `mux watch` fills a narrow pane on the left of the window with your sessions and a log of recent state changes, so it is on screen while you work rather than only while the TUI is open. The rest of the window stays your terminal:
+The list shows what each session is doing *now*, but not what it just finished. `mux watch` fills a narrow pane on the right of the window with your sessions and a log of recent state changes, so it is on screen while you work rather than only while the TUI is open. The rest of the window stays your terminal:
 
 ```
-┌ mux watch 48 ──┬ your shell ─────────────────┐
-│ 🔔 AI 세션     │ ❯ npm test                  │
-│                │ ✓ 42 passed                 │
-│ ❗ api 12s     │                             │
-│    permission  │ ❯ _                         │
-│                │                             │
-│ ⏳ mux 3m ◀    │                             │
-│                │                             │
-│ ✅ web 2h      │                             │
-│                │                             │
-│ ── 세션        │                             │
-│                │                             │
-│    notes 3h    │                             │
-│                │                             │
-│ ── 최근 이벤트 │                             │
-│ 13:00 api ❗   │                             │
-│ 12:59 web ✅   │                             │
-└────────────────┴─────────────────────────────┘
+┌ your shell ─────────────────┬ mux watch 48 ──┐
+│ ❯ npm test                  │ 🔔 AI 세션     │
+│ ✓ 42 passed                 │                │
+│                             │ ❗ api 12s     │
+│ ❯ _                         │    permission  │
+│                             │                │
+│                             │ ⏳ mux 3m ◀    │
+│                             │                │
+│                             │ ✅ web 2h      │
+│                             │                │
+│                             │ ── 세션        │
+│                             │                │
+│                             │    notes 3h    │
+│                             │                │
+│                             │ ── 최근 이벤트 │
+│                             │ 13:00 api ❗   │
+│                             │ 12:59 web ✅   │
+└─────────────────────────────┴────────────────┘
 ```
 
 Sessions running an AI CLI come first; the rest sit under `── 세션` so every session is reachable without opening the TUI. Recent transitions are listed under those.
@@ -235,11 +235,11 @@ The session the panel itself sits in is marked `◀`, and it is where the cursor
 **The summary of the session you are in sits on the border above your pane** — its name, directory, AI tool and live state, and git branch. It is the line `prefix + m` shows at the top of its right column, put somewhere it does not cover what you were doing. `mux setup-panel` turns on tmux's `pane-border-status` and points `pane-border-format` at the new `mux border`:
 
 ```
-┌ mux watch ─────┬ [ mux ] ~/Projects/temp/mux  ✅ claude  ⌥ main ─┐
-│ 🔔 AI 세션     │ ❯ npm test                                      │
-│                │ ✓ 42 passed                                     │
-│ ⏳ mux 3m ◀    │ ❯ _                                             │
-└────────────────┴─────────────────────────────────────────────────┘
+┌ [ mux ] ~/Projects/temp/mux  ✅ claude  ⌥ main ─┬ mux watch ─────┐
+│ ❯ npm test                                      │ 🔔 AI 세션     │
+│ ✓ 42 passed                                     │                │
+│ ❯ _                                             │ ⏳ mux 3m ◀    │
+└─────────────────────────────────────────────────┴────────────────┘
 ```
 
 The border, because everything below it is your shell — mux cannot write there, and the pane's title already belongs to whatever runs in it (Claude Code names its pane after the task in hand). It is not drawn above the panel's own pane: there is no reason to say the same thing directly over the list that says it. As the pane narrows the line drops its branch, then the tool's name, then the directory; the session name always stays. It **costs one row per pane**.
