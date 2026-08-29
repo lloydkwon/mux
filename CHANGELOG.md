@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   everywhere else.
 
 ### Fixed
+- The panel adopted, saved and then enforced a width tmux had handed it when a
+  neighbouring pane closed. In a two-pane window the freed columns land on
+  exactly half, which the "no wider than half" ceiling let through — observed
+  at 118 of 237 columns, written to `panel.json`, and held there. The resize
+  check now reads the window's pane count alongside its width and treats a
+  changed count as a re-layout rather than a drag. A deliberate drag to exactly
+  half is still yours to make.
+
+### Fixed
 - A mux installed at a path containing a space silently disabled `prefix + m`,
   the panel bindings, the nav bindings and every panel hook. The generated lines
   put the path into a shell command without quoting it, so `/bin/sh` split it in

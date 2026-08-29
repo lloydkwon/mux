@@ -428,6 +428,38 @@ func SessionOnlyInVSCode(session string) bool {
 	return seen
 }
 
+// WindowShape reports the width of target's window and how many panes it holds.
+//
+// Both in one call because the panel needs both on every resize and they must
+// describe the same instant: a width read now against a pane count read a tick
+// ago would misread a split as a drag, which is the whole thing the count is
+// there to prevent.
+func WindowShape(target string) (width, panes int, err error) {
+	args := []string{"display-message", "-p"}
+	if target != "" {
+		args = append(args, "-t", target)
+	}
+	args = append(args, "#{window_width} #{window_panes}")
+
+	out, err := runner.Output("tmux", args...)
+	if err != nil {
+		return 0, 0, fmt.Errorf("resolve window shape: %w", err)
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) != 2 {
+		return 0, 0, fmt.Errorf("parse window shape: %q", strings.TrimSpace(string(out)))
+	}
+	width, err = strconv.Atoi(fields[0])
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse window width: %w", err)
+	}
+	panes, err = strconv.Atoi(fields[1])
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse window panes: %w", err)
+	}
+	return width, panes, nil
+}
+
 // WindowWidth reports the width of target's window. Pass "" for the current
 // pane's window.
 //

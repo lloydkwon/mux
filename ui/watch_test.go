@@ -344,8 +344,8 @@ func TestWatchHoldsWidthAgainstRelayout(t *testing.T) {
 	// holding a width, and a narrow window would take the quit branch first.
 	//
 	// Window unchanged, pane changed: a border drag. Adopt and remember it.
-	m.winWidth, m.targetWidth = 250, 40
-	dragged, cmd := m.applyResizeWith(60, 250)
+	m.winWidth, m.targetWidth, m.winPanes = 250, 40, 2
+	dragged, cmd := m.applyResizeWith(60, 250, 2)
 	if cmd == nil {
 		t.Error("a drag did not schedule a save")
 	}
@@ -354,7 +354,7 @@ func TestWatchHoldsWidthAgainstRelayout(t *testing.T) {
 	}
 
 	// Window changed and the pane drifted: tmux re-laid it out, so undo it.
-	relaid, cmd := dragged.applyResizeWith(66, 300)
+	relaid, cmd := dragged.applyResizeWith(66, 300, 2)
 	if cmd == nil {
 		t.Error("a re-layout was not corrected")
 	}
@@ -366,7 +366,7 @@ func TestWatchHoldsWidthAgainstRelayout(t *testing.T) {
 	}
 
 	// The correction lands: same window, pane back on target, nothing to undo.
-	settled, _ := relaid.applyResizeWith(60, 300)
+	settled, _ := relaid.applyResizeWith(60, 300, 2)
 	if settled.targetWidth != 60 {
 		t.Errorf("target = %d once settled, want 60", settled.targetWidth)
 	}
@@ -376,9 +376,9 @@ func TestWatchHoldsWidthAgainstRelayout(t *testing.T) {
 // is what collapsed the panel to a single column and then held it there.
 func TestWatchWidthIgnoresSqueeze(t *testing.T) {
 	m := watchTestModel(40, 20)
-	m.winWidth, m.targetWidth = 150, 60
+	m.winWidth, m.targetWidth, m.winPanes = 150, 60, 2
 
-	squeezed, _ := m.applyResizeWith(1, 150) // same window: would read as a drag
+	squeezed, _ := m.applyResizeWith(1, 150, 2) // same window: would read as a drag
 	if squeezed.targetWidth != 60 {
 		t.Errorf("target = %d, want the squeeze rejected and 60 kept", squeezed.targetWidth)
 	}
@@ -400,7 +400,7 @@ func quits(cmd tea.Cmd) bool {
 func TestWatchQuitsWhenWindowGetsNarrow(t *testing.T) {
 	// Opened by hand in a 54-column window: stays.
 	m := watchTestModel(40, 20)
-	narrowFirst, cmd := m.applyResizeWith(40, 54)
+	narrowFirst, cmd := m.applyResizeWith(40, 54, 2)
 	if quits(cmd) {
 		t.Error("quit on the first size — a hand-opened panel should stay")
 	}
@@ -413,18 +413,18 @@ func TestWatchQuitsWhenWindowGetsNarrow(t *testing.T) {
 	// produces mid-relayout, and quitting on it closed panels during an ordinary
 	// switch.
 	wide := watchTestModel(48, 20)
-	wide.winWidth, wide.targetWidth = 269, 48
-	once, cmd := wide.applyResizeWith(48, 54)
+	wide.winWidth, wide.targetWidth, wide.winPanes = 269, 48, 2
+	once, cmd := wide.applyResizeWith(48, 54, 2)
 	if quits(cmd) {
 		t.Error("quit on a single narrow reading")
 	}
-	if _, cmd := once.applyResizeWith(48, 54); !quits(cmd) {
+	if _, cmd := once.applyResizeWith(48, 54, 2); !quits(cmd) {
 		t.Error("did not quit after the window stayed narrow")
 	}
 
 	// Still wide enough: hold the width as before, do not leave. Expressed
 	// against the bar itself so it follows when the threshold moves.
-	if _, cmd := wide.applyResizeWith(52, wide.minWidth()); quits(cmd) {
+	if _, cmd := wide.applyResizeWith(52, wide.minWidth(), 2); quits(cmd) {
 		t.Error("quit on a window that is exactly the minimum")
 	}
 }
@@ -443,15 +443,15 @@ func TestWatchMinWidthFallsBackToTheDefault(t *testing.T) {
 	// And the resolved bar is what a resize is judged against, not the default.
 	m := watchTestModel(48, 20)
 	m.minWindowWidth = 96
-	m.winWidth, m.targetWidth = 269, 48
-	if _, cmd := m.applyResizeWith(48, 100); quits(cmd) {
+	m.winWidth, m.targetWidth, m.winPanes = 269, 48, 2
+	if _, cmd := m.applyResizeWith(48, 100, 2); quits(cmd) {
 		t.Error("quit at 100 columns with the bar set to 96")
 	}
-	narrow, cmd := m.applyResizeWith(48, 90)
+	narrow, cmd := m.applyResizeWith(48, 90, 2)
 	if quits(cmd) {
 		t.Error("quit on a single reading at 90 columns")
 	}
-	if _, cmd := narrow.applyResizeWith(48, 90); !quits(cmd) {
+	if _, cmd := narrow.applyResizeWith(48, 90, 2); !quits(cmd) {
 		t.Error("did not quit at 90 columns with the bar set to 96")
 	}
 }
@@ -554,9 +554,9 @@ func TestWatchOwnSessionCanBeChosen(t *testing.T) {
 // is enough to make it permanent, since the width is then saved and enforced.
 func TestWatchWidthRejectsRunawayGrowth(t *testing.T) {
 	m := watchTestModel(48, 20)
-	m.winWidth, m.targetWidth = 237, 48
+	m.winWidth, m.targetWidth, m.winPanes = 237, 48, 2
 
-	grown, cmd := m.applyResizeWith(188, 237)
+	grown, cmd := m.applyResizeWith(188, 237, 2)
 	if grown.targetWidth != 48 {
 		t.Errorf("target = %d, want the runaway rejected and 48 kept", grown.targetWidth)
 	}
@@ -566,13 +566,13 @@ func TestWatchWidthRejectsRunawayGrowth(t *testing.T) {
 
 	// Exactly half is still the user's to take — the ceiling is a limit, not a
 	// margin below it.
-	half, _ := m.applyResizeWith(118, 237)
+	half, _ := m.applyResizeWith(118, 237, 2)
 	if half.targetWidth != 118 {
 		t.Errorf("target = %d, want half the window adopted", half.targetWidth)
 	}
 
 	// One column over is not.
-	over, _ := m.applyResizeWith(119, 237)
+	over, _ := m.applyResizeWith(119, 237, 2)
 	if over.targetWidth != 48 {
 		t.Errorf("target = %d, want a width past half rejected", over.targetWidth)
 	}
@@ -583,7 +583,7 @@ func TestWatchWidthRejectsRunawayGrowth(t *testing.T) {
 func TestWatchWidthCorrectsAnOversizeFirstSize(t *testing.T) {
 	m := watchTestModel(188, 20)
 
-	corrected, cmd := m.applyResizeWith(188, 237)
+	corrected, cmd := m.applyResizeWith(188, 237, 2)
 	if corrected.targetWidth != 118 {
 		t.Errorf("target = %d, want it clamped to half the window", corrected.targetWidth)
 	}
@@ -592,7 +592,7 @@ func TestWatchWidthCorrectsAnOversizeFirstSize(t *testing.T) {
 	}
 
 	// An ordinary first size is still adopted as-is.
-	normal, cmd := watchTestModel(48, 20).applyResizeWith(48, 237)
+	normal, cmd := watchTestModel(48, 20).applyResizeWith(48, 237, 2)
 	if normal.targetWidth != 48 {
 		t.Errorf("target = %d, want the opening width adopted", normal.targetWidth)
 	}
@@ -605,9 +605,9 @@ func TestWatchWidthCorrectsAnOversizeFirstSize(t *testing.T) {
 // squeezed below what the panel can render is left alone, not enforced.
 func TestWatchWidthStillIgnoresSqueezeWithCeiling(t *testing.T) {
 	m := watchTestModel(48, 20)
-	m.winWidth, m.targetWidth = 237, 48
+	m.winWidth, m.targetWidth, m.winPanes = 237, 48, 2
 
-	squeezed, cmd := m.applyResizeWith(1, 237)
+	squeezed, cmd := m.applyResizeWith(1, 237, 2)
 	if squeezed.targetWidth != 48 {
 		t.Errorf("target = %d, want the squeeze rejected", squeezed.targetWidth)
 	}
@@ -623,18 +623,18 @@ func TestWatchWidthStillIgnoresSqueezeWithCeiling(t *testing.T) {
 // `mux nav` sends keys to a pane that is gone and exits 0, so nothing said why.
 func TestWatchNeedsTwoNarrowReadingsInARow(t *testing.T) {
 	m := watchTestModel(48, 20)
-	m.winWidth, m.targetWidth = 269, 48
+	m.winWidth, m.targetWidth, m.winPanes = 269, 48, 2
 
 	// Narrow, then wide again: the tally resets and the panel stays.
-	narrow, cmd := m.applyResizeWith(48, 54)
+	narrow, cmd := m.applyResizeWith(48, 54, 2)
 	if quits(cmd) {
 		t.Fatal("quit on the first narrow reading")
 	}
-	recovered, cmd := narrow.applyResizeWith(48, 269)
+	recovered, cmd := narrow.applyResizeWith(48, 269, 2)
 	if quits(cmd) {
 		t.Fatal("quit on a wide reading")
 	}
-	if _, cmd := recovered.applyResizeWith(48, 54); quits(cmd) {
+	if _, cmd := recovered.applyResizeWith(48, 54, 2); quits(cmd) {
 		t.Error("a wide reading did not clear the count — one narrow reading quit again")
 	}
 }
@@ -643,13 +643,13 @@ func TestWatchNeedsTwoNarrowReadingsInARow(t *testing.T) {
 // would let two busy moments close the panel.
 func TestWatchIgnoresANonWidth(t *testing.T) {
 	m := watchTestModel(48, 20)
-	m.winWidth, m.targetWidth = 269, 48
+	m.winWidth, m.targetWidth, m.winPanes = 269, 48, 2
 
-	zeroed, cmd := m.applyResizeWith(48, 0)
+	zeroed, cmd := m.applyResizeWith(48, 0, 2)
 	if quits(cmd) {
 		t.Fatal("quit on a zero width")
 	}
-	if _, cmd := zeroed.applyResizeWith(48, 0); quits(cmd) {
+	if _, cmd := zeroed.applyResizeWith(48, 0, 2); quits(cmd) {
 		t.Error("two zero widths quit — a non-width must not count toward leaving")
 	}
 }
@@ -760,5 +760,57 @@ func TestWatchDoesNotReanchorWithoutAnOwnSession(t *testing.T) {
 
 	if m.selected != "herdr" {
 		t.Errorf("selected = %q, want the choice kept when the panel cannot tell where it lives", m.selected)
+	}
+}
+
+// The bug the pane count exists for. A pane closing beside the panel hands it
+// the freed columns without the window changing size, which is indistinguishable
+// from a drag if the width is all you look at. In a 237-column window with two
+// panes that lands on exactly 118 — half — and half is not *over* half, so the
+// ceiling let it through, the width was saved to disk and then actively held.
+// Observed in the field: panel.json read {"width": 118}.
+func TestWatchWidthRejectsAWidthHandedOverByAClosingPane(t *testing.T) {
+	m := watchTestModel(36, 20)
+	m.winWidth, m.targetWidth, m.winPanes = 237, 36, 3
+
+	grown, cmd := m.applyResizeWith(118, 237, 2) // a pane went away
+	if grown.targetWidth != 36 {
+		t.Errorf("target = %d, want 36 kept — the columns were tmux's doing", grown.targetWidth)
+	}
+	if cmd == nil {
+		t.Error("the panel kept half the window instead of being put back")
+	}
+	if grown.winPanes != 2 {
+		t.Errorf("winPanes = %d, want the new count recorded", grown.winPanes)
+	}
+}
+
+// The other half of the same rule: a pane *appearing* is not a drag either.
+func TestWatchWidthIgnoresAResizeFromASplit(t *testing.T) {
+	m := watchTestModel(36, 20)
+	m.winWidth, m.targetWidth, m.winPanes = 237, 36, 2
+
+	split, cmd := m.applyResizeWith(60, 237, 3)
+	if split.targetWidth != 36 {
+		t.Errorf("target = %d, want the split ignored", split.targetWidth)
+	}
+	if cmd == nil {
+		t.Error("a width tmux chose during a split was left in place")
+	}
+}
+
+// And the rule must not swallow real drags: same window, same panes, a width
+// the user chose — including exactly half, which the ceiling deliberately
+// allows.
+func TestWatchWidthStillAcceptsADragAtTheSamePaneCount(t *testing.T) {
+	m := watchTestModel(36, 20)
+	m.winWidth, m.targetWidth, m.winPanes = 237, 36, 2
+
+	dragged, cmd := m.applyResizeWith(118, 237, 2)
+	if dragged.targetWidth != 118 {
+		t.Errorf("target = %d, want the drag adopted", dragged.targetWidth)
+	}
+	if cmd == nil {
+		t.Error("a real drag was not remembered")
 	}
 }

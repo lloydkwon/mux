@@ -1014,3 +1014,34 @@ func TestPanelHeaderEnabledOnError(t *testing.T) {
 		}
 	})
 }
+
+// Both facts come from one call because they must describe the same instant.
+func TestWindowShapeReadsWidthAndPanes(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		m.OnOutput([]byte("237 3\n"), nil, "tmux", "display-message", "-p", "-t", "%3",
+			"#{window_width} #{window_panes}")
+
+		w, p, err := WindowShape("%3")
+		if err != nil {
+			t.Fatalf("WindowShape: %v", err)
+		}
+		if w != 237 || p != 3 {
+			t.Errorf("got %dx%d panes, want 237/3", w, p)
+		}
+	})
+}
+
+// tmux prints a bare space for a pane that has gone away, and the panel must
+// read that as "could not tell" rather than as a zero-pane window.
+func TestWindowShapeRefusesAPartialAnswer(t *testing.T) {
+	for _, out := range []string{" \n", "237\n", "\n", "237 x\n"} {
+		withMock(t, func(m *mockRunner) {
+			m.OnOutput([]byte(out), nil, "tmux", "display-message", "-p", "-t", "%3",
+				"#{window_width} #{window_panes}")
+
+			if _, _, err := WindowShape("%3"); err == nil {
+				t.Errorf("output %q was accepted as a shape", out)
+			}
+		})
+	}
+}

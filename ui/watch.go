@@ -98,6 +98,15 @@ type watchModel struct {
 	// prefix + a, so it takes two readings; any wide one resets the count.
 	narrowSamples int
 
+	// winPanes is how many panes the window held at the last reading. A pane
+	// appearing or dying beside this one changes the panel's width without the
+	// window changing size — which is indistinguishable from a border drag if
+	// the width is all you look at. Measured: closing a pane next to the panel
+	// in a 237-column window handed it the freed columns, landing on exactly
+	// 118 — half, which the ceiling below lets through — and that was then
+	// saved to disk and actively held.
+	winPanes int
+
 	// ownAttached is whether a client was in this pane's session as of the last
 	// refresh. Held so the *arrival* can be seen: a level would undo the user's
 	// own cursor two seconds after they moved it, an edge only fires when they
@@ -432,17 +441,17 @@ func selfPane() string { return os.Getenv("TMUX_PANE") }
 // The lower clamp is the second guard: a width the panel could not render in is
 // never adopted as intent, so a transient squeeze cannot become permanent.
 func (m watchModel) applyResize(paneWidth int) (tea.Model, tea.Cmd) {
-	winWidth, err := tmux.WindowWidth(selfPane())
+	winWidth, winPanes, err := tmux.WindowShape(selfPane())
 	if err != nil {
 		return m, nil // nothing to compare against; leave the width alone
 	}
-	m, cmd := m.applyResizeWith(paneWidth, winWidth)
+	m, cmd := m.applyResizeWith(paneWidth, winWidth, winPanes)
 	return m, cmd
 }
 
 // applyResizeWith is the decision itself, split out so it can be tested without
 // a tmux server.
-func (m watchModel) applyResizeWith(paneWidth, winWidth int) (watchModel, tea.Cmd) {
+func (m watchModel) applyResizeWith(paneWidth, winWidth, winPanes int) (watchModel, tea.Cmd) {
 	// A window wide enough clears the tally: only *consecutive* narrow readings
 	// mean the window really shrank.
 	if winWidth >= m.minWidth() {
@@ -452,6 +461,7 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth int) (watchModel, tea.Cm
 	switch {
 	case m.winWidth == 0: // first size seen — adopt it
 		m.winWidth = winWidth
+		m.winPanes = winPanes
 		switch {
 		case paneWidth > maxPanelWidth(winWidth):
 			// Opened wider than the ceiling: a width remembered from a roomier
@@ -495,6 +505,19 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth int) (watchModel, tea.Cm
 		}
 		return m, tea.Quit
 
+	case winWidth == m.winWidth && winPanes != m.winPanes:
+		// A pane appeared or died beside this one. tmux hands a closing pane's
+		// columns to a neighbour, and that neighbour may be the panel — which
+		// looks exactly like a drag if the window width is all you compare.
+		// The count is what tells them apart, and it has to be checked before
+		// the drag branch: the ceiling below cannot, because a two-pane window
+		// splits into exactly half and half is not *over* half.
+		m.winPanes = winPanes
+		if m.targetWidth > 0 && paneWidth != m.targetWidth {
+			return m, restorePanelWidth(m.targetWidth)
+		}
+		return m, nil
+
 	case winWidth == m.winWidth: // the user dragged the border
 		if paneWidth < notifyMinWidth {
 			return m, nil
@@ -517,6 +540,7 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth int) (watchModel, tea.Cm
 
 	default: // tmux re-laid the window out
 		m.winWidth = winWidth
+		m.winPanes = winPanes
 		if m.targetWidth > 0 && paneWidth != m.targetWidth {
 			return m, restorePanelWidth(m.targetWidth)
 		}
