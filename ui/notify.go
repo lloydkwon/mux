@@ -57,35 +57,98 @@ type aiEvent struct {
 //     instead of silently dropping the completion event.
 //   - Every other transition is silent. The list badge already says a session
 //     is busy, and a line per state change would drown the two that matter.
-func detectTransitions(prev map[string]tmux.AIState, sessions []tmux.Session, now time.Time) ([]aiEvent, map[string]tmux.AIState) {
-	next := make(map[string]tmux.AIState, len(sessions))
+func detectTransitions(prev map[string]aiSnapshot, sessions []tmux.Session, now time.Time) ([]aiEvent, map[string]aiSnapshot) {
+	next := make(map[string]aiSnapshot, len(sessions))
 	var events []aiEvent
 
 	for _, s := range sessions {
 		before, seen := prev[s.Name]
-		next[s.Name] = s.AIState
-		if !seen || before == s.AIState {
+		next[s.Name] = aiSnapshot{state: s.AIState, since: s.AISince}
+		if !seen {
 			continue
 		}
 
 		switch {
-		case s.AIState == tmux.AIStateApproval:
+		case s.AIState == tmux.AIStateApproval && (before.state != s.AIState || newPrompt(before, s)):
 			text := s.AIState.Icon() + " " + aiStateLabel(s.AIState)
 			if s.AIWaitingFor != "" {
-				text += " · " + s.AIWaitingFor
+				text += " · " + aiWaitingLabel(s.AIWaitingFor)
 			}
 			events = append(events, aiEvent{at: now, session: s.Name, text: text,
 				state: s.AIState, since: s.AISince})
-		case s.AIState == tmux.AIStateReady && before != tmux.AIStateNone:
+		case s.AIState == tmux.AIStateReady && before.state != s.AIState && before.state != tmux.AIStateNone:
 			events = append(events, aiEvent{at: now, session: s.Name,
 				text:  s.AIState.Icon() + " " + aiStateLabel(s.AIState),
 				state: s.AIState, since: s.AISince})
 		}
 	}
 
-	// Sessions that vanished drop out of next, so a returning name is treated as
-	// new rather than as a transition from whatever it held before.
+	// A session that vanished is reported once, then forgotten: it drops out of
+	// next, so a returning name is treated as new rather than as a transition
+	// from whatever it held before.
+	for name, before := range prev {
+		if _, alive := next[name]; alive || before.state == tmux.AIStateNone {
+			continue
+		}
+		events = append(events, aiEvent{at: now, session: name,
+			text: goneIcon + " " + goneLabel, state: tmux.AIStateNone})
+	}
+
 	return events, next
+}
+
+// aiSnapshot is what the detector remembers about a session between ticks.
+//
+// The state alone was not enough. Claude stamps every status change, including
+// one blocked prompt replacing another, and with only the state to compare
+// those are indistinguishable from no change at all — the panel went quiet on
+// exactly the transition it exists to report. since is the file's own timestamp,
+// so both panels and the shared log agree on which prompt is which.
+type aiSnapshot struct {
+	state tmux.AIState
+	since time.Time
+}
+
+// newPrompt reports a fresh Approval arriving while the session was already
+// blocked — Claude answered one prompt and immediately asked another.
+//
+// A zero timestamp cannot distinguish them, and guessing would turn every tick
+// of a screen-detected tool into an event, so an unstamped state stays silent
+// until it actually changes.
+func newPrompt(before aiSnapshot, s tmux.Session) bool {
+	return !s.AISince.IsZero() && !before.since.IsZero() && !before.since.Equal(s.AISince)
+}
+
+// What a session's disappearance is drawn as. `○` rather than a new glyph
+// because it is already pinned at one cell by TestGlyphWidthsAreStable, and a
+// state row that measures wrong shifts every column after it.
+//
+// A vanished session is the one transition with no state to report: the badge
+// that would have said so went with it. Without this line the row simply stops
+// being drawn, which is indistinguishable from a session that went quiet.
+const (
+	goneIcon  = "○"
+	goneLabel = "종료"
+)
+
+// aiWaitingLabel names what a blocked session is waiting for, in the panel's
+// own language.
+//
+// Claude's `waitingFor` is a mixed field: a couple of fixed phrases, and
+// otherwise the command it wants to run ("Bash: git push"). The fixed ones are
+// the only part that can be translated, and anything unrecognised is passed
+// through verbatim — a command is not prose and must not be rewritten.
+//
+// The panel had been printing the English through, one line under its own
+// Korean, which is the drift aiStateLabel exists to prevent for states.
+func aiWaitingLabel(raw string) string {
+	switch raw {
+	case "input needed":
+		return "입력 대기"
+	case "permission prompt":
+		return "권한 승인"
+	}
+	return raw
 }
 
 // aiStateLabel names a live state in the panel's own words.
@@ -262,7 +325,7 @@ func panelStateText(s tmux.Session, width int) string {
 
 	candidates := []string{}
 	if s.AIWaitingFor != "" {
-		candidates = append(candidates, glyph+" "+label+" · "+s.AIWaitingFor+elapsed)
+		candidates = append(candidates, glyph+" "+label+" · "+aiWaitingLabel(s.AIWaitingFor)+elapsed)
 	}
 	candidates = append(candidates,
 		glyph+" "+label+elapsed,
@@ -419,7 +482,7 @@ func sessionBlocks(ss []tmux.Session, width int, selected, own string, dim bool)
 			// row that looks attached but does nothing.
 			lines = append(lines, notifyLine{
 				text: renderRow([]rowSeg{
-					{text: fitCells("    "+s.AIWaitingFor, width), color: colorMuted},
+					{text: fitCells("    "+aiWaitingLabel(s.AIWaitingFor), width), color: colorMuted},
 				}, width, sel),
 				session: s.Name,
 			})

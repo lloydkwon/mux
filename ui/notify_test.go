@@ -91,7 +91,7 @@ func TestDetectTransitions(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, _ := detectTransitions(tc.prev, tc.sessions, now)
+			got, _ := detectTransitions(snapshots(tc.prev), tc.sessions, now)
 			if len(got) != len(tc.want) {
 				t.Fatalf("got %d events %v, want %d", len(got), got, len(tc.want))
 			}
@@ -108,13 +108,13 @@ func TestDetectTransitions(t *testing.T) {
 // transition when the name comes back.
 func TestDetectTransitionsForgetsGoneSessions(t *testing.T) {
 	prev := map[string]tmux.AIState{"gone": tmux.AIStateWorking, "here": tmux.AIStateReady}
-	_, next := detectTransitions(prev, []tmux.Session{sess("here", tmux.AIStateReady)}, time.Now())
+	_, next := detectTransitions(snapshots(prev), []tmux.Session{sess("here", tmux.AIStateReady)}, time.Now())
 
 	if _, ok := next["gone"]; ok {
 		t.Error("vanished session still tracked")
 	}
-	if next["here"] != tmux.AIStateReady {
-		t.Errorf("here = %v, want ready", next["here"])
+	if next["here"].state != tmux.AIStateReady {
+		t.Errorf("here = %v, want ready", next["here"].state)
 	}
 }
 
@@ -122,7 +122,7 @@ func TestDetectTransitionsForgetsGoneSessions(t *testing.T) {
 func TestDetectTransitionsCarriesWaitingFor(t *testing.T) {
 	s := sess("a", tmux.AIStateApproval)
 	s.AIWaitingFor = "Bash: rm -rf build"
-	got, _ := detectTransitions(map[string]tmux.AIState{"a": tmux.AIStateWorking},
+	got, _ := detectTransitions(snapshots(map[string]tmux.AIState{"a": tmux.AIStateWorking}),
 		[]tmux.Session{s}, time.Now())
 
 	if len(got) != 1 || !strings.Contains(got[0].text, "rm -rf build") {
@@ -510,4 +510,103 @@ func firstSessionOf(lines []notifyLine) int {
 		}
 	}
 	return -1
+}
+
+// snapshots lifts the tables' state maps into what the detector now keeps. The
+// tables stay written in states because that is what most of the rules turn on;
+// the cases that need a timestamp build their snapshots directly.
+func snapshots(states map[string]tmux.AIState) map[string]aiSnapshot {
+	out := make(map[string]aiSnapshot, len(states))
+	for name, st := range states {
+		out[name] = aiSnapshot{state: st}
+	}
+	return out
+}
+
+// Claude answers one prompt and immediately asks another. The state never
+// changes, so comparing states alone saw nothing — the panel went silent on
+// exactly the transition it exists to report. my-mux re-notifies on this and
+// mux did not.
+func TestDetectTransitionsReportsASecondPrompt(t *testing.T) {
+	first := time.Now().Add(-time.Minute)
+	s := sess("a", tmux.AIStateApproval)
+	s.AISince = first.Add(30 * time.Second)
+	s.AIWaitingFor = "Bash: git push"
+
+	prev := map[string]aiSnapshot{"a": {state: tmux.AIStateApproval, since: first}}
+	got, _ := detectTransitions(prev, []tmux.Session{s}, time.Now())
+
+	if len(got) != 1 {
+		t.Fatalf("got %d events %v, want the new prompt reported", len(got), got)
+	}
+	if !strings.Contains(got[0].text, "git push") {
+		t.Errorf("event = %q, want the new prompt's reason", got[0].text)
+	}
+}
+
+// The same prompt seen twice is not two prompts. Without this the panel would
+// repeat a blocked session's line on every tick.
+func TestDetectTransitionsIgnoresTheSamePromptAgain(t *testing.T) {
+	since := time.Now().Add(-time.Minute)
+	s := sess("a", tmux.AIStateApproval)
+	s.AISince = since
+
+	prev := map[string]aiSnapshot{"a": {state: tmux.AIStateApproval, since: since}}
+	if got, _ := detectTransitions(prev, []tmux.Session{s}, time.Now()); len(got) != 0 {
+		t.Errorf("got %v, want nothing for an unchanged prompt", got)
+	}
+}
+
+// Only Claude stamps its states. Everything screen detection finds arrives with
+// a zero timestamp, and treating that as "changed" would make every tick of a
+// blocked session an event.
+func TestDetectTransitionsNeedsATimestampToSeeANewPrompt(t *testing.T) {
+	s := sess("a", tmux.AIStateApproval) // AISince zero
+	prev := map[string]aiSnapshot{"a": {state: tmux.AIStateApproval}}
+
+	if got, _ := detectTransitions(prev, []tmux.Session{s}, time.Now()); len(got) != 0 {
+		t.Errorf("got %v, want silence when neither side is stamped", got)
+	}
+}
+
+// A session that goes away is the one transition with no state left to report:
+// the badge that would have said so went with it, and the row simply stops
+// being drawn.
+func TestDetectTransitionsReportsAVanishedSession(t *testing.T) {
+	prev := map[string]aiSnapshot{"gone": {state: tmux.AIStateWorking}}
+
+	got, _ := detectTransitions(prev, nil, time.Now())
+	if len(got) != 1 {
+		t.Fatalf("got %d events %v, want the session's end reported", len(got), got)
+	}
+	if got[0].session != "gone" || !strings.Contains(got[0].text, goneLabel) {
+		t.Errorf("event = %+v, want gone's end", got[0])
+	}
+}
+
+// A session that never had a live state has no end worth a line — otherwise
+// closing a plain shell would be news.
+func TestDetectTransitionsIgnoresAVanishedPlainSession(t *testing.T) {
+	prev := map[string]aiSnapshot{"shell": {state: tmux.AIStateNone}}
+
+	if got, _ := detectTransitions(prev, nil, time.Now()); len(got) != 0 {
+		t.Errorf("got %v, want nothing for a session with no AI state", got)
+	}
+}
+
+// The panel speaks Korean; Claude's fixed phrases are the part that can be
+// translated. Anything else is a command it wants to run, and rewriting that
+// would be worse than leaving it in English.
+func TestAiWaitingLabel(t *testing.T) {
+	cases := map[string]string{
+		"input needed":      "입력 대기",
+		"permission prompt": "권한 승인",
+		"Bash: git push":    "Bash: git push",
+		"":                  "",
+	}
+	for raw, want := range cases {
+		if got := aiWaitingLabel(raw); got != want {
+			t.Errorf("aiWaitingLabel(%q) = %q, want %q", raw, got, want)
+		}
+	}
 }

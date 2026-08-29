@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The panel reports a second approval prompt arriving while a session is already
+  blocked. Claude stamps each one, but the detector only compared states, so
+  answering one prompt and being asked another looked like no change at all —
+  silence on exactly the transition the panel exists to report. It also now logs
+  a session's disappearance (`○ 종료`), the one transition whose badge goes away
+  with it.
+
+### Changed
+- The panel says what a blocked session is waiting for in its own language:
+  `input needed` → `입력 대기`, `permission prompt` → `권한 승인`. Anything else
+  Claude puts in that field is the command it wants to run, and passes through
+  verbatim. `mux status` and the TUI keep the English, which is what they print
+  everywhere else.
+
 ### Fixed
 - A mux installed at a path containing a space silently disabled `prefix + m`,
   the panel bindings, the nav bindings and every panel hook. The generated lines

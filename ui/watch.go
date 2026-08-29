@@ -44,7 +44,7 @@ func watchTick() tea.Cmd {
 type watchModel struct {
 	width, height int
 	sessions      []tmux.Session
-	prevAIStates  map[string]tmux.AIState
+	prevAIStates  map[string]aiSnapshot
 	err           error
 
 	// events is what the panel draws: the shared log and this pane's own
