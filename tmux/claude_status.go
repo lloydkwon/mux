@@ -88,6 +88,11 @@ func scanClaudeStatuses() map[string]ClaudeStatus {
 		return result // no Claude install, or no sessions yet — feature stays off
 	}
 
+	// One list-panes for the whole scan, hoisted here for the same reason
+	// ListSessions hoists this function: it is per-refresh work, and the 1s TTL
+	// above is what bounds it.
+	panes := paneSessions()
+
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
@@ -96,8 +101,12 @@ func scanClaudeStatuses() map[string]ClaudeStatus {
 		if err != nil {
 			continue // raced with the session exiting
 		}
-		status, session, ok := parseClaudeStatus(data)
+		status, ref, ok := parseClaudeStatus(data)
 		if !ok {
+			continue
+		}
+		session := claudeSessionName(ref, panes)
+		if session == "" {
 			continue
 		}
 		if prev, dup := result[session]; dup && !moreUrgent(status, prev) {
@@ -109,20 +118,22 @@ func scanClaudeStatuses() map[string]ClaudeStatus {
 	return result
 }
 
-// parseClaudeStatus decodes one session file and reports the tmux session it
-// belongs to. ok is false for anything we cannot or should not display:
-// a partially written file, a session outside tmux, a dead process, or a
-// status we don't model.
-func parseClaudeStatus(data []byte) (status ClaudeStatus, tmuxSession string, ok bool) {
+// parseClaudeStatus decodes one session file and reports Claude's verbatim tmux
+// reference. Resolving that to a session name is the caller's job — it needs
+// the live pane list, which is one call for the whole scan rather than one per
+// file. ok is false for anything we cannot or should not display: a partially
+// written file, a session outside tmux, a dead process, or a status we don't
+// model.
+func parseClaudeStatus(data []byte) (status ClaudeStatus, tmuxRef string, ok bool) {
 	var sf claudeSessionFile
 	if err := json.Unmarshal(data, &sf); err != nil {
 		return ClaudeStatus{}, "", false // torn write — skip this file, not the scan
 	}
 
-	tmuxSession = tmuxSessionName(sf.Tmux)
-	if tmuxSession == "" {
+	if tmuxSessionName(sf.Tmux) == "" {
 		return ClaudeStatus{}, "", false
 	}
+	tmuxRef = sf.Tmux
 	if !isAlive(sf.PID, sf.ProcStart) {
 		return ClaudeStatus{}, "", false // stale file from a crashed session
 	}
@@ -147,7 +158,7 @@ func parseClaudeStatus(data []byte) (status ClaudeStatus, tmuxSession string, ok
 	if sf.StatusUpdatedAt > 0 {
 		status.Since = time.UnixMilli(sf.StatusUpdatedAt)
 	}
-	return status, tmuxSession, true
+	return status, tmuxRef, true
 }
 
 // mapClaudeState reduces Claude's status enum to the AIState we display.
@@ -208,6 +219,59 @@ func demoteServerShell(pid int) AIState {
 		}
 	}
 	return AIStateReady
+}
+
+// claudeSessionName resolves which tmux session a status file belongs to.
+//
+// Claude writes its reference once, when it starts, and the session half of it
+// is a *name*. Rename the session — or let tmux-resurrect restore it under a
+// different one — and the name goes stale while the pane id stays exactly as
+// valid as it was. Matching on the stale name does not fail loudly: the badge
+// simply stops updating. Measured on a live session Claude was reporting as
+// busy, with the file rewritten seconds earlier, mux displayed a finished turn
+// for over half an hour because the session had been renamed `mux` → `my-mux`.
+//
+// So the pane id wins, and the recorded name is the fallback for the case the
+// pane list could not be read at all.
+func claudeSessionName(ref string, panes map[string]string) string {
+	if name, ok := panes[tmuxPaneID(ref)]; ok {
+		return name
+	}
+	return tmuxSessionName(ref)
+}
+
+// paneSessions maps every live pane id to the session holding it. Returns nil
+// when tmux cannot be asked, which callers read as "no pane is known" and fall
+// back to the name Claude recorded.
+func paneSessions() map[string]string {
+	out, err := runner.Output("tmux", "list-panes", "-a", "-F", "#{pane_id} #{session_name}")
+	if err != nil {
+		return nil
+	}
+
+	result := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		// Pane id first, because a session name may contain spaces and a pane id
+		// never does.
+		id, name, found := strings.Cut(line, " ")
+		if !found || id == "" || name == "" {
+			continue
+		}
+		result[id] = name
+	}
+	return result
+}
+
+// tmuxPaneID extracts the pane id from Claude's tmux reference, formatted
+// "<session>:@<window_id>.%<pane_id>". A session name can hold neither ':' nor
+// '.', so the first '.' is an unambiguous boundary. Returns "" when the
+// reference is absent or malformed.
+func tmuxPaneID(ref string) string {
+	_, pane, found := strings.Cut(ref, ".")
+	if !found || !strings.HasPrefix(pane, "%") {
+		return ""
+	}
+	return pane
 }
 
 // tmuxSessionName extracts the session name from Claude's tmux reference,

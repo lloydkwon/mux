@@ -35,11 +35,20 @@ func withClaudeSessions(t *testing.T, files map[string]string, aliveFn func(int,
 		aliveFn = func(int, string) bool { return true }
 	}
 
+	// The scan asks tmux which session each pane is in. Left on the real runner
+	// that is a live `tmux list-panes -a` against whatever server the developer
+	// happens to be sitting in, which is both non-hermetic and slow. An empty
+	// mock answers "no pane is known", so these tests exercise the fallback to
+	// the name Claude recorded; withClaudePanes is the one that supplies panes.
+	oldRunner := runner
+	SetRunner(newMockRunner())
+
 	oldHome, oldAlive := homeDir, isAlive
 	homeDir = func() (string, error) { return home, nil }
 	isAlive = aliveFn
 	resetClaudeStatusCache()
 	defer func() {
+		runner = oldRunner
 		homeDir, isAlive = oldHome, oldAlive
 		resetClaudeStatusCache()
 	}()
@@ -286,4 +295,97 @@ func TestClaudeStatusesCaches(t *testing.T) {
 			t.Errorf("expected the cached result within the TTL, got %v", second)
 		}
 	})
+}
+
+// withClaudePanes runs fn with the given `pane_id session_name` lines standing
+// in for the live pane list, so a test can rename a session out from under a
+// status file the way tmux does.
+func withClaudePanes(t *testing.T, files map[string]string, panes string, fn func()) {
+	t.Helper()
+	withClaudeSessions(t, files, nil, func() {
+		m := newMockRunner()
+		m.OnOutput([]byte(panes), nil, "tmux", "list-panes", "-a", "-F", "#{pane_id} #{session_name}")
+		old := runner
+		SetRunner(m)
+		resetClaudeStatusCache()
+		defer func() {
+			runner = old
+			resetClaudeStatusCache()
+		}()
+		fn()
+	})
+}
+
+// The bug this exists for. Claude writes its tmux reference once, at startup,
+// and the session half of it is a name; rename the session and the file keeps
+// pointing at a session that no longer exists. Nothing errors — the badge just
+// stops updating, which is indistinguishable from a session that went quiet.
+// Measured in the field: `mux` renamed to `my-mux` displayed a finished turn
+// for over half an hour while the file said busy and was being rewritten.
+func TestScanClaudeStatusesFollowsARenamedSession(t *testing.T) {
+	files := map[string]string{"15767.json": fixtureWaiting} // recorded "myname:@0.%0"
+
+	withClaudePanes(t, files, "%0 renamed-later\n", func() {
+		got := scanClaudeStatuses()
+
+		if _, stale := got["myname"]; stale {
+			t.Error("indexed under the name Claude recorded, which no session carries any more")
+		}
+		s, ok := got["renamed-later"]
+		if !ok {
+			t.Fatalf("the session holding pane %%0 has no state: %v", got)
+		}
+		if s.State != AIStateApproval {
+			t.Errorf("state = %v, want approval", s.State)
+		}
+	})
+}
+
+// The pane list is the better answer, not the only one. When tmux cannot be
+// asked the recorded name is all there is, and it is right far more often than
+// it is wrong — a session that was never renamed.
+func TestScanClaudeStatusesFallsBackToTheRecordedName(t *testing.T) {
+	files := map[string]string{"15767.json": fixtureWaiting}
+
+	// withClaudeSessions installs a mock with no answer for list-panes.
+	withClaudeSessions(t, files, nil, func() {
+		got := scanClaudeStatuses()
+
+		if _, ok := got["myname"]; !ok {
+			t.Errorf("no state under the recorded name with tmux unreachable: %v", got)
+		}
+	})
+}
+
+// A session name may contain spaces; a pane id never does, which is why the
+// pane id leads the format.
+func TestPaneSessionsSplitOnTheFirstSpaceOnly(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		m.OnOutput([]byte("%0 my project\n%1 solo\n"), nil,
+			"tmux", "list-panes", "-a", "-F", "#{pane_id} #{session_name}")
+
+		got := paneSessions()
+		if got["%0"] != "my project" {
+			t.Errorf("pane %%0 = %q, want %q", got["%0"], "my project")
+		}
+		if got["%1"] != "solo" {
+			t.Errorf("pane %%1 = %q, want %q", got["%1"], "solo")
+		}
+	})
+}
+
+func TestTmuxPaneID(t *testing.T) {
+	cases := map[string]string{
+		"myname:@0.%0":   "%0",
+		"my-mux:@1.%2":   "%2",
+		"sess:@10.%123":  "%123",
+		"sess:@0":        "", // no pane half
+		"":               "",
+		"sess:@0.broken": "", // not a pane id
+	}
+	for ref, want := range cases {
+		if got := tmuxPaneID(ref); got != want {
+			t.Errorf("tmuxPaneID(%q) = %q, want %q", ref, got, want)
+		}
+	}
 }
