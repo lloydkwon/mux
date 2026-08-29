@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Quitting the popup that a bare `mux` opens outside tmux left you attached to
+  whichever session `attach-session` picked, rather than back in the terminal
+  you typed in — `q` closed the popup and dropped you inside tmux, with no way
+  out short of knowing the detach key. The bootstrap now marks its popup
+  (`MUX_BOOTSTRAP_POPUP`) and quitting one detaches the client it attached.
+  Choosing a session is unaffected, and `prefix + m` never attached anything so
+  it is untouched.
+
 ### Changed
 - The panel opens on the **right** of the window (`split-window -h`), reversing
   0.3.0's move to the left. "A glance goes left before it goes right" holds on a

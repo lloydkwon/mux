@@ -423,18 +423,35 @@ func runTUI(model ui.Model) error {
 		return fmt.Errorf("TUI error: %w", err)
 	}
 
-	if m, ok := result.(ui.Model); ok {
-		if m.DetachRequested() {
-			if err := ui.DetachClient(); err != nil {
-				return fmt.Errorf("failed to detach tmux client: %w", err)
-			}
-			return nil
+	m, ok := result.(ui.Model)
+	if !ok {
+		return nil
+	}
+
+	switch {
+	case m.DetachRequested():
+		if err := ui.DetachClient(); err != nil {
+			return fmt.Errorf("failed to detach tmux client: %w", err)
 		}
-		if name := m.AttachName(); name != "" {
-			if err := ui.AttachToSession(name, m.AttachWindowIndex(), m.AttachPaneIndex()); err != nil {
-				return fmt.Errorf("failed to attach: %w", err)
-			}
+	case m.AttachName() != "":
+		if err := ui.AttachToSession(m.AttachName(), m.AttachWindowIndex(), m.AttachPaneIndex()); err != nil {
+			return fmt.Errorf("failed to attach: %w", err)
+		}
+	case bootstrappedPopup():
+		// `q` in the popup a bootstrap opened. The terminal was attached only so
+		// there would be a client to draw the popup on, so quitting without
+		// choosing a session has to undo that much: otherwise closing the popup
+		// leaves the user inside whichever session `attach-session` picked,
+		// which is not where they typed `mux` and not a session they chose.
+		// Before the bootstrap existed, quitting there returned to the shell.
+		if err := ui.DetachClient(); err != nil {
+			return fmt.Errorf("failed to detach tmux client: %w", err)
 		}
 	}
 	return nil
+}
+
+// bootstrappedPopup reports whether this mux is the one AttachAndPopup opened.
+func bootstrappedPopup() bool {
+	return os.Getenv(tmux.BootstrapPopupEnv) != ""
 }

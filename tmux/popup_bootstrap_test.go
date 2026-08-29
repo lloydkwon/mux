@@ -13,7 +13,7 @@ func TestBootstrapArgs(t *testing.T) {
 	want := []string{
 		"attach-session", ";",
 		"display-popup", "-E", "-w", "85%", "-h", "80%",
-		"MUX_NO_BOOTSTRAP=1 exec '/home/u/go/bin/mux'",
+		"MUX_NO_BOOTSTRAP=1 MUX_BOOTSTRAP_POPUP=1 exec '/home/u/go/bin/mux'",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("built %d args, want %d:\n  %q", len(got), len(want), got)
@@ -45,7 +45,7 @@ func TestBootstrapArgsQuoteThePath(t *testing.T) {
 	// An apostrophe must not end the quoting early. POSIX has no escape inside
 	// single quotes, so the only way is to close, emit an escaped quote, reopen.
 	odd := bootstrapArgs("/tmp/it's/mux")
-	wantOdd := BootstrapGuardEnv + `=1 exec '/tmp/it'\''s/mux'`
+	wantOdd := BootstrapGuardEnv + "=1 " + BootstrapPopupEnv + `=1 exec '/tmp/it'\''s/mux'`
 	if got := odd[len(odd)-1]; got != wantOdd {
 		t.Errorf("apostrophe quoting:\n  got  %s\n  want %s", got, wantOdd)
 	}
@@ -57,5 +57,24 @@ func TestBootstrapArgsUseThePopupSize(t *testing.T) {
 	joined := strings.Join(bootstrapArgs("/bin/mux"), " ")
 	if !strings.Contains(joined, "-w "+popupWidth) || !strings.Contains(joined, "-h "+popupHeight) {
 		t.Errorf("bootstrap popup is not the size prefix + m opens:\n  %s", joined)
+	}
+}
+
+// The popup has to know it is the bootstrap's, because quitting it is what
+// gives the terminal back. Without the mark, `q` closes the popup and leaves
+// the user inside a session attach-session picked for them.
+func TestBootstrapArgsMarkThePopup(t *testing.T) {
+	joined := strings.Join(bootstrapArgs("/bin/mux"), " ")
+	if !strings.Contains(joined, BootstrapPopupEnv+"=1") {
+		t.Errorf("the popup is not marked as the bootstrap's:\n  %s", joined)
+	}
+}
+
+// Two variables, two questions. The guard is one a user may export to opt out
+// of bootstrapping altogether; reading it as "you are the bootstrap popup"
+// would make a plain `mux` in a terminal detach a client it never attached.
+func TestBootstrapMarkIsNotTheGuard(t *testing.T) {
+	if BootstrapPopupEnv == BootstrapGuardEnv {
+		t.Error("the popup mark and the recursion guard are the same variable")
 	}
 }

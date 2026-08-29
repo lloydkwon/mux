@@ -130,3 +130,35 @@ func TestShouldBootstrapOutsideTmuxWithSessions(t *testing.T) {
 		t.Error("did not bootstrap outside tmux with a session to attach to")
 	}
 }
+
+// Quitting the bootstrap's popup has to give the terminal back, and the mark is
+// how runTUI can tell that popup from every other mux.
+func TestBootstrappedPopupIsMarked(t *testing.T) {
+	t.Setenv(tmux.BootstrapPopupEnv, "1")
+
+	if !bootstrappedPopup() {
+		t.Error("the popup a bootstrap opened did not recognise itself")
+	}
+}
+
+// prefix + m, `mux popup`, and a bare `mux` in a pane all attached the terminal
+// themselves or never attached it at all. Detaching on quit there would drop
+// the user out of tmux for pressing q.
+func TestBootstrappedPopupIsNotEveryMux(t *testing.T) {
+	t.Setenv(tmux.BootstrapPopupEnv, "")
+
+	if bootstrappedPopup() {
+		t.Error("an ordinary mux claimed to be the bootstrap's popup")
+	}
+}
+
+// The guard is a variable a user may export to opt out of bootstrapping. Read
+// as the mark, it would make a plain `mux` in a terminal detach on quit.
+func TestGuardAloneDoesNotMarkThePopup(t *testing.T) {
+	t.Setenv(tmux.BootstrapPopupEnv, "")
+	t.Setenv(tmux.BootstrapGuardEnv, "1")
+
+	if bootstrappedPopup() {
+		t.Error("MUX_NO_BOOTSTRAP alone was read as the popup mark")
+	}
+}

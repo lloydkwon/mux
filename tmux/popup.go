@@ -39,6 +39,16 @@ const (
 // sets itself depends on nothing.
 const BootstrapGuardEnv = "MUX_NO_BOOTSTRAP"
 
+// BootstrapPopupEnv marks the mux that AttachAndPopup opened, so quitting it can
+// give the terminal back.
+//
+// It is deliberately not BootstrapGuardEnv doing double duty. The guard says
+// "do not bootstrap", which a user may reasonably export in their own shell to
+// opt out of this behaviour; this one says "you are the popup a bootstrap
+// opened", and only mux ever sets it. Reading the guard for both would make an
+// opted-out `mux` in a plain terminal try to detach a client it never attached.
+const BootstrapPopupEnv = "MUX_BOOTSTRAP_POPUP"
+
 // AttachAndPopup attaches this terminal to tmux and opens mux as a popup on it.
 //
 // It exists because a popup has to be drawn on a client, and outside tmux there
@@ -88,7 +98,7 @@ func bootstrapArgs(muxPath string) []string {
 	return []string{
 		"attach-session", ";",
 		"display-popup", "-E", "-w", popupWidth, "-h", popupHeight,
-		BootstrapGuardEnv + "=1 exec " + shellQuote(muxPath),
+		BootstrapGuardEnv + "=1 " + BootstrapPopupEnv + "=1 exec " + shellQuote(muxPath),
 	}
 }
 
