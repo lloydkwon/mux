@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The panel logs a session entering *working*, which my-mux's history has always
+  done and this had not. A turn now shows both ends, so the time it took is
+  readable off the list rather than only the moment it finished. It halves how
+  far back the fifty-entry log reaches, which is the trade it makes.
 - The panel reports a second approval prompt arriving while a session is already
   blocked. Claude stamps each one, but the detector only compared states, so
   answering one prompt and being asked another looked like no change at all —

@@ -55,8 +55,16 @@ type aiEvent struct {
 //     test is deliberately "not None" rather than a list of the states a turn
 //     can pass through, so a state added to AIState later still ends a turn
 //     instead of silently dropping the completion event.
-//   - Every other transition is silent. The list badge already says a session
-//     is busy, and a line per state change would drown the two that matter.
+//   - Entering Working is logged too, which my-mux's history has always done and
+//     this had not. It costs history depth — a turn is now two lines rather than
+//     one, so the same fifty-entry log covers roughly half the time — and buys
+//     the other end of every turn: without it the log says when work finished
+//     and never when it started, so nothing in it has a duration. Unlike Ready
+//     it is not gated on the previous state, because None → Working is a real
+//     start: a tracked session that had no AI running now does.
+//   - Every other transition is silent. Entering Shell is the one that matters
+//     there: it is a detail of how a turn is being served, not a turn changing
+//     hands, and it flaps.
 func detectTransitions(prev map[string]aiSnapshot, sessions []tmux.Session, now time.Time) ([]aiEvent, map[string]aiSnapshot) {
 	next := make(map[string]aiSnapshot, len(sessions))
 	var events []aiEvent
@@ -77,6 +85,10 @@ func detectTransitions(prev map[string]aiSnapshot, sessions []tmux.Session, now 
 			events = append(events, aiEvent{at: now, session: s.Name, text: text,
 				state: s.AIState, since: s.AISince})
 		case s.AIState == tmux.AIStateReady && before.state != s.AIState && before.state != tmux.AIStateNone:
+			events = append(events, aiEvent{at: now, session: s.Name,
+				text:  s.AIState.Icon() + " " + aiStateLabel(s.AIState),
+				state: s.AIState, since: s.AISince})
+		case s.AIState == tmux.AIStateWorking && before.state != s.AIState:
 			events = append(events, aiEvent{at: now, session: s.Name,
 				text:  s.AIState.Icon() + " " + aiStateLabel(s.AIState),
 				state: s.AIState, since: s.AISince})

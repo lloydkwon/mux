@@ -76,10 +76,20 @@ func TestDetectTransitions(t *testing.T) {
 			want:     nil,
 		},
 		{
-			name:     "entering working stays silent",
+			// The other end of a turn. Without it the log says when work
+			// finished and never when it started.
+			name:     "entering working is a turn starting",
 			prev:     map[string]tmux.AIState{"a": tmux.AIStateReady},
 			sessions: []tmux.Session{sess("a", tmux.AIStateWorking)},
-			want:     nil,
+			want:     []string{"⏳ 작업 중"},
+		},
+		{
+			// Not gated on the previous state the way Ready is: a tracked
+			// session that had no AI running and now does has really started.
+			name:     "none to working is a start",
+			prev:     map[string]tmux.AIState{"a": tmux.AIStateNone},
+			sessions: []tmux.Session{sess("a", tmux.AIStateWorking)},
+			want:     []string{"⏳ 작업 중"},
 		},
 		{
 			name:     "unchanged state reports nothing",

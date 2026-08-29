@@ -226,7 +226,7 @@ The list shows what each session is doing *now*, but not what it just finished. 
 
 Sessions running an AI CLI come first; the rest sit under `── 세션` so every session is reachable without opening the TUI. Recent transitions are listed under those.
 
-Transitions into "working" are deliberately not logged: the badge already says that, and a line per turn would bury the two that matter.
+Every transition into working, approval and ready is logged, so a turn shows both ends and the time between them is readable off the list. Entering a shell is not: that is a detail of how a turn is being served rather than a turn changing hands, and it flaps.
 
 **Click a session to switch to it.** There is nothing here to read first — the panel deliberately does not render a copy of any session's screen, because the one you would want is usually the pane already sitting next to it.
 
