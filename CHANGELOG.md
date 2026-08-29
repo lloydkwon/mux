@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-29
+
 ### Added
 - The panel logs a session entering *working*, which my-mux's history has always
   done and this had not. A turn now shows both ends, so the time it took is
@@ -25,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Claude puts in that field is the command it wants to run, and passes through
   verbatim. `mux status` and the TUI keep the English, which is what they print
   everywhere else.
+- The panel opens on the **right** of the window (`split-window -h`), reversing
+  0.3.0's move to the left. "A glance goes left before it goes right" holds on a
+  monitor and not on a phone: a client narrower than the window shows the
+  leading columns, so a panel on the left is the half you can see and the
+  session you came to read is the half you cannot. The pane you type in gets the
+  left edge. An open panel does not move itself — close it and let the hooks
+  reopen it.
 
 ### Fixed
 - The panel adopted, saved and then enforced a width tmux had handed it when a
@@ -34,8 +43,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check now reads the window's pane count alongside its width and treats a
   changed count as a re-layout rather than a drag. A deliberate drag to exactly
   half is still yours to make.
-
-### Fixed
 - A mux installed at a path containing a space silently disabled `prefix + m`,
   the panel bindings, the nav bindings and every panel hook. The generated lines
   put the path into a shell command without quoting it, so `/bin/sh` split it in
@@ -53,8 +60,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `go install`, which an older copy earlier on PATH satisfies just as well. It
   now compares what it installed against what typing `mux` actually runs, and
   says which one wins.
-
-### Fixed
 - Quitting the popup that a bare `mux` opens outside tmux left you attached to
   whichever session `attach-session` picked, rather than back in the terminal
   you typed in — `q` closed the popup and dropped you inside tmux, with no way
@@ -62,15 +67,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`MUX_BOOTSTRAP_POPUP`) and quitting one detaches the client it attached.
   Choosing a session is unaffected, and `prefix + m` never attached anything so
   it is untouched.
-
-### Changed
-- The panel opens on the **right** of the window (`split-window -h`), reversing
-  0.3.0's move to the left. "A glance goes left before it goes right" holds on a
-  monitor and not on a phone: a client narrower than the window shows the
-  leading columns, so a panel on the left is the half you can see and the
-  session you came to read is the half you cannot. The pane you type in gets the
-  left edge. An open panel does not move itself — close it and let the hooks
-  reopen it.
 
 ## [0.3.1] - 2026-08-14
 
