@@ -843,6 +843,43 @@ func TestTogglePanelClosesTheGhostEvenWhenItWillNotOpen(t *testing.T) {
 	})
 }
 
+// An exact title is not proof of a ghost. resurrect restores titles verbatim,
+// so a user who kept working in the restored shell owns a pane named exactly
+// like the panel — and when it is all the window has, killing it kills the
+// session. The pane keeps its life and loses its title, and the real panel
+// opens beside it.
+func TestTogglePanelUntitlesAGhostThatIsTheOnlyPane(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 cat '/home/u/.local/share/tmux/resurrect/restore/pane_contents//pane-work:0.0'; exec /usr/bin/zsh\n"), nil,
+			"tmux", "list-panes", "-t", "@7", "-F", "#{pane_id} #{pane_start_command}")
+		m.OnOutput([]byte("%3 "+panelTitle+"\n"), nil,
+			"tmux", "list-panes", "-t", "@7", "-F", "#{pane_id} #{pane_title}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
+		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
+		m.OnOutput([]byte("27\n"), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-gqv", "@mux_panel_min_width")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
+		m.OnOutput([]byte("269\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
+		old := clientEnvHas
+		clientEnvHas = func(int, string) bool { return false }
+		defer func() { clientEnvHas = old }()
+
+		if err := TogglePanel("%3", true); err != nil {
+			t.Fatalf("TogglePanel: %v", err)
+		}
+		if ran(m, "kill-pane") {
+			t.Errorf("ran %v, want the window's only pane left alive", m.runs)
+		}
+		if !ran(m, "select-pane -t %3 -T") {
+			t.Errorf("ran %v, want the adopted pane's title cleared", m.runs)
+		}
+		if !ran(m, "split-window") {
+			t.Errorf("ran %v, want a real panel opened beside it", m.runs)
+		}
+	})
+}
+
 // The hooks fire constantly and almost always find a live panel. That path must
 // stay at one list-panes: the ghost lookup is a second one, and it only belongs
 // on the path that is about to create a pane anyway.

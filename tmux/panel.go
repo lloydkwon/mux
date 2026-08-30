@@ -97,8 +97,16 @@ func TogglePanel(target string, auto bool) error {
 	// its place: tmux-resurrect restores the pane as a bare shell. Closing it
 	// comes before every stand-down check below, because a window mux will not
 	// put a panel in is a window that wants those columns back most.
-	if ghost, err := findGhostPane(window); err == nil && ghost != "" {
-		_ = runner.Run("tmux", "kill-pane", "-t", ghost)
+	if ghost, alone, err := findGhostPane(window); err == nil && ghost != "" {
+		if alone {
+			// The ghost is the window's only pane, which means someone adopted
+			// it as their shell — killing it kills the session. Clearing the
+			// title is enough: nothing mistakes the pane for a ghost again, and
+			// the split below puts a real panel beside it.
+			_ = runner.Run("tmux", "select-pane", "-t", ghost, "-T", "")
+		} else {
+			_ = runner.Run("tmux", "kill-pane", "-t", ghost)
+		}
 	}
 
 	if auto && PanelDisabled(window) {
@@ -575,32 +583,41 @@ func findPanelPane(window string) (string, error) {
 
 // findGhostPane returns the id of a pane that carries the panel's title but is
 // no longer running it — what tmux-resurrect leaves behind — or "" when the
-// window has none.
+// window has none. alone reports that the ghost is the window's only pane.
 //
 // This is a second list-panes rather than another field on findPanelPane's, and
 // deliberately so. It only ever runs on the path that is about to create a
 // panel; the hook path, which fires constantly and almost always finds a live
-// panel, still costs exactly one list-panes.
+// panel, still costs exactly one list-panes. alone comes from counting the
+// lines of the same output, so it adds no call either.
 //
 // The title is compared whole rather than by substring: this kills a pane, and
 // the one thing worse than a leftover pane is closing one the user was in.
-func findGhostPane(window string) (string, error) {
+// alone exists because an exact title is not proof either — resurrect restores
+// titles verbatim, so a user who kept working in the restored shell owns a pane
+// named exactly like the panel, and if it is all the window has, killing it
+// kills the session (measured 2026-08-30: two sessions lost that way).
+func findGhostPane(window string) (ghost string, alone bool, err error) {
 	out, err := runner.Output("tmux", "list-panes", "-t", window,
 		"-F", "#{pane_id} #{pane_title}")
 	if err != nil {
-		return "", fmt.Errorf("list panes: %w", err)
+		return "", false, fmt.Errorf("list panes: %w", err)
 	}
 
+	panes := 0
 	for _, line := range strings.Split(string(out), "\n") {
 		id, title, found := strings.Cut(strings.TrimSpace(line), " ")
+		if strings.TrimSpace(line) != "" {
+			panes++
+		}
 		if !found {
 			continue // a pane with no title
 		}
 		if title == panelTitle {
-			return id, nil
+			ghost = id
 		}
 	}
-	return "", nil
+	return ghost, ghost != "" && panes == 1, nil
 }
 
 // MarkPanelPane names target as the panel's pane. Pass "" for the current pane.

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- The ghost-pane cleanup no longer kills a window's last pane. tmux-resurrect
+  restores the panel's title onto the shell it leaves in the panel's place, and
+  a user who kept working in that shell owned a pane named exactly like the
+  panel — reopening the panel then killed it, and with it the session. A ghost
+  that is all the window has now loses its title instead of its life, and the
+  real panel opens beside it.
+
 ## [0.3.2] - 2026-08-29
 
 ### Added
