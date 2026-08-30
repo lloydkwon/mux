@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-08-30
+
 ### Added
 - First-run onboarding: launched with a tmux config that carries no mux region,
   the TUI now offers to install the integration — popup bind, panel bind and
