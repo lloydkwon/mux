@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- First-run onboarding: launched with a tmux config that carries no mux region,
+  the TUI now offers to install the integration — popup bind, panel bind and
+  hooks, default keys — and applies it to the running server on `y`. Asked
+  once, ever; declining leaves the new `mux setup` command, which bundles
+  `setup-keybind` and `setup-panel` for the command line.
+
 ### Fixed
 - The ghost-pane cleanup no longer kills a window's last pane. tmux-resurrect
   restores the panel's title onto the shell it leaves in the panel's place, and

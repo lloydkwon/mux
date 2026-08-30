@@ -109,11 +109,15 @@ go install github.com/lloydkwon/mux/cmd/mux@latest
 mux
 ```
 
-For the best experience, set up popup mode (opens mux as a floating overlay):
+On a machine with no mux in its tmux config, the first launch offers to set the
+integration up — press `y` and you are done: `prefix + m` opens the popup,
+`prefix + a` toggles the side panel, and both work immediately, no config
+reload. Declined it, or want your own keys?
 
 ```bash
-mux setup-keybind               # binds prefix + m
-tmux source-file ~/.tmux.conf   # reload config
+mux setup            # everything above, default keys
+mux setup-keybind    # just the popup bind — pass a key to override
+mux setup-panel      # just the panel bind and hooks — pass key and focus-key
 ```
 
 Now press `Ctrl+b` then `m` anywhere in tmux to open mux.

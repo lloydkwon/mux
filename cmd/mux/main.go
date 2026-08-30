@@ -102,6 +102,21 @@ func main() {
 		},
 	}
 
+	setupCmd := &cobra.Command{
+		Use:   "setup",
+		Short: "Set up the whole tmux integration with default keys",
+		Long: "Runs setup-keybind and setup-panel in one go, with their default keys.\n" +
+			"Use the individual commands instead to choose your own keys.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := tmux.SetupKeybind(tmux.DefaultBindKey); err != nil {
+				return err
+			}
+			fmt.Println()
+			return tmux.SetupPanel(tmux.DefaultPanelKey, tmux.DefaultFocusKey)
+		},
+	}
+
 	setupKeybindCmd := &cobra.Command{
 		Use:   "setup-keybind [key]",
 		Short: fmt.Sprintf("Add popup keybinding to tmux config (default: %s)", tmux.DefaultBindKey),
@@ -208,7 +223,7 @@ func main() {
 	navCmd.Flags().StringVarP(&navTarget, "target", "t", "",
 		"pane whose window holds the panel (default: current)")
 
-	rootCmd.AddCommand(newCmd, popupCmd, setupKeybindCmd, setupPanelCmd, statusCmd,
+	rootCmd.AddCommand(newCmd, popupCmd, setupCmd, setupKeybindCmd, setupPanelCmd, statusCmd,
 		watchCmd, panelCmd, navCmd, borderCmd)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -231,7 +246,10 @@ func runRoot() error {
 		// Returns only on failure — attach-session replaces this process.
 		_ = tmux.AttachAndPopup()
 	}
-	return runTUI(ui.NewModel())
+	// The first-run offer belongs to the bare `mux` launch only: `mux new`
+	// opens mid-gesture, and the popup/panel surfaces exist because setup
+	// already ran.
+	return runTUI(ui.NewModel().OfferSetupIfNeeded())
 }
 
 // shouldBootstrap reports whether this mux should hand itself to a popup.

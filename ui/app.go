@@ -47,6 +47,7 @@ const (
 	modeConfirmKill
 	modeOrder
 	modeHelp
+	modeSetupOffer
 )
 
 // clickMark remembers the last left press, so the next one can be told apart
@@ -304,6 +305,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyFilter()
 		m.focusItemSession(msg.sessionName)
 		return m, nil
+
+	case setupInstalledMsg:
+		// Success needs no announcement — the keys simply work from here. What
+		// must not be silent is a failure, or the user believes they are set up.
+		if msg.err != nil {
+			m.err = fmt.Errorf("tmux setup failed: %w (try `mux setup`)", msg.err)
+		}
+		return m, nil
 	}
 
 	switch m.mode {
@@ -324,6 +333,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.mode = modeList
 		}
 		return m, nil
+	case modeSetupOffer:
+		return m.updateSetupOffer(msg)
 	default:
 		return m.updateList(msg)
 	}
@@ -716,6 +727,8 @@ func (m Model) View() string {
 		return m.viewWithOverlay(m.orderModel.View())
 	case modeHelp:
 		return m.viewHelp()
+	case modeSetupOffer:
+		return m.viewSetupOffer()
 	default:
 		return m.viewMain()
 	}

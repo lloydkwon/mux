@@ -23,6 +23,11 @@ const (
 type preferences struct {
 	Sort   sortMode       `json:"sort"`
 	Orders map[string]int `json:"orders,omitempty"`
+
+	// SetupOffered records that the first-run tmux-integration offer was
+	// answered, whichever way. Asked once, ever: declining and being asked
+	// again on every launch is nagging, and the manual `mux setup` stays.
+	SetupOffered bool `json:"setup_offered,omitempty"`
 }
 
 func defaultPreferences() preferences {
