@@ -18,7 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolving through a pane target, `split-window -l N` giving exactly N columns,
   `list-panes` remembering the start command the panel is found by, batched
   captures emitting one separator, and `run-shell` and `after-new-session`
-  expanding `#{pane_id}`.
+  expanding `#{pane_id}`. `TMUX_BIN=/path/to/tmux` aims it at a candidate
+  build instead of PATH, which is the point: a new tmux on PATH makes the client
+  new while the running server stays old, and the protocol mismatch rejects every
+  tmux call until the server restarts — taking every session with it. Checked
+  this way against 3.4 and 3.7c: 22/22 on both.
 
 ## [0.3.5] - 2026-08-31
 

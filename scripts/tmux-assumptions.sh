@@ -5,8 +5,15 @@
 # 이상해진다 — 패널이 안 열리거나, 파싱이 어긋나거나, 훅이 헛돈다. 그래서 버전이
 # 바뀔 때마다 사람이 기억해 내는 대신 이 스크립트를 돌린다.
 #
-#   scripts/tmux-assumptions.sh        # 결과만
-#   scripts/tmux-assumptions.sh -v     # 실패한 항목의 실제 출력까지
+#   scripts/tmux-assumptions.sh                  # PATH 의 tmux 로
+#   scripts/tmux-assumptions.sh -v               # 실패 항목을 더 자세히
+#   TMUX_BIN=/path/to/tmux scripts/...           # 특정 바이너리로
+#
+# TMUX_BIN 이 있는 이유: 올리기 *전에* 확인하려는 것이다. 새 tmux 를 PATH 에
+# 올리는 순간 클라이언트만 새 버전이 되고 돌고 있는 서버는 옛 버전이라
+# 프로토콜이 어긋나 모든 tmux 호출이 거부된다 — 서버를 재시작해야 풀리고,
+# 그건 열려 있는 작업을 전부 끊는 일이다. 후보 바이너리를 PATH 밖에 두고
+# 여기에만 물려 보면 그 대가를 치르기 전에 답을 얻는다.
 #
 # 검사 대상은 mux 소스가 실제로 실행하는 명령과 파싱하는 포맷이다. 새 가정을
 # 코드에 넣으면 여기에도 한 줄 넣는다 — 안 그러면 다음 업그레이드 때 그 하나만
@@ -19,15 +26,16 @@ set -uo pipefail
 
 SOCKET="mux-assume-$$"
 VERBOSE=${1:-}
+TMUX_BIN=${TMUX_BIN:-tmux}
 FAILED=0
 CHECKED=0
 
-t() { tmux -L "$SOCKET" -f /dev/null "$@"; }
+t() { "$TMUX_BIN" -L "$SOCKET" -f /dev/null "$@"; }
 
 # kill-server 는 서버만 죽이고 소켓 파일은 남긴다 — 돌릴 때마다 /tmp 에 하나씩
 # 쌓이므로 파일까지 지운다.
 cleanup() {
-	tmux -L "$SOCKET" kill-server 2>/dev/null || true
+	"$TMUX_BIN" -L "$SOCKET" kill-server 2>/dev/null || true
 	rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$SOCKET"
 }
 trap cleanup EXIT
@@ -55,7 +63,11 @@ okc() {
 	esac
 }
 
-VERSION=$(tmux -V)
+if ! command -v "$TMUX_BIN" >/dev/null 2>&1 && [ ! -x "$TMUX_BIN" ]; then
+	echo "tmux 를 찾을 수 없습니다: $TMUX_BIN" >&2
+	exit 2
+fi
+VERSION=$("$TMUX_BIN" -V)
 echo "$VERSION 로 검사합니다 (소켓 $SOCKET)"
 echo
 
@@ -63,7 +75,7 @@ echo
 # tmux/popup.go 의 getTmuxVersion 이 "tmux 3.4" / "tmux 3.2a" 를 파싱해 3.2 미만이면
 # 팝업 모드를 거절한다. 이 문자열 모양이 바뀌면 팝업이 통째로 막힌다.
 echo "버전"
-okc "tmux -V 가 'tmux <숫자>' 로 시작한다" "tmux " "$VERSION"
+okc "$TMUX_BIN -V 가 'tmux <숫자>' 로 시작한다" "tmux " "$VERSION"
 NUM=$(printf '%s' "$VERSION" | sed 's/^tmux //; s/[a-z-].*$//')
 ok "3.2 이상 (display-popup 요구사항)" "yes" \
 	"$(awk -v v="$NUM" 'BEGIN{print (v+0 >= 3.2) ? "yes" : "no"}')"
