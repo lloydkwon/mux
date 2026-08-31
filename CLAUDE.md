@@ -67,6 +67,28 @@ Mouse reporting is on (`tea.WithMouseCellMotion()` in `cmd/mux/main.go`), which 
 
 A single click only moves the cursor. Unlike the watch panel — where a click switches outright because there is nothing to read first — the right column here *is* the thing to read, so clicking to look and clicking to leave must not be the same gesture. The second press on the same row inside `doubleClickWindow` commits, and it commits through `activateCurrent()`, which `enter` also calls: a click that attached somewhere other than where the key would is a bug nobody would think to look for.
 
+### 목록은 프로젝트로 좁혀서 열린다
+
+tmux 세션은 **서버** 단위로 존재하고 서버는 사용자당 하나다 — 어느 VS Code 창에서
+열든 `tmux list-sessions`는 전부 같은 목록을 준다. 좁히는 건 mux의 몫이다.
+
+`NewModel`은 시작할 때 `tmux.CurrentProjectDir()`(`display-message -p '#{@project_dir}'`)를
+한 번 읽어 `filterText`의 초기값으로 넣는다. `@project_dir`은 `tmux-project` VS Code
+프로필이 세션을 만들 때 다는 태그이고, 태그가 없으면 시딩할 값이 없어 지금까지처럼
+전부 보인다. **이걸 버그로 보고 지우지 말 것** — `esc`가 탈출구다.
+
+별도의 스코프 모드를 두지 않은 이유는 필터가 이미 그 일을 하기 때문이다.
+`applyFilter`는 이름·`Directory`·`ProjectDir` 셋을 대조한다. `ProjectDir`이 필요한
+이유가 핵심이다: `Directory`는 활성 pane을 따라 움직이고 Claude의 cwd로 덮이기까지
+하지만, `@project_dir`은 세션이 열린 폴더로 고정이라 pane이 딴 데 가 있어도 그 세션은
+자기 프로젝트 목록에 남는다. `listFormat`이 `#{@project_dir}`을 마지막 필드로 싣고
+오므로 tmux 호출은 늘지 않는다 — 대신 `parseLine`의 `SplitN`은 11이고, 필드를
+더하면 그 숫자와 테스트 픽스처를 같이 고쳐야 한다.
+
+시딩된 필터에서는 액션 행("새 셸"/"새 세션")을 계속 보여준다(`m.filterText == m.projectDir`).
+사용자가 친 필터가 아니라 기본 시야이므로, 여기서 액션이 사라지면 VS Code에서 연
+mux는 새 세션을 만들 길이 없다.
+
 ### Preview targeting
 
 `previewKey{session, window, pane}` uses `-1` as "the active one"; `.target()` renders it as tmux target syntax (`sess`, `sess:1`, `sess:1.2`). The model caches one preview blob plus the key it belongs to, and `viewMain` only renders it when that key still equals `previewKeyForItem(currentItem)` — otherwise the pane shows blank rather than the wrong session's output.

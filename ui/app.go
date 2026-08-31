@@ -59,21 +59,25 @@ type clickMark struct {
 
 // Model is the top-level Bubble Tea model for the session manager TUI.
 type Model struct {
-	sessions        []tmux.Session
-	filtered        []tmux.Session
-	items           []listItem // flattened tree of (sessions, windows, panes)
-	tree            treeState
-	cursor          int
-	mode            mode
-	width           int
-	height          int
-	err             error
-	createModel     createModel
-	renameModel     renameModel
-	filterMod       filterModel
-	confirmKillMod  confirmKillModel
-	orderModel      orderModel
-	filterText      string
+	sessions       []tmux.Session
+	filtered       []tmux.Session
+	items          []listItem // flattened tree of (sessions, windows, panes)
+	tree           treeState
+	cursor         int
+	mode           mode
+	width          int
+	height         int
+	err            error
+	createModel    createModel
+	renameModel    renameModel
+	filterMod      filterModel
+	confirmKillMod confirmKillModel
+	orderModel     orderModel
+	filterText     string
+	// projectDir는 시작할 때 한 번 읽는 @project_dir. filterText의 초기값이자,
+	// "이건 사용자가 친 필터가 아니다"를 구분하는 표식 — 액션 행을 계속 보여주는
+	// 판단에 쓴다.
+	projectDir      string
 	prefs           preferences
 	attachTarget    previewKey       // set when we want to attach after quitting (zero value = no attach)
 	detachRequested bool             // set when New shell is selected from inside tmux
@@ -162,7 +166,19 @@ func loadTokenUsage(sessionName string, panePID int) tea.Cmd {
 // NewModel returns a new Model with default settings.
 func NewModel() Model {
 	prefs, err := loadPreferences()
-	return Model{tree: newTreeState(), prefs: prefs, err: err}
+	m := Model{tree: newTreeState(), prefs: prefs, err: err}
+
+	// VS Code 창마다 자기 프로젝트 세션만 보이게 한다. tmux 세션은 서버 단위로
+	// 존재하고 서버는 사용자당 하나이므로, 어느 창에서 열든 목록은 전부 같다 —
+	// 좁히는 건 mux의 몫이다.
+	//
+	// 별도의 스코프 모드를 만들지 않고 기존 필터를 미리 채우는 이유: 필터는 이미
+	// 이름·경로·프로젝트를 대조하고, esc 한 번이면 전체로 돌아가는 탈출구까지
+	// 갖고 있다. 태그(@project_dir)가 없는 세션에서 열면 시딩할 값이 없어
+	// 지금까지와 똑같이 전부 보인다.
+	m.projectDir = tmux.CurrentProjectDir()
+	m.filterText = m.projectDir
+	return m
 }
 
 // NewSessionModel returns a Model that opens straight on the create prompt and
@@ -683,7 +699,7 @@ func (m *Model) currentSessionName() string {
 // list and current expansion state. Call after sessions, filter, or expansion
 // state changes.
 func (m *Model) rebuildItems() {
-	m.items = flattenMenu(m.filtered, &m.tree, m.prefs.Orders, m.filterText == "")
+	m.items = flattenMenu(m.filtered, &m.tree, m.prefs.Orders, m.filterText == "" || m.filterText == m.projectDir)
 	if m.cursor >= len(m.items) {
 		m.cursor = max(0, len(m.items)-1)
 	}
@@ -698,7 +714,8 @@ func (m *Model) applyFilter() {
 		m.filtered = nil
 		for _, s := range sorted {
 			if strings.Contains(strings.ToLower(s.Name), lower) ||
-				strings.Contains(strings.ToLower(s.Directory), lower) {
+				strings.Contains(strings.ToLower(s.Directory), lower) ||
+				strings.Contains(strings.ToLower(s.ProjectDir), lower) {
 				m.filtered = append(m.filtered, s)
 			}
 		}

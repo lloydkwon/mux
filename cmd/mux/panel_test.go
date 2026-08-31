@@ -115,7 +115,7 @@ func TestShouldBootstrapNotWhenTmuxFails(t *testing.T) {
 type oneSessionRunner struct{}
 
 func (oneSessionRunner) Output(name string, args ...string) ([]byte, error) {
-	return []byte("mux|1|1786800000|0|/home/u|1786800000|zsh|123|0|0\n"), nil
+	return []byte("mux|1|1786800000|0|/home/u|1786800000|zsh|123|0|0|\n"), nil
 }
 func (oneSessionRunner) Run(string, ...string) error { return nil }
 

@@ -90,8 +90,8 @@ func withMock(t *testing.T, fn func(m *mockRunner)) {
 func TestListSessionsWithMock(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
 		now := time.Now().Unix()
-		line1 := fmt.Sprintf("dev|2|%d|1|/home/user/dev|%d|bash|100|0|0", now-3600, now-60)
-		line2 := fmt.Sprintf("ai|1|%d|0|/home/user/ai|%d|claude|200|0|0", now-7200, now-120)
+		line1 := fmt.Sprintf("dev|2|%d|1|/home/user/dev|%d|bash|100|0|0|", now-3600, now-60)
+		line2 := fmt.Sprintf("ai|1|%d|0|/home/user/ai|%d|claude|200|0|0|", now-7200, now-120)
 		out := line1 + "\n" + line2
 
 		// Mock the list-sessions call
@@ -210,7 +210,7 @@ func TestWithStderrKeepsTheNoServerCheckWorking(t *testing.T) {
 func TestSessionForTargetWithMock(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
 		now := time.Now().Unix()
-		line := fmt.Sprintf("ai|1|%d|0|/home/user/ai|%d|claude|200|0|0", now-7200, now-120)
+		line := fmt.Sprintf("ai|1|%d|0|/home/user/ai|%d|claude|200|0|0|", now-7200, now-120)
 
 		m.OnOutput([]byte(line+"\n"), nil, "tmux", "display-message", "-p", "-t", "%3", listFormat)
 		m.OnOutput(nil, fmt.Errorf("no children"), "pgrep", "-P", "200")

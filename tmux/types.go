@@ -18,6 +18,13 @@ type Session struct {
 	GitBranch     string // current git branch, empty if not a git repo
 	IsWorktree    bool   // true if Directory is a linked git worktree
 
+	// ProjectDir is the session's @project_dir tmux option — the directory the
+	// session was opened for, set by the tmux-project VS Code profile. Empty
+	// for sessions nobody tagged. Unlike Directory (which follows the active
+	// pane, and is overwritten by the AI's own cwd) it never moves, which is
+	// what makes it usable as project identity.
+	ProjectDir string
+
 	// Live AI CLI state. Two providers reach this: the tool's own state file
 	// (today only Claude, via ~/.claude/sessions) and screen detection
 	// (tmux/detect, twenty agents). The state file wins where both answer,

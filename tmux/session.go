@@ -13,7 +13,19 @@ import (
 // name the active pane of the active window; read through display-message by
 // SessionForTarget they name the target pane, which is what a border drawn above
 // that pane should say.
-const listFormat = "#{session_name}|#{session_windows}|#{session_created}|#{session_attached}|#{pane_current_path}|#{session_activity}|#{pane_current_command}|#{pane_pid}|#{window_index}|#{pane_index}"
+const listFormat = "#{session_name}|#{session_windows}|#{session_created}|#{session_attached}|#{pane_current_path}|#{session_activity}|#{pane_current_command}|#{pane_pid}|#{window_index}|#{pane_index}|#{@project_dir}"
+
+// CurrentProjectDir reports the @project_dir option of the session this
+// process runs in — the tag the tmux-project VS Code profile writes when it
+// opens a session for a folder. Empty outside tmux and for untagged sessions,
+// which is what makes scoping on it safe: no tag, no scoping.
+func CurrentProjectDir() string {
+	out, err := runner.Output("tmux", "display-message", "-p", "#{@project_dir}")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
 
 // ListSessions returns all tmux sessions sorted by attached status and recent activity.
 func ListSessions() ([]Session, error) {
@@ -98,8 +110,8 @@ func SessionForTarget(target string) (Session, error) {
 func parseLine(line string, statuses map[string]ClaudeStatus, screens map[string]ScreenState) (Session, error) {
 	// The path may contain the separator, so it is not split off by count — but
 	// it is field 5 of a fixed layout, and everything after it is separator-free.
-	parts := strings.SplitN(line, "|", 10)
-	if len(parts) < 10 {
+	parts := strings.SplitN(line, "|", 11)
+	if len(parts) < 11 {
 		return Session{}, fmt.Errorf("unexpected format: %s", line)
 	}
 
@@ -125,6 +137,7 @@ func parseLine(line string, statuses map[string]ClaudeStatus, screens map[string
 		IsWorktree:    gitInfo.IsWorktree,
 		WindowIndex:   parts[8],
 		PaneIndex:     parts[9],
+		ProjectDir:    parts[10],
 	}
 
 	// Screen detection first, then the state file over the top of it. A tool
