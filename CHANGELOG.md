@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-08-31
+
 ### Fixed
 - `mux setup-panel` no longer takes Alt+Enter. It bound the panel's commit key as
   `bind -n M-Enter`, and a rootless binding takes that key from every program in
