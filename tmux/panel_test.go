@@ -85,7 +85,6 @@ func TestTogglePanelOpensInWindowDirectory(t *testing.T) {
 					"-F", "#{pane_id} #{pane_start_command}")
 				m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
 				m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
-				m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 
 				if err := TogglePanel("%3", false); err != nil {
 					t.Fatalf("TogglePanel: %v", err)
@@ -107,7 +106,6 @@ func TestTogglePanelWithoutDirectory(t *testing.T) {
 			"-F", "#{pane_id} #{pane_start_command}")
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
-		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 
 		if err := TogglePanel("%3", false); err != nil {
 			t.Fatalf("TogglePanel: %v", err)
@@ -222,9 +220,9 @@ func TestTogglePanelDefaultsToCurrentPane(t *testing.T) {
 	})
 }
 
-// A session that was dragged wider must reopen at that width. Applying it at
-// split time rather than resizing afterwards is what avoids the pane flashing
-// at the wrong size.
+// A panel dragged wider must reopen at that width — anywhere, not just where it
+// was dragged. Applying it at split time rather than resizing afterwards is what
+// avoids the pane flashing at the wrong size.
 func TestTogglePanelOpensAtRememberedWidth(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
 		mockPanelWindow(m)
@@ -232,8 +230,10 @@ func TestTogglePanelOpensAtRememberedWidth(t *testing.T) {
 			"-F", "#{pane_id} #{pane_start_command}")
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
-		m.OnOutput([]byte("72\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 
+		if err := SavePanelWidth(72); err != nil {
+			t.Fatalf("SavePanelWidth: %v", err)
+		}
 		if err := TogglePanel("%3", false); err != nil {
 			t.Fatalf("TogglePanel: %v", err)
 		}
@@ -254,7 +254,6 @@ func TestTogglePanelWidthFallsBack(t *testing.T) {
 					"-F", "#{pane_id} #{pane_start_command}")
 				m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
 				m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
-				m.OnOutput([]byte(stored+"\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 
 				if err := TogglePanel("%3", false); err != nil {
 					t.Fatalf("TogglePanel: %v", err)
@@ -269,36 +268,16 @@ func TestTogglePanelWidthFallsBack(t *testing.T) {
 
 // A remembered width outranks the default — dragging the panel narrow has to
 // stick across reopens.
-func TestTogglePanelRememberedWidthWins(t *testing.T) {
+// The width is one number for every panel, so a session that "remembers" its own
+// no longer exists as a concept — there is nothing between the saved width and
+// the default.
+func TestTogglePanelOpensAtTheSavedWidth(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
 		mockPanelWindow(m)
 		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
 			"-F", "#{pane_id} #{pane_start_command}")
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
-		m.OnOutput([]byte("40\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
-
-		if err := TogglePanel("%3", false); err != nil {
-			t.Fatalf("TogglePanel: %v", err)
-		}
-		if !ran(m, "-l 40 ") {
-			t.Errorf("ran %v, want the remembered width 40", m.runs)
-		}
-	})
-}
-
-// The disk copy is what carries a dragged width across a tmux server restart,
-// where the session option cannot: the option dies with the server, and every
-// panel would otherwise reopen at the default the user had already rejected.
-func TestTogglePanelFallsBackToSavedWidth(t *testing.T) {
-	withMock(t, func(m *mockRunner) {
-		mockPanelWindow(m)
-		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
-			"-F", "#{pane_id} #{pane_start_command}")
-		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
-		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
-		// A fresh server: the session remembers nothing.
-		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 
 		if err := SavePanelWidth(52); err != nil {
 			t.Fatalf("SavePanelWidth: %v", err)
@@ -312,43 +291,25 @@ func TestTogglePanelFallsBackToSavedWidth(t *testing.T) {
 	})
 }
 
-// The session's own width is the more specific fact, so it outranks the disk
-// copy — two sessions on one server are allowed to differ.
-func TestTogglePanelSessionWidthOutranksSavedWidth(t *testing.T) {
+// 폭을 물어보려고 세션 옵션을 뒤지던 호출은 사라져야 한다. 남아 있으면 세션마다
+// 다른 답이 돌아오는 옛 동작이 조용히 살아 있다는 뜻이다.
+func TestTogglePanelAsksNoSessionForItsWidth(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
 		mockPanelWindow(m)
 		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
 			"-F", "#{pane_id} #{pane_start_command}")
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
-		m.OnOutput([]byte("40\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 
-		if err := SavePanelWidth(52); err != nil {
-			t.Fatalf("SavePanelWidth: %v", err)
-		}
 		if err := TogglePanel("%3", false); err != nil {
 			t.Fatalf("TogglePanel: %v", err)
 		}
-		if !ran(m, "-l 40 ") {
-			t.Errorf("ran %v, want the session's own width 40", m.runs)
+		for _, r := range m.runs {
+			if strings.Contains(r, "@mux_panel_width") {
+				t.Errorf("ran %q — the per-session width option is gone", r)
+			}
 		}
 	})
-}
-
-func TestSetPanelWidth(t *testing.T) {
-	withMock(t, func(m *mockRunner) {
-		if err := SetPanelWidth("work", 72); err != nil {
-			t.Fatalf("SetPanelWidth: %v", err)
-		}
-		want := "tmux set-option -t work @mux_panel_width 72"
-		if len(m.runs) != 1 || m.runs[0] != want {
-			t.Errorf("ran %v, want [%q]", m.runs, want)
-		}
-	})
-
-	if err := SetPanelWidth("work", 0); err == nil {
-		t.Error("a non-positive width was accepted")
-	}
 }
 
 func TestSessionForPane(t *testing.T) {
@@ -575,7 +536,6 @@ func TestTogglePanelAutoSkipsVSCode(t *testing.T) {
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 		m.OnOutput([]byte("16\n"), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
-		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 	}
 	onlyVSCode := func(int, string) bool { return true }
 
@@ -623,7 +583,6 @@ func TestTogglePanelAutoSkipsProjectSession(t *testing.T) {
 		m.OnOutput([]byte("/home/u/dev/front\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@project_dir")
 		// Nothing is attached — the case that defeated the client-based check.
 		m.OnOutput([]byte(""), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
-		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 	}
 
 	withMock(t, func(m *mockRunner) {
@@ -659,7 +618,6 @@ func TestTogglePanelAutoOpensInUntaggedSession(t *testing.T) {
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@project_dir")
 		m.OnOutput([]byte("27\n"), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
 		m.OnOutput([]byte("300\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
-		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 		old := clientEnvHas
 		clientEnvHas = func(int, string) bool { return false }
 		defer func() { clientEnvHas = old }()
@@ -686,7 +644,6 @@ func TestTogglePanelAutoSkipsNarrowWindow(t *testing.T) {
 		m.OnOutput([]byte("27\n"), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
 		m.OnOutput([]byte(width+"\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-gqv", "@mux_panel_min_width")
-		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 	}
 	notVSCode := func(int, string) bool { return false }
 
@@ -772,7 +729,6 @@ func TestTogglePanelAutoRespectsManualOff(t *testing.T) {
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 		m.OnOutput([]byte("27\n"), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
 		m.OnOutput([]byte("269\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
-		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 	}
 	notVSCode := func(int, string) bool { return false }
 
@@ -825,7 +781,6 @@ func mockGhostWindow(m *mockRunner, titles string) {
 	m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 	m.OnOutput([]byte("27\n"), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
 	m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-gqv", "@mux_panel_min_width")
-	m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 }
 
 // tmux-resurrect cannot bring `mux watch` back — it records a pane's child
@@ -924,7 +879,6 @@ func TestTogglePanelUntitlesAGhostThatIsTheOnlyPane(t *testing.T) {
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 		m.OnOutput([]byte("27\n"), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-gqv", "@mux_panel_min_width")
-		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
 		m.OnOutput([]byte("269\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
 		old := clientEnvHas
 		clientEnvHas = func(int, string) bool { return false }

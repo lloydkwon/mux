@@ -18,10 +18,11 @@ const (
 	// eventLogOption is the tmux option every panel reads the log from and
 	// writes it back to.
 	//
-	// Global, and the first global option mux writes — @mux_panel_min_width is
-	// global but read-only, @mux_panel_width is per session and @mux_panel_off
-	// per window. Neither scope works here: the point is that every panel on the
-	// server sees the same list, whichever session or window it happens to be in.
+	// Global, and the first global option mux writes — @mux_panel_min_width and
+	// @mux_panel_header are global but read-only, and @mux_panel_off is per
+	// window. That last scope is the one that would not work here: the point is
+	// that every panel on the server sees the same list, whichever session or
+	// window it happens to be in.
 	//
 	// Living on the server rather than on disk is the right lifetime too. A
 	// "recent events" list describes what has happened while these sessions have

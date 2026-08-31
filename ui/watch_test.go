@@ -814,3 +814,61 @@ func TestWatchWidthStillAcceptsADragAtTheSamePaneCount(t *testing.T) {
 		t.Error("a real drag was not remembered")
 	}
 }
+
+// 한 곳에서 드래그한 폭을 다른 패널들도 따라가야 한다. 세션마다 제각각이던
+// 동작을 바꾼 것이라, 따라가는지와 "따라간 것이 드래그로 오해되지 않는지"를
+// 같이 고정한다.
+func TestAdoptSavedWidthFollowsTheLastDrag(t *testing.T) {
+	// 실제 ~/.config/mux/panel.json 을 건드리지 않도록 격리한다.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := tmux.SavePanelWidth(60); err != nil {
+		t.Fatalf("SavePanelWidth: %v", err)
+	}
+
+	m := watchModel{winWidth: 250, winPanes: 2, targetWidth: 36}
+	adopted, cmd := m.adoptSavedWidth()
+	if adopted.targetWidth != 60 {
+		t.Errorf("target = %d, want the saved 60", adopted.targetWidth)
+	}
+	if cmd == nil {
+		t.Error("adopting did not schedule a resize")
+	}
+
+	// 이미 그 폭이면 아무것도 하지 않는다 — 틱마다 pane 을 흔들면 안 된다.
+	if _, cmd := adopted.adoptSavedWidth(); cmd != nil {
+		t.Error("a panel already at the saved width scheduled a resize anyway")
+	}
+}
+
+// 좁은 창은 천장에 걸려 깎인 폭을 쓰되, 그 값을 전역 저장본에 되쓰지 않아야
+// 한다. 되쓰면 창 하나의 사정이 나머지 패널을 전부 좁힌다.
+func TestAdoptSavedWidthClampsWithoutWritingBack(t *testing.T) {
+	// 실제 ~/.config/mux/panel.json 을 건드리지 않도록 격리한다.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := tmux.SavePanelWidth(60); err != nil {
+		t.Fatalf("SavePanelWidth: %v", err)
+	}
+
+	// 창이 90칸이면 천장은 45.
+	m := watchModel{winWidth: 90, winPanes: 2, targetWidth: 36}
+	clamped, cmd := m.adoptSavedWidth()
+	if clamped.targetWidth != 45 {
+		t.Errorf("target = %d, want the ceiling 45", clamped.targetWidth)
+	}
+	if cmd == nil {
+		t.Error("clamped adoption did not schedule a resize")
+	}
+
+	// 그 리사이즈가 돌아오면 "같은 창, 다른 pane" 이라 드래그 분기로 들어간다.
+	// 우리가 맞춘 폭 그대로이므로 기억할 것이 없어야 한다.
+	settled, cmd := clamped.applyResizeWith(45, 90, 2)
+	if cmd != nil {
+		t.Error("landing on the width we asked for was remembered as a drag")
+	}
+	if settled.targetWidth != 45 {
+		t.Errorf("target = %d, want it left at 45", settled.targetWidth)
+	}
+	if w := tmux.SavedPanelWidth(); w != 60 {
+		t.Errorf("saved width is now %d — the clamp leaked into the global value", w)
+	}
+}

@@ -208,7 +208,8 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case watchTickMsg:
-		return m, tea.Batch(loadSessions, watchTick())
+		m, adopt := m.adoptSavedWidth()
+		return m, tea.Batch(loadSessions, watchTick(), adopt)
 
 	case sessionsLoadedMsg:
 		m.err = msg.err
@@ -535,6 +536,13 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth, winPanes int) (watchMod
 			}
 			return m, nil
 		}
+		if paneWidth == m.targetWidth {
+			// 우리가 맞춰 둔 폭으로 돌아온 것뿐이다 — 새로 기억할 것이 없다.
+			// 이게 adoptSavedWidth 의 안전장치이기도 하다: 좁은 창에서 천장에
+			// 걸려 깎인 폭이 전역 저장본을 끌어내리는 경로가 여기 하나뿐이라,
+			// 여기서 막으면 한 창의 사정이 나머지 패널을 좁히지 못한다.
+			return m, nil
+		}
 		m.targetWidth = paneWidth
 		return m, rememberPanelWidth(paneWidth)
 
@@ -546,6 +554,35 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth, winPanes int) (watchMod
 		}
 		return m, nil
 	}
+}
+
+// adoptSavedWidth follows the width last dragged in *any* panel, so one manual
+// decision reaches every open one instead of only the session it was made in.
+//
+// Read straight off disk on the tick rather than deferred to a tea.Cmd: it is a
+// two-line JSON file every two seconds, and the value is wanted by the very
+// decision being made. applyResize reads the window shape synchronously for a
+// harder-won reason, and this is the cheap end of the same trade.
+//
+// The window's own ceiling still applies — a panel cannot take more than half
+// the window it is in — but the clamped value is never written back. That is
+// what stops one narrow window from dragging every other panel down to its size,
+// and the guard doing it is in applyResizeWith: a resize landing on the width we
+// already wanted is not a drag and remembers nothing.
+func (m watchModel) adoptSavedWidth() (watchModel, tea.Cmd) {
+	saved := tmux.SavedPanelWidth()
+	if saved <= 0 {
+		return m, nil
+	}
+	want := saved
+	if m.winWidth > 0 && want > maxPanelWidth(m.winWidth) {
+		want = maxPanelWidth(m.winWidth)
+	}
+	if want < notifyMinWidth || want == m.targetWidth {
+		return m, nil
+	}
+	m.targetWidth = want
+	return m, restorePanelWidth(want)
 }
 
 // maxPanelWidth is the widest the panel may be held at: half its window.
@@ -560,23 +597,19 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth, winPanes int) (watchMod
 // is what is left over, and that scales with the window.
 func maxPanelWidth(winWidth int) int { return winWidth / 2 }
 
-// rememberPanelWidth records the pane's width, so reopening the panel brings
-// back the size the user dragged it to.
+// rememberPanelWidth records the pane's width, so every panel — this one after
+// a reopen, and the others on their next tick — comes back at the size the user
+// dragged it to.
 //
-// Both halves, because they answer different questions. The tmux option is the
-// live one and is per session, so two sessions on one server can differ — but it
-// dies with the server, and a width the user dragged once should not have to be
-// dragged again after a reboot. The disk copy is that: one width, the last one
-// chosen, seeding every panel that has nothing more specific to go on.
+// One width, not one per session. It used to be both, with a per-session tmux
+// option consulted first, and that made a drag in one session invisible to the
+// rest. Someone dragging a border is saying how wide the panel is, not how wide
+// it is here.
 //
-// Failure is deliberately silent on both: this is a convenience, and a session
-// that cannot be resolved (the pane is going away, tmux is shutting down) is not
-// worth a line in the event log.
+// Failure is deliberately silent: this is a convenience, and a panel whose pane
+// is going away is not worth a line in the event log.
 func rememberPanelWidth(width int) tea.Cmd {
 	return func() tea.Msg {
-		if session, err := tmux.SessionForPane(selfPane()); err == nil {
-			_ = tmux.SetPanelWidth(session, width)
-		}
 		_ = tmux.SavePanelWidth(width)
 		return nil
 	}

@@ -21,17 +21,6 @@ const (
 	// lower because a user dragging deliberately gets to choose.
 	defaultPanelWidth = 36
 
-	// panelWidthOption remembers a session's panel width as a tmux user option.
-	//
-	// This is the *live* half of the memory and it is per session: two sessions
-	// on one server can want different widths, and the option dies with its
-	// session so nothing has to clean it up.
-	//
-	// It cannot be the whole story, because it does not survive a tmux server
-	// restart — see SavedPanelWidth, which is the disk half. Neither is
-	// preferences.json, for the reason spelled out on panelState.
-	panelWidthOption = "@mux_panel_width"
-
 	// panelCommand identifies the panel among a window's panes. tmux records
 	// what each pane was started with, so no marker has to be maintained.
 	//
@@ -146,17 +135,13 @@ func TogglePanel(target string, auto bool) error {
 	// resizing after the fact means the pane never appears at the wrong size
 	// first, and `mux watch` has no startup race with its own resize.
 	//
-	// Three sources, most specific first: what this session was dragged to, what
-	// any panel was last dragged to (which is what carries across a tmux server
-	// restart), and only then the built-in default.
+	// One width for every panel: whatever was last dragged to, anywhere. It used
+	// to be per session as well (@mux_panel_width), and that option won — so
+	// dragging in one session left the others where they were, which is not what
+	// "the panel is this wide" means to anyone holding one mouse.
 	width := defaultPanelWidth
 	if w := SavedPanelWidth(); w > 0 {
 		width = w
-	}
-	if sessionErr == nil {
-		if w := PanelWidth(session); w > 0 {
-			width = w
-		}
 	}
 
 	// -d keeps the focus in the pane you were working in. No -b, so the panel
@@ -324,21 +309,6 @@ func SessionForPane(target string) (string, error) {
 	return name, nil
 }
 
-// PanelWidth reports the remembered panel width for a session, or 0 when none
-// has been recorded. A missing option is not an error — -q keeps tmux quiet.
-func PanelWidth(session string) int {
-	out, err := runner.Output("tmux", "show-options", "-qv",
-		"-t", session, panelWidthOption)
-	if err != nil {
-		return 0
-	}
-	w, err := strconv.Atoi(strings.TrimSpace(string(out)))
-	if err != nil || w <= 0 {
-		return 0
-	}
-	return w
-}
-
 // vscodeEnvMarker is what VS Code's integrated terminal exports into every
 // shell it starts, and so into a tmux client started from one.
 const vscodeEnvMarker = "TERM_PROGRAM=vscode"
@@ -387,9 +357,8 @@ func MinWindowWidth() int {
 
 // panelHeaderOption turns the panel's session header on. Off unless set.
 //
-// Global and read-only, like @mux_panel_min_width and unlike @mux_panel_width or
-// @mux_panel_off: this is a preference someone writes in their tmux.conf, not
-// state mux keeps.
+// Global and read-only, like @mux_panel_min_width and unlike @mux_panel_off:
+// this is a preference someone writes in their tmux.conf, not state mux keeps.
 const panelHeaderOption = "@mux_panel_header"
 
 // PanelHeaderEnabled reports whether the panel should draw its session header.
@@ -534,15 +503,6 @@ func SetPanelDisabled(window string, off bool) error {
 		return runner.Run("tmux", "set-option", "-wu", "-t", window, panelDisabledOption)
 	}
 	return runner.Run("tmux", "set-option", "-w", "-t", window, panelDisabledOption, "1")
-}
-
-// SetPanelWidth records the panel width for a session.
-func SetPanelWidth(session string, width int) error {
-	if width <= 0 {
-		return fmt.Errorf("panel width must be positive, got %d", width)
-	}
-	return runner.Run("tmux", "set-option", "-t", session,
-		panelWidthOption, strconv.Itoa(width))
 }
 
 // panelWindow resolves the window holding target and that window's current

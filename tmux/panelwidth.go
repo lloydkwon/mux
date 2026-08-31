@@ -32,10 +32,11 @@ var panelStateFile = defaultPanelStatePath
 // `mux watch`, which is a separate process, would be silently clobbered by the
 // next sort toggle.
 //
-// Not per-session because session names are exactly what a server restart does
-// not carry over, and this file only matters across one. Per-session divergence
-// within a running server is still there: it lives in @mux_panel_width, which is
-// consulted first.
+// Not per-session, and no longer per-session anywhere. There used to be a
+// @mux_panel_width tmux option consulted ahead of this file, so two sessions on
+// one server could differ — but it meant dragging a border in one session left
+// every other panel where it was, and someone dragging a border is saying how
+// wide the panel is, not how wide it is here. This file is now the whole answer.
 type panelState struct {
 	Width int `json:"width"`
 }
