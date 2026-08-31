@@ -252,13 +252,13 @@ The border, because everything below it is your shell — mux cannot write there
 
 `prefix + Tab` steps into the panel and back out again. While you are in it the panel's own keys apply — `j`/`k` to move, `enter` to go to that session, `esc` to leave without choosing. Pressing `enter` hands the focus back to the pane you came from on its way to the new session, so the round trip needs no thought.
 
-`M-Up` / `M-Down` / `M-Enter` do the same steering **without ever moving the focus**: they reach the panel with `send-keys`, so the cursor moves while you keep typing in your own pane. That is still the panel's default mode; the focus key is for when you want to look through the list properly.
+`M-Up` / `M-Down` and `prefix + Enter` do the same steering **without ever moving the focus**: they reach the panel with `send-keys`, so the cursor moves while you keep typing in your own pane. That is still the panel's default mode; the focus key is for when you want to look through the list properly.
 
 ```tmux
 bind Tab        run-shell "/absolute/path/to/mux panel --focus -t #{pane_id}"
 bind -n M-Up    run-shell "/absolute/path/to/mux nav -t #{pane_id} up"
 bind -n M-Down  run-shell "/absolute/path/to/mux nav -t #{pane_id} down"
-bind -n M-Enter run-shell "/absolute/path/to/mux nav -t #{pane_id} enter"
+bind Enter      run-shell "/absolute/path/to/mux nav -t #{pane_id} enter"
 ```
 
 `up`, `down`, `top`, `bottom` and `enter` are the directions `nav` takes. A window with no panel does nothing and exits cleanly, so both bindings are safe to make global.

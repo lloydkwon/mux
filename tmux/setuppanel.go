@@ -29,10 +29,21 @@ const (
 // The directions are NavPanel's vocabulary, so the binding says what it means
 // and the panel's own key handling can change without every user's tmux.conf
 // changing with it.
-var navBinds = []struct{ key, direction string }{
-	{"M-Up", "up"},
-	{"M-Down", "down"},
-	{"M-Enter", "enter"},
+//
+// Moving is rootless — one keystroke, and prefix + arrow is already tmux's own
+// pane navigation, so there is nothing to collide with. Committing is not.
+// `bind -n M-Enter` took Alt+Enter away from every program in every pane, and
+// Alt+Enter is how Claude Code inserts a newline — a tool built to sit beside
+// Claude cannot take that key. Behind the prefix it costs a keystroke and
+// collides with nothing.
+var navBinds = []struct {
+	key       string
+	direction string
+	rootless  bool // bound with -n: no prefix, so it reaches tmux before the pane
+}{
+	{key: "M-Up", direction: "up", rootless: true},
+	{key: "M-Down", direction: "down", rootless: true},
+	{key: "Enter", direction: "enter"},
 }
 
 // panelHooks are the tmux events after which a window may be on screen without
@@ -151,12 +162,15 @@ func panelBlockLines(muxPath, key, focusKey string) []string {
 		fmt.Sprintf(`bind %s run-shell "%s panel -t #{pane_id}"`, key, quoted),
 		fmt.Sprintf(`bind %s run-shell "%s panel --focus -t #{pane_id}"`, focusKey, quoted),
 	}
-	// The keyboard that never takes the focus. Alt combinations without a
-	// prefix, so they cost one keystroke and cannot collide with tmux's own
-	// prefix + arrow pane navigation.
+	// The keyboard that never takes the focus. See navBinds for why moving is
+	// rootless and committing is not.
 	for _, n := range navBinds {
-		lines = append(lines, fmt.Sprintf(`bind -n %-7s run-shell "%s nav -t #{pane_id} %s"`,
-			n.key, quoted, n.direction))
+		flag := ""
+		if n.rootless {
+			flag = "-n "
+		}
+		lines = append(lines, fmt.Sprintf(`bind %s%-7s run-shell "%s nav -t #{pane_id} %s"`,
+			flag, n.key, quoted, n.direction))
 	}
 	width := 0
 	for _, h := range panelHooks {

@@ -248,7 +248,10 @@ func TestPanelBlockBindsBothKeyboards(t *testing.T) {
 		t.Errorf("no focus binding:\n%s", block)
 	}
 	for _, n := range navBinds {
-		want := "bind -n " + n.key
+		want := "bind " + n.key
+		if n.rootless {
+			want = "bind -n " + n.key
+		}
 		if !strings.Contains(block, want) {
 			t.Errorf("no %q binding:\n%s", want, block)
 		}
@@ -256,12 +259,30 @@ func TestPanelBlockBindsBothKeyboards(t *testing.T) {
 			t.Errorf("%s does not steer %q:\n%s", n.key, n.direction, block)
 		}
 	}
+}
 
-	// Without -n they would need the prefix, which defeats the point of a
-	// keyboard that does not interrupt what you are typing.
+// Moving the cursor is rootless on purpose: needing the prefix would defeat a
+// keyboard meant not to interrupt what you are typing. Committing is the
+// exception, and it has to be — `bind -n M-Enter` took Alt+Enter away from every
+// program in every pane, and that is how Claude Code inserts a newline.
+func TestPanelBlockLeavesAltEnterAlone(t *testing.T) {
+	block := strings.Join(panelBlockLines("/bin/mux", "a", "Tab"), "\n")
+
+	if strings.Contains(block, "M-Enter") {
+		t.Errorf("Alt+Enter is bound, which takes Claude Code's newline key:\n%s", block)
+	}
 	for _, line := range strings.Split(block, "\n") {
-		if strings.Contains(line, " nav -t ") && !strings.HasPrefix(line, "bind -n ") {
-			t.Errorf("nav binding needs the prefix: %q", line)
+		switch {
+		case !strings.Contains(line, " nav -t "):
+			continue
+		case strings.Contains(line, " enter"):
+			if strings.HasPrefix(line, "bind -n ") {
+				t.Errorf("committing must not be rootless: %q", line)
+			}
+		default:
+			if !strings.HasPrefix(line, "bind -n ") {
+				t.Errorf("moving the cursor should not need the prefix: %q", line)
+			}
 		}
 	}
 }

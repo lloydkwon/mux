@@ -210,13 +210,13 @@ AI CLI가 도는 세션이 먼저 오고, 나머지는 `── 세션` 아래에
 
 `prefix + Tab`은 패널 안으로 들어갔다 나옵니다. 들어가 있는 동안에는 패널 자체 키가 그대로 먹습니다 — `j`/`k`로 이동, `enter`로 그 세션으로, `esc`로 아무것도 안 고르고 나오기. `enter`를 누르면 새 세션으로 가는 길에 포커스를 원래 pane으로 돌려주므로 왕복을 신경 쓸 필요가 없습니다.
 
-`M-Up` / `M-Down` / `M-Enter`는 같은 조작을 **포커스를 전혀 옮기지 않고** 합니다. `send-keys`로 패널에 닿기 때문에 내 pane에서 계속 타이핑하면서 커서만 움직입니다. 이쪽이 여전히 패널의 기본 사용법이고, 포커스 키는 목록을 제대로 훑어보고 싶을 때를 위한 것입니다.
+`M-Up` / `M-Down` 과 `prefix + Enter` 는 같은 조작을 **포커스를 전혀 옮기지 않고** 합니다. `send-keys`로 패널에 닿기 때문에 내 pane에서 계속 타이핑하면서 커서만 움직입니다. 이쪽이 여전히 패널의 기본 사용법이고, 포커스 키는 목록을 제대로 훑어보고 싶을 때를 위한 것입니다.
 
 ```tmux
 bind Tab        run-shell "/mux/절대경로 panel --focus -t #{pane_id}"
 bind -n M-Up    run-shell "/mux/절대경로 nav -t #{pane_id} up"
 bind -n M-Down  run-shell "/mux/절대경로 nav -t #{pane_id} down"
-bind -n M-Enter run-shell "/mux/절대경로 nav -t #{pane_id} enter"
+bind Enter      run-shell "/mux/절대경로 nav -t #{pane_id} enter"
 ```
 
 `nav`의 방향은 `up`, `down`, `top`, `bottom`, `enter` 다섯 가지입니다. 패널이 없는 창에서는 둘 다 아무 일도 하지 않고 정상 종료하므로 전역 바인딩으로 둬도 안전합니다.

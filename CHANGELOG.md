@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `mux setup-panel` no longer takes Alt+Enter. It bound the panel's commit key as
+  `bind -n M-Enter`, and a rootless binding takes that key from every program in
+  every pane — Alt+Enter is how Claude Code inserts a newline, so mux was
+  breaking the tool it exists to sit beside. Committing now sits behind the
+  prefix (`prefix + Enter`); moving the cursor stays rootless on `M-Up`/`M-Down`,
+  where one keystroke is the whole point and nothing collides. Existing configs
+  keep the old line until `mux setup` is run again — `tmux unbind -n M-Enter`
+  frees the key immediately.
+
 ## [0.3.4] - 2026-08-31
 
 ### Added
