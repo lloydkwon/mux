@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -148,10 +149,14 @@ func main() {
 		},
 	}
 
+	var statusWatch bool
 	statusCmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show AI session summary for tmux statusbar",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if statusJSON && statusWatch {
+				return runStatusJSONWatch()
+			}
 			if statusJSON {
 				return runStatusJSON()
 			}
@@ -159,6 +164,25 @@ func main() {
 		},
 	}
 	statusCmd.Flags().BoolVar(&statusJSON, "json", false, "output session list as JSON")
+	statusCmd.Flags().BoolVar(&statusWatch, "watch", false,
+		"with --json: keep running, print a JSON line whenever the sessions change")
+
+	switchCmd := &cobra.Command{
+		Use:   "switch <session>",
+		Short: "Switch the Windows Terminal tmux client to a session",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			err := tmux.SwitchWTClient(args[0])
+			if err != nil {
+				// WT 클라이언트가 없어도 mux TUI가 목록 화면에 떠 있으면
+				// TUI에게 attach를 요청해 같은 결과를 낸다 (위젯 클릭 경로)
+				if ui.RequestRemoteAttach(args[0]) == nil {
+					return nil
+				}
+			}
+			return err
+		},
+	}
 
 	watchCmd := &cobra.Command{
 		Use:   "watch",
@@ -224,7 +248,7 @@ func main() {
 		"pane whose window holds the panel (default: current)")
 
 	rootCmd.AddCommand(newCmd, popupCmd, setupCmd, setupKeybindCmd, setupPanelCmd, statusCmd,
-		watchCmd, panelCmd, navCmd, borderCmd)
+		switchCmd, watchCmd, panelCmd, navCmd, borderCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -371,9 +395,12 @@ type sessionJSON struct {
 	WaitingFor string `json:"waitingFor,omitempty"`
 	Since      int64  `json:"since,omitempty"` // 상태 시작 시각, unix millis
 	PID        int    `json:"pid,omitempty"`   // 상태를 발행한 프로세스 (소비자의 프로세스 검사용)
+	// 이 세션에 통합 터미널로 붙어 있는 VS Code 창의 워크스페이스 폴더.
+	// 세션 dir과 다를 수 있다 (예: 상위 폴더를 연 창). 없으면 생략.
+	VSCodeDir string `json:"vscodeDir,omitempty"`
 }
 
-func sessionsJSON(sessions []tmux.Session) ([]byte, error) {
+func sessionsJSON(sessions []tmux.Session, vscodeDirs map[string][]string) ([]byte, error) {
 	out := make([]sessionJSON, 0, len(sessions)) // 빈 목록도 null이 아닌 []로
 	for _, s := range sessions {
 		j := sessionJSON{
@@ -394,6 +421,16 @@ func sessionsJSON(sessions []tmux.Session) ([]byte, error) {
 			j.Since = s.AISince.UnixMilli()
 		}
 		j.PID = s.AIPID
+		// VS Code 창 매핑은 세션의 작업 디렉터리가 그 창의 워크스페이스 폴더
+		// 안(또는 동일)인 창만 인정한다. 다른 프로젝트 창의 터미널에서 이 세션에
+		// attach만 한 경우(구경)는 후보에서 제외 — 세션마다 후보가 여럿일 수
+		// 있으므로(자기 창 + 구경 창) 조건에 맞는 첫 창을 고른다.
+		for _, vdir := range vscodeDirs[s.Name] {
+			if j.Dir == vdir || strings.HasPrefix(j.Dir, vdir+"/") {
+				j.VSCodeDir = vdir
+				break
+			}
+		}
 		out = append(out, j)
 	}
 	return json.Marshal(out)
@@ -404,12 +441,33 @@ func runStatusJSON() error {
 	if err != nil {
 		return err
 	}
-	b, err := sessionsJSON(sessions)
+	b, err := sessionsJSON(sessions, tmux.VSCodeClientDirs())
 	if err != nil {
 		return err
 	}
 	fmt.Println(string(b))
 	return nil
+}
+
+// runStatusJSONWatch streams the session list as JSON lines: one line at start,
+// then one whenever the marshaled output changes (checked every second — the
+// tmux package's internal caches make each check cheap). Exits when stdout
+// closes, i.e. when the consuming widget goes away.
+func runStatusJSONWatch() error {
+	var last string
+	for {
+		sessions, err := tmux.ListSessions()
+		if err == nil {
+			b, mErr := sessionsJSON(sessions, tmux.VSCodeClientDirs())
+			if mErr == nil && string(b) != last {
+				last = string(b)
+				if _, wErr := fmt.Fprintln(os.Stdout, last); wErr != nil {
+					return nil // 소비자(위젯)가 사라짐 — 조용히 종료
+				}
+			}
+		}
+		time.Sleep(time.Second)
+	}
 }
 
 func joinWith(parts []string, sep string) string {
@@ -446,6 +504,12 @@ func runTUI(model ui.Model) error {
 	// wheel-scroll and drag-to-select stop working here; holding Shift still
 	// gets the terminal's own selection.
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+
+	// 원격 attach 소켓: 위젯 클릭(mux switch)이 WT 클라이언트를 못 찾을 때
+	// 이 TUI를 해당 세션으로 attach시킨다. 소켓을 못 열어도 TUI는 정상 동작.
+	if closeRemote, err := ui.ServeRemote(p.Send); err == nil {
+		defer closeRemote()
+	}
 
 	result, err := p.Run()
 	if err != nil {

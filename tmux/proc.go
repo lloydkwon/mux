@@ -96,6 +96,59 @@ func procEnvHas(pid int, marker string) bool {
 	return false
 }
 
+// procEnvHasPrefix reports whether any environment entry of pid starts with
+// prefix — for variables whose value is irrelevant, e.g. "WT_SESSION=" which
+// Windows Terminal sets to a fresh GUID per tab.
+//
+// False where /proc is unavailable or the process is gone — "unknown", not "no".
+func procEnvHasPrefix(pid int, prefix string) bool {
+	if pid <= 0 {
+		return false
+	}
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/environ")
+	if err != nil {
+		return false
+	}
+	for _, entry := range bytes.Split(data, []byte{0}) {
+		if strings.HasPrefix(string(entry), prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// procEnvValue returns the value of the named environment variable of pid, or
+// "" where /proc is unavailable, the process is gone, or the variable is unset.
+func procEnvValue(pid int, name string) string {
+	if pid <= 0 {
+		return ""
+	}
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/environ")
+	if err != nil {
+		return ""
+	}
+	prefix := name + "="
+	for _, entry := range bytes.Split(data, []byte{0}) {
+		if s := string(entry); strings.HasPrefix(s, prefix) {
+			return strings.TrimPrefix(s, prefix)
+		}
+	}
+	return ""
+}
+
+// processCwd returns pid's current working directory, or "" where /proc is
+// unavailable or the process is gone.
+func processCwd(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	cwd, err := os.Readlink("/proc/" + strconv.Itoa(pid) + "/cwd")
+	if err != nil {
+		return ""
+	}
+	return cwd
+}
+
 // readProcStart returns field 22 (starttime) of /proc/<pid>/stat, the value
 // Claude Code records as "procStart". ok is false when /proc is unavailable
 // or the process is gone.

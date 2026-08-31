@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -143,6 +144,17 @@ func parseLine(line string, statuses map[string]ClaudeStatus, screens map[string
 		s.AIWaitingFor = st.WaitingFor
 		s.AISince = st.Since
 		s.AIPID = st.PID
+
+		// tmux's session path follows the *active pane*, which may be looking
+		// somewhere unrelated (a split shell, another repo). The AI's own cwd
+		// is what the session is about, so dir/branch follow it when they
+		// disagree. No-op where /proc is unavailable.
+		if cwd := processCwd(st.PID); cwd != "" && cwd != s.Directory {
+			s.Directory = cwd
+			gi := LookupGitInfo(cwd)
+			s.GitBranch = gi.Branch
+			s.IsWorktree = gi.IsWorktree
+		}
 	}
 
 	return s, nil
@@ -179,4 +191,84 @@ func RenameSession(oldName, newName string) error {
 // process, so it has no reason to bypass the runner.
 func SwitchClient(name string) error {
 	return runner.Run("tmux", "switch-client", "-t", "="+name)
+}
+
+// isWTClient reports whether a tmux client process was launched from Windows
+// Terminal. Replaceable in tests.
+var isWTClient = func(pid int) bool { return procEnvHasPrefix(pid, "WT_SESSION=") }
+
+// SwitchWTClient points the most recently active Windows Terminal client at
+// the named session (exact match, see SwitchClient for the "=" rationale).
+//
+// Only Windows Terminal clients are touched: VS Code integrated-terminal
+// clients each watch a single session on purpose, and yanking them somewhere
+// else would be hostile. Windows Terminal is identified by the WT_SESSION
+// environment variable on the client process.
+func SwitchWTClient(name string) error {
+	out, err := runner.Output("tmux", "list-clients", "-F",
+		"#{client_pid} #{client_activity} #{client_name}")
+	if err != nil || strings.TrimSpace(string(out)) == "" {
+		return errors.New("no attached tmux clients")
+	}
+	client := mostRecentWTClient(string(out), isWTClient)
+	if client == "" {
+		return errors.New("no tmux client attached from Windows Terminal")
+	}
+	return runner.Run("tmux", "switch-client", "-c", client, "-t", "="+name)
+}
+
+// VSCodeClientDirs maps each session name to the workspace folders of every
+// VS Code window whose integrated terminal is attached to it. A session can
+// collect several — its own project window plus windows that merely attached
+// to peek — so callers pick the folder that actually matches the session.
+// The folder comes from the client process's PWD: VS Code starts terminals at
+// the workspace root, so it names the open window even when that differs from
+// the session's own path. Sessions with no VS Code client are absent.
+func VSCodeClientDirs() map[string][]string {
+	out, err := runner.Output("tmux", "list-clients", "-F",
+		"#{client_pid} #{client_session}")
+	if err != nil {
+		return nil
+	}
+	dirs := make(map[string][]string)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil || !procEnvHas(pid, "TERM_PROGRAM=vscode") {
+			continue
+		}
+		if dir := procEnvValue(pid, "PWD"); dir != "" {
+			dirs[fields[1]] = append(dirs[fields[1]], dir)
+		}
+	}
+	return dirs
+}
+
+// mostRecentWTClient picks the client to switch from list-clients output:
+// Windows Terminal clients only, most recent activity first. Pure for testing.
+func mostRecentWTClient(out string, isWT func(pid int) bool) string {
+	best := ""
+	bestActivity := int64(-1)
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil || !isWT(pid) {
+			continue
+		}
+		activity, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil {
+			continue
+		}
+		if activity > bestActivity {
+			bestActivity = activity
+			best = fields[2]
+		}
+	}
+	return best
 }

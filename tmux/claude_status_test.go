@@ -382,6 +382,7 @@ func TestTmuxPaneID(t *testing.T) {
 		"sess:@0":        "", // no pane half
 		"":               "",
 		"sess:@0.broken": "", // not a pane id
+		"sess:@0.":       "", // 점만 남고 pane 절반이 없음
 	}
 	for ref, want := range cases {
 		if got := tmuxPaneID(ref); got != want {

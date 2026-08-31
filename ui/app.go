@@ -249,6 +249,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tokenUsage = msg.usage
 		return m, nil
 
+	case RemoteAttachMsg:
+		// 외부(mux switch 폴백)에서 온 attach 요청 — 생성 직후 attach와 동일 경로
+		m.attachTarget = previewKey{session: msg.Name, window: -1, pane: -1}
+		return m, tea.Quit
+
 	case sessionCreatedMsg:
 		m.mode = modeList
 		if msg.attach {
