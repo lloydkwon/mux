@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `make tmux-check` (`scripts/tmux-assumptions.sh`) verifies what mux assumes
+  about tmux against the tmux actually installed, and CI runs it too. Every unit
+  test mocks the runner — that is what keeps them hermetic, and it also means
+  tmux can change underneath mux without a single test failing. The script
+  starts a private server (`-L`, `-f /dev/null`, so your own sessions and hooks
+  are never touched) and checks 22 behaviours the code leans on: the version
+  string `getTmuxVersion` parses, the session-list field count, user options
+  resolving through a pane target, `split-window -l N` giving exactly N columns,
+  `list-panes` remembering the start command the panel is found by, batched
+  captures emitting one separator, and `run-shell` and `after-new-session`
+  expanding `#{pane_id}`.
+
 ## [0.3.5] - 2026-08-31
 
 ### Fixed
