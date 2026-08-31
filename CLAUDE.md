@@ -282,6 +282,8 @@ The comparison is against the *whole* regenerated block, not just the path, so a
 
 The default was 200, picked so the width alone would also exclude VS Code's integrated terminal at 149-150 columns. That was too blunt: an ordinary Windows Terminal at **188** was silently refused a panel, and the `--auto` path stands down without an error, so it looked exactly like a broken feature. 140 is the panel's 48 columns plus a work pane worth working in, and VS Code stays `SessionOnlyInVSCode`'s job — which inspects the client rather than inferring from columns. The width rule now only stands alone for a window nobody is attached to, and there it may open a panel in a 149-column window it used to skip.
 
+**VS Code는 두 가지로 걸러진다. `@project_dir` 태그가 1순위다.** `SessionOnlyInVSCode`는 붙어 있는 클라이언트를 들여다봐야 답할 수 있는데, `after-new-session` 훅은 클라이언트가 붙기 *전에* 터진다 — 그래서 "VS Code 아님"으로 읽히고 패널이 들어갔으며, ensure 의미상 다시는 안 나왔다. `tmux-project` 프로필이 단 `@project_dir`은 세션이 생긴 순간부터 거기 있고 클라이언트와 무관하므로 그 구멍이 없다 (`SessionProjectDir`, `tmux/session.go`). 태그가 있으면 auto 경로는 물러난다. 태그가 **없는** 것은 증거가 아니므로 아무것도 바꾸지 않는다 — 그때는 클라이언트 검사와 폭 규칙이 그대로 판단한다.
+
 `panelHooks` is the list of events after which a window can be on screen without a panel. Each was checked against a real server, since a hook that silently never fires looks exactly like a broken feature. `client-session-changed` is the load-bearing one: clicking a session in the panel runs `switch-client`, landing you in a window that never had a panel. There is no recursion — the ensure runs `split-window`, which makes a pane rather than a window.
 
 `install.sh` sets up the popup keybinding only; `mux setup-panel` is the sole path for the panel block.

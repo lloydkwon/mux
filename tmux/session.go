@@ -15,12 +15,30 @@ import (
 // that pane should say.
 const listFormat = "#{session_name}|#{session_windows}|#{session_created}|#{session_attached}|#{pane_current_path}|#{session_activity}|#{pane_current_command}|#{pane_pid}|#{window_index}|#{pane_index}|#{@project_dir}"
 
-// CurrentProjectDir reports the @project_dir option of the session this
-// process runs in — the tag the tmux-project VS Code profile writes when it
-// opens a session for a folder. Empty outside tmux and for untagged sessions,
-// which is what makes scoping on it safe: no tag, no scoping.
+// projectDirOption is the tmux session option the tmux-project VS Code profile
+// writes when it opens a session for a folder. Its presence is what marks a
+// session as belonging to one project — and, unlike the clients attached to it,
+// it is there from the moment the session exists.
+const projectDirOption = "@project_dir"
+
+// CurrentProjectDir reports projectDirOption for the session this process runs
+// in. Empty outside tmux and for untagged sessions, which is what makes scoping
+// on it safe: no tag, no scoping.
 func CurrentProjectDir() string {
-	out, err := runner.Output("tmux", "display-message", "-p", "#{@project_dir}")
+	out, err := runner.Output("tmux", "display-message", "-p", "#{"+projectDirOption+"}")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// SessionProjectDir reports projectDirOption for a named session. Empty when
+// the session carries no tag, or does not exist.
+func SessionProjectDir(session string) string {
+	if session == "" {
+		return ""
+	}
+	out, err := runner.Output("tmux", "show-options", "-qv", "-t", session, projectDirOption)
 	if err != nil {
 		return ""
 	}

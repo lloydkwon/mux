@@ -66,11 +66,13 @@ const (
 // flap. On after-new-window it behaves as before, since a fresh window cannot
 // already hold a panel.
 //
-// The hook path also stands down in three cases, none of them an error: the
-// window is too narrow to spare the width, its session is only being viewed
-// from VS Code, or the user closed the panel here by hand. Pressing the key
-// passes auto=false and overrides all three — that is a decision, not a
-// default, and refusing it would leave no way to see the panel at all.
+// The hook path also stands down in four cases, none of them an error: the
+// session carries a @project_dir tag (tmux-project opened it for a VS Code
+// window), the window is too narrow to spare the width, its session is only
+// being viewed from VS Code, or the user closed the panel here by hand.
+// Pressing the key passes auto=false and overrides all four — that is a
+// decision, not a default, and refusing it would leave no way to see the
+// panel at all.
 func TogglePanel(target string, auto bool) error {
 	window, dir, err := panelWindow(target)
 	if err != nil {
@@ -115,6 +117,15 @@ func TogglePanel(target string, auto bool) error {
 
 	session, sessionErr := SessionForPane(target)
 	if auto {
+		// A session the tmux-project profile opened belongs to one VS Code
+		// window, and its integrated terminal is not where 48 columns are
+		// spare. The tag answers this where SessionOnlyInVSCode cannot: that
+		// one has to inspect an attached client, but after-new-session fires
+		// before any client attaches, so it read "not VS Code" and the panel
+		// went in — and ensure semantics mean it never came back out.
+		if sessionErr == nil && SessionProjectDir(session) != "" {
+			return nil
+		}
 		if sessionErr == nil && SessionOnlyInVSCode(session) {
 			return nil
 		}

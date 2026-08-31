@@ -608,6 +608,71 @@ func TestTogglePanelAutoSkipsVSCode(t *testing.T) {
 	})
 }
 
+// A session the tmux-project profile opened belongs to one VS Code window, and
+// the tag says so from the moment the session exists. SessionOnlyInVSCode
+// cannot: it inspects attached clients, and after-new-session fires before any
+// client attaches — so it answered "not VS Code" and the panel went in for
+// good, ensure semantics never taking it back out.
+func TestTogglePanelAutoSkipsProjectSession(t *testing.T) {
+	setup := func(m *mockRunner) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
+			"-F", "#{pane_id} #{pane_start_command}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
+		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
+		m.OnOutput([]byte("/home/u/dev/front\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@project_dir")
+		// Nothing is attached — the case that defeated the client-based check.
+		m.OnOutput([]byte(""), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
+	}
+
+	withMock(t, func(m *mockRunner) {
+		setup(m)
+		if err := TogglePanel("%3", true); err != nil {
+			t.Fatalf("TogglePanel: %v", err)
+		}
+		if len(m.runs) != 0 {
+			t.Errorf("ran %v, want nothing in a tmux-project session", m.runs)
+		}
+	})
+
+	// The key still overrides it — that is a decision, not a default.
+	withMock(t, func(m *mockRunner) {
+		setup(m)
+		if err := TogglePanel("%3", false); err != nil {
+			t.Fatalf("TogglePanel: %v", err)
+		}
+		if !ran(m, "split-window") {
+			t.Errorf("ran %v, want the explicit call to open a panel", m.runs)
+		}
+	})
+}
+
+// An untagged session is unaffected: the tag is evidence, its absence is not.
+func TestTogglePanelAutoOpensInUntaggedSession(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
+			"-F", "#{pane_id} #{pane_start_command}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
+		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@project_dir")
+		m.OnOutput([]byte("27\n"), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
+		m.OnOutput([]byte("300\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@mux_panel_width")
+		old := clientEnvHas
+		clientEnvHas = func(int, string) bool { return false }
+		defer func() { clientEnvHas = old }()
+
+		if err := TogglePanel("%3", true); err != nil {
+			t.Fatalf("TogglePanel: %v", err)
+		}
+		if !ran(m, "split-window") {
+			t.Errorf("ran %v, want a panel in an untagged, wide, non-VS Code window", m.runs)
+		}
+	})
+}
+
 // A phone over SSH cannot be told apart by environment, and the real problem
 // was never the device but the width: `aggressive-resize` shrinks the window
 // and a 48-column panel leaves the work pane almost nothing.
