@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-08-31
+
+### Added
+- `mux switch <session>` points the Windows Terminal tmux client at a session, so
+  a widget outside tmux can drive it. Only Windows Terminal clients are moved — a
+  VS Code integrated terminal watches one session on purpose, and dragging it
+  elsewhere would be hostile. Where there is no such client, a running TUI is
+  asked to attach instead, over a unix socket on a fixed path (the environment
+  a `wsl.exe` invocation gets has no `XDG_RUNTIME_DIR` to agree on).
+- `mux status --json --watch` keeps running and prints a JSON line whenever the
+  marshalled output changes, so a widget can subscribe rather than spawn a
+  process per poll.
+- `vscodeDir` in that JSON: the workspace folder of a VS Code window whose
+  integrated terminal is attached to the session. Counted only when the
+  session's own directory is inside that folder — a terminal that attached
+  merely to peek is not that window's project.
+- The session list opens filtered to the project the session belongs to, read
+  from a `@project_dir` tmux option. tmux sessions are server-wide, so every
+  editor window used to list every session regardless of what it was open on.
+  `esc` clears the filter as always, and a session carrying no tag behaves
+  exactly as before.
+
+### Changed
+- The panel is one width, everywhere. It was also remembered per session in
+  `@mux_panel_width`, and that option outranked the saved copy — so dragging a
+  border in one session left every other panel where it was, which is not what
+  one mouse and one number should do. The option is gone; the width lives in
+  `~/.config/mux/panel.json` alone, and every open panel follows it on its next
+  tick. A panel in a narrow window still clamps to half its window, but never
+  writes the clamped value back: one cramped window must not drag the rest down
+  to its size.
+
+### Fixed
+- The panel no longer lands in sessions opened for a VS Code window.
+  `SessionOnlyInVSCode` has to inspect an attached client, and
+  `after-new-session` fires before any client attaches — so it answered "not VS
+  Code" and the panel went in, permanently, since the hook path only ever opens.
+  The `@project_dir` tag is there from the moment the session exists and needs
+  no client to read. Pressing the key still opens one.
+
 ## [0.3.3] - 2026-08-30
 
 ### Added
