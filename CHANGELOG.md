@@ -8,24 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- The panel now shows every session's last event on a line under its row, and
-  opens the full history only for the session the cursor is on. Showing it for
-  the cursor alone left the other sessions as a badge and nothing else — the
-  badge says what a session is doing *now*, not what last happened in it.
+- The panel now shows every session's last event on a line under its row, with
+  the chronological log of everything below the list. The badge says what a
+  session is doing *now*, not what it just finished, and reading that off a flat
+  log meant scanning past whichever session was busiest.
 - The shared log keeps the newest entry of every session the 50-entry cut would
   otherwise silence, so a busy session can no longer evict a quiet one entirely.
   Measured before this: fifty entries covering sixty-four minutes, twenty of them
   one session's, and two of seven running sessions with nothing in the log at
   all. Entries for sessions that no longer exist are dropped — nothing draws
   them, and they were holding 12% of the log.
-- The panel's transition log now opens under the session the cursor is on
-  instead of running as one flat chronological block below the list. On a real
-  server that block was forty rows of whichever session was busiest repeating
-  itself, so reading one session's history meant reading past every other.
-  `M-Up`/`M-Down` already move the cursor, so there is nothing new to press, and
-  click and `enter` still switch sessions. The history takes only the rows the
-  session list left over and is capped besides — the pane clips from the bottom
-  without saying so, and the sessions are what must survive.
 
 ### Fixed
 - The list sorted by a clock it does not show. "Recent" ordered sessions by

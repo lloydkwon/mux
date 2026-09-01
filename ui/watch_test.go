@@ -872,10 +872,10 @@ func TestAdoptSavedWidthClampsWithoutWritingBack(t *testing.T) {
 	}
 }
 
-// The history opens inside its session's block, so every row of it clicks to
-// that session — the same target as the row above it. Anything else would be a
-// row that looks attached and goes somewhere else.
-func TestSessionAtRowInsideAnOpenHistory(t *testing.T) {
+// The line saying what last happened sits inside its session's block, so it
+// clicks to the same place as the row above it. Anything else would be a row
+// that looks attached and goes somewhere else.
+func TestSessionAtRowOnTheLastEventLine(t *testing.T) {
 	now := time.Now()
 	blocked := sess("api", tmux.AIStateApproval)
 	blocked.AISince = now.Add(-time.Hour)
@@ -888,8 +888,7 @@ func TestSessionAtRowInsideAnOpenHistory(t *testing.T) {
 	m.selected = "api"
 	m.events = []aiEvent{
 		{at: now, session: "api", text: "❗ 승인 대기", state: tmux.AIStateApproval},
-		{at: now.Add(-time.Minute), session: "api", text: "⏳ 작업 중", state: tmux.AIStateWorking},
-		{at: now.Add(-2 * time.Minute), session: "mux", text: "✅ 작업 완료", state: tmux.AIStateReady},
+		{at: now.Add(-time.Minute), session: "mux", text: "✅ 작업 완료", state: tmux.AIStateReady},
 	}
 
 	for _, tc := range []struct {
@@ -898,18 +897,17 @@ func TestSessionAtRowInsideAnOpenHistory(t *testing.T) {
 	}{
 		{2, "api"}, // the session row
 		{3, "api"}, // its blocked-on reason
-		{4, "api"}, // history, newest first
-		{5, "api"},
-		{6, "api"}, // spacer, still the same block
-		{7, "mux"}, // the next session, pushed down by the history
+		{4, "api"}, // its last event
+		{5, "api"}, // spacer, still the same block
+		{6, "mux"},
+		{7, "mux"}, // mux's own last event
 	} {
 		if got := m.sessionAtRow(tc.row); got != tc.want {
 			t.Errorf("sessionAtRow(%d) = %q, want %q", tc.row, got, tc.want)
 		}
 	}
 
-	// Every session gets its own last event now, so mux's shows up — under mux.
-	// What must not happen is it appearing inside api's block.
+	// mux's event belongs under mux, never inside api's block.
 	for _, l := range m.sessionLines() {
 		if l.session == "api" && strings.Contains(ansi.Strip(l.text), "✅ 작업 완료") {
 			t.Errorf("mux's event was drawn inside api's block: %q", ansi.Strip(l.text))

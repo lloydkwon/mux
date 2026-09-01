@@ -344,7 +344,7 @@ func TestNotifyMarksOwnSession(t *testing.T) {
 	other.GitBranch = "main"
 	sessions := []tmux.Session{mine, other}
 
-	rows := ansi.Strip(strings.Join(notifyTexts(notifySessionLines(sessions, nil, 40, 0, 0, "", "project")), "\n"))
+	rows := ansi.Strip(strings.Join(notifyTexts(notifySessionLines(sessions, nil, 40, 0, "", "project")), "\n"))
 	marked := 0
 	for _, line := range strings.Split(rows, "\n") {
 		if strings.Contains(line, ownMarker) {
@@ -360,7 +360,7 @@ func TestNotifyMarksOwnSession(t *testing.T) {
 
 	// No own session known — the panel used to have no idea, and marking
 	// something anyway would be a guess.
-	none := ansi.Strip(strings.Join(notifyTexts(notifySessionLines(sessions, nil, 40, 0, 0, "", "")), "\n"))
+	none := ansi.Strip(strings.Join(notifyTexts(notifySessionLines(sessions, nil, 40, 0, "", "")), "\n"))
 	if strings.Contains(none, ownMarker) {
 		t.Errorf("marked a row with no own session known:\n%s", none)
 	}
@@ -673,9 +673,9 @@ func TestOpenHistoryOnlyUsesSpareRoom(t *testing.T) {
 	}
 }
 
-// Room left over is not a reason to fill it. Past the cap one session's history
-// stops being detail under a row and starts being the panel.
-func TestOpenHistoryIsCapped(t *testing.T) {
+// The log is last, so it is what yields when the pane runs out — everything
+// above it is either a session or the one line naming its latest state.
+func TestEventLogYieldsBeforeTheSessions(t *testing.T) {
 	now := time.Now()
 	var events []aiEvent
 	for i := 0; i < 40; i++ {
@@ -685,15 +685,21 @@ func TestOpenHistoryIsCapped(t *testing.T) {
 		})
 	}
 
-	lines := sessionEventLines(events, "api", 44, expandBudget(1000), true)
-	if len(lines) != maxExpandedEvents {
-		t.Errorf("history = %d rows with room to spare, want the cap %d", len(lines), maxExpandedEvents)
+	for _, budget := range []int{0, 1, 2, 5, 40} {
+		lines := notifyEventLines(events, 44, budget)
+		if len(lines) > budget {
+			t.Errorf("budget %d produced %d rows", budget, len(lines))
+		}
+		if budget <= 1 && len(lines) != 0 {
+			// A heading over nothing reads as a section that failed to load.
+			t.Errorf("budget %d drew a heading with no room for a row", budget)
+		}
 	}
 }
 
 // A cursor on a session that draws nothing under it looks like a panel that
 // failed, not like a session nothing has happened in.
-func TestOpenHistorySaysWhenThereIsNone(t *testing.T) {
+func TestCursorSessionSaysWhenThereIsNothing(t *testing.T) {
 	lines := sessionEventLines(nil, "api", 44, 5, true)
 	if len(lines) != 1 {
 		t.Fatalf("empty history = %d rows, want 1", len(lines))
@@ -708,7 +714,7 @@ func TestOpenHistorySaysWhenThereIsNone(t *testing.T) {
 
 // Every row the panel draws is exactly width cells; a short one leaves the pane
 // showing whatever was under it.
-func TestOpenHistoryRowWidths(t *testing.T) {
+func TestSessionEventRowWidths(t *testing.T) {
 	now := time.Now()
 	events := []aiEvent{
 		{at: now, session: "api", text: "❗ 승인 대기 · Bash: git push --force-with-lease", state: tmux.AIStateApproval},
@@ -758,7 +764,7 @@ func TestEverySessionGetsItsLastEvent(t *testing.T) {
 		}
 	}
 
-	// The cursor's session says more than the others.
+	// One line each, cursor included — the older ones live in the log below.
 	countEvents := func(name string) int {
 		n := 0
 		for _, r := range rows[name] {
@@ -768,11 +774,19 @@ func TestEverySessionGetsItsLastEvent(t *testing.T) {
 		}
 		return n
 	}
-	if got := countEvents("api"); got < 2 {
-		t.Errorf("the selected session showed %d events, want its history", got)
+	for _, name := range []string{"api", "web"} {
+		if got := countEvents(name); got != 1 {
+			t.Errorf("%s showed %d event lines, want exactly its last", name, got)
+		}
 	}
-	if got := countEvents("web"); got != 1 {
-		t.Errorf("an unselected session showed %d events, want exactly its last", got)
+
+	// api's older transition is not lost — it moved to the chronological block.
+	joined := ansi.Strip(strings.Join(notifyTexts(lines), "\n"))
+	if !strings.Contains(joined, "최근 이벤트") {
+		t.Errorf("the chronological log is missing:\n%s", joined)
+	}
+	if strings.Count(joined, "⏳ 작업 중") < 1 {
+		t.Errorf("api's earlier transition vanished entirely:\n%s", joined)
 	}
 }
 
@@ -783,10 +797,17 @@ func TestUnselectedSessionsStaySilentWithoutEvents(t *testing.T) {
 	sessions := []tmux.Session{sess("api", tmux.AIStateWorking), sess("web", tmux.AIStateReady)}
 
 	lines := notifyLines(sessions, nil, 44, 40, "api", "", false)
-	joined := ansi.Strip(strings.Join(notifyTexts(lines), "\n"))
 
-	if n := strings.Count(joined, "아직 없음"); n != 1 {
-		t.Errorf("아직 없음 appears %d times, want once — only under the cursor:\n%s", n, joined)
+	// Count only rows that belong to a session: the log below says 아직 없음 of
+	// its own when nothing has happened anywhere, and that is a different claim.
+	owned := 0
+	for _, l := range lines {
+		if l.session != "" && strings.Contains(ansi.Strip(l.text), "아직 없음") {
+			owned++
+		}
+	}
+	if owned != 1 {
+		t.Errorf("아직 없음 sits under %d sessions, want only the cursor's", owned)
 	}
 }
 
