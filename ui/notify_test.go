@@ -344,7 +344,7 @@ func TestNotifyMarksOwnSession(t *testing.T) {
 	other.GitBranch = "main"
 	sessions := []tmux.Session{mine, other}
 
-	rows := ansi.Strip(strings.Join(notifyTexts(notifySessionLines(sessions, nil, 40, 0, "", "project")), "\n"))
+	rows := ansi.Strip(strings.Join(notifyTexts(notifySessionLines(sessions, nil, 40, 0, 0, "", "project")), "\n"))
 	marked := 0
 	for _, line := range strings.Split(rows, "\n") {
 		if strings.Contains(line, ownMarker) {
@@ -360,7 +360,7 @@ func TestNotifyMarksOwnSession(t *testing.T) {
 
 	// No own session known — the panel used to have no idea, and marking
 	// something anyway would be a guess.
-	none := ansi.Strip(strings.Join(notifyTexts(notifySessionLines(sessions, nil, 40, 0, "", "")), "\n"))
+	none := ansi.Strip(strings.Join(notifyTexts(notifySessionLines(sessions, nil, 40, 0, 0, "", "")), "\n"))
 	if strings.Contains(none, ownMarker) {
 		t.Errorf("marked a row with no own session known:\n%s", none)
 	}
@@ -685,7 +685,7 @@ func TestOpenHistoryIsCapped(t *testing.T) {
 		})
 	}
 
-	lines := sessionEventLines(events, "api", 44, expandBudget(1000))
+	lines := sessionEventLines(events, "api", 44, expandBudget(1000), true)
 	if len(lines) != maxExpandedEvents {
 		t.Errorf("history = %d rows with room to spare, want the cap %d", len(lines), maxExpandedEvents)
 	}
@@ -694,7 +694,7 @@ func TestOpenHistoryIsCapped(t *testing.T) {
 // A cursor on a session that draws nothing under it looks like a panel that
 // failed, not like a session nothing has happened in.
 func TestOpenHistorySaysWhenThereIsNone(t *testing.T) {
-	lines := sessionEventLines(nil, "api", 44, 5)
+	lines := sessionEventLines(nil, "api", 44, 5, true)
 	if len(lines) != 1 {
 		t.Fatalf("empty history = %d rows, want 1", len(lines))
 	}
@@ -715,9 +715,130 @@ func TestOpenHistoryRowWidths(t *testing.T) {
 		{at: now, session: "api", text: "✅", state: tmux.AIStateReady},
 	}
 	for _, width := range []int{24, 30, 44, 60} {
-		for _, l := range sessionEventLines(events, "api", width, 5) {
+		for _, l := range sessionEventLines(events, "api", width, 5, true) {
 			if got := ansi.StringWidth(l.text); got != width {
 				t.Errorf("width %d: row measures %d cells (%q)", width, got, ansi.Strip(l.text))
+			}
+		}
+	}
+}
+
+// The panel's job is answering "what last happened here" without moving the
+// cursor. Before this every session but one showed a badge and nothing else.
+func TestEverySessionGetsItsLastEvent(t *testing.T) {
+	now := time.Now()
+	sessions := []tmux.Session{
+		sess("api", tmux.AIStateApproval),
+		sess("web", tmux.AIStateReady),
+		sess("mux", tmux.AIStateWorking),
+	}
+	events := []aiEvent{
+		{at: now, session: "api", text: "❗ 승인 대기", state: tmux.AIStateApproval},
+		{at: now.Add(-time.Minute), session: "api", text: "⏳ 작업 중", state: tmux.AIStateWorking},
+		{at: now.Add(-2 * time.Minute), session: "web", text: "✅ 작업 완료", state: tmux.AIStateReady},
+	}
+
+	lines := notifyLines(sessions, events, 44, 40, "api", "", false)
+
+	rows := map[string][]string{}
+	for _, l := range lines {
+		if l.session != "" {
+			rows[l.session] = append(rows[l.session], ansi.Strip(l.text))
+		}
+	}
+	for _, name := range []string{"api", "web"} {
+		var found bool
+		for _, r := range rows[name] {
+			if strings.Contains(r, ":") && strings.Contains(r, "    ") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s got no event line:\n%v", name, rows[name])
+		}
+	}
+
+	// The cursor's session says more than the others.
+	countEvents := func(name string) int {
+		n := 0
+		for _, r := range rows[name] {
+			if strings.Contains(r, "작업") || strings.Contains(r, "승인") {
+				n++
+			}
+		}
+		return n
+	}
+	if got := countEvents("api"); got < 2 {
+		t.Errorf("the selected session showed %d events, want its history", got)
+	}
+	if got := countEvents("web"); got != 1 {
+		t.Errorf("an unselected session showed %d events, want exactly its last", got)
+	}
+}
+
+// Seven rows of 아직 없음 is noise. It earns its line only where the cursor is,
+// because there it is the difference between "nothing happened" and "the panel
+// is broken".
+func TestUnselectedSessionsStaySilentWithoutEvents(t *testing.T) {
+	sessions := []tmux.Session{sess("api", tmux.AIStateWorking), sess("web", tmux.AIStateReady)}
+
+	lines := notifyLines(sessions, nil, 44, 40, "api", "", false)
+	joined := ansi.Strip(strings.Join(notifyTexts(lines), "\n"))
+
+	if n := strings.Count(joined, "아직 없음"); n != 1 {
+		t.Errorf("아직 없음 appears %d times, want once — only under the cursor:\n%s", n, joined)
+	}
+}
+
+// A line per session costs a row per session. Where the pane cannot seat them
+// all, none of them appear: a list where some rows carry a line and others do
+// not reads as missing data rather than as a short pane.
+func TestPerSessionLinesAreAllOrNothing(t *testing.T) {
+	now := time.Now()
+	var sessions []tmux.Session
+	var events []aiEvent
+	for i := 0; i < 7; i++ {
+		name := fmt.Sprintf("session-%d", i)
+		s := sess(name, tmux.AIStateWorking)
+		s.AISince = now.Add(-time.Duration(i) * time.Minute)
+		sessions = append(sessions, s)
+		events = append(events, aiEvent{
+			at: now.Add(-time.Duration(i) * time.Minute), session: name,
+			text: "⏳ 작업 중", state: tmux.AIStateWorking,
+		})
+	}
+
+	for _, height := range []int{10, 16, 20, 24, 40, 67} {
+		lines := notifyLines(sessions, events, 44, height, "session-0", "", false)
+
+		// The cursor's session is on a separate budget — where only one row is
+		// spare it goes there, which is right. What must be all-or-nothing is
+		// the line the *other* sessions get.
+		withLine, others := 0, 0
+		for _, s := range sessions {
+			if s.Name == "session-0" {
+				continue
+			}
+			others++
+			for _, l := range lines {
+				if l.session == s.Name && strings.Contains(ansi.Strip(l.text), "작업 중") {
+					withLine++
+					break
+				}
+			}
+		}
+		if withLine != 0 && withLine != others {
+			t.Errorf("height %d: %d of %d unselected sessions carry an event line — want all or none",
+				height, withLine, others)
+		}
+
+		// Whatever the height, the session rows themselves survive.
+		joined := ansi.Strip(strings.Join(notifyTexts(lines), "\n"))
+		bare := ansi.Strip(strings.Join(notifyTexts(
+			notifyLines(sessions, nil, 44, height, "session-0", "", false)), "\n"))
+		for _, s := range sessions {
+			if strings.Contains(bare, s.Name) && !strings.Contains(joined, s.Name) {
+				t.Errorf("height %d: %s was pushed out by the event lines", height, s.Name)
 			}
 		}
 	}

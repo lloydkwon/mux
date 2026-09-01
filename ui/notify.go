@@ -227,8 +227,8 @@ type notifyLine struct {
 // places. Rendering costs string assembly and nothing else — sessionLines()
 // already redraws the whole panel on every click lookup.
 func notifyLines(sessions []tmux.Session, events []aiEvent, width, height int, selected, own string, showHeader bool) []notifyLine {
-	bare := notifySessionLines(sessions, nil, width, 0, selected, own)
-	if len(bare) == 0 {
+	rows := notifySessionLines(sessions, nil, width, 0, 0, selected, own)
+	if len(rows) == 0 {
 		return nil
 	}
 
@@ -236,8 +236,21 @@ func notifyLines(sessions []tmux.Session, events []aiEvent, width, height int, s
 	if showHeader {
 		header = len(panelHeaderLines(sessions, width, height, selected))
 	}
-	lines := notifySessionLines(sessions, events, width,
-		expandBudget(height-header-len(bare)), selected, own)
+	spare := height - header - len(rows)
+
+	// Two tiers, in the order they matter. A line per session is what makes the
+	// panel answer "what last happened here" without moving the cursor, so it is
+	// bought first — but only if every session can have one, since a list where
+	// some rows carry a line and others do not reads as missing data rather than
+	// as a short pane. Whatever is left over opens the cursor's history.
+	perSession := 0
+	if spare >= len(sessions) {
+		perSession = 1
+		withOne := notifySessionLines(sessions, events, width, 1, 0, selected, own)
+		spare = height - header - len(withOne)
+	}
+	lines := notifySessionLines(sessions, events, width, perSession,
+		expandBudget(spare), selected, own)
 	if !showHeader {
 		return lines
 	}
@@ -431,7 +444,7 @@ func fitRight(left, right rowSeg, width int) []rowSeg {
 //
 // Glyphs and colors come from aiGlyph/aiStateColor, the same deciders the list
 // uses — a second mapping here would drift from the rows it sits next to.
-func notifySessionLines(sessions []tmux.Session, events []aiEvent, width, budget int, selected, own string) []notifyLine {
+func notifySessionLines(sessions []tmux.Session, events []aiEvent, width, perSession, budget int, selected, own string) []notifyLine {
 	if width <= 0 {
 		return nil
 	}
@@ -465,12 +478,12 @@ func notifySessionLines(sessions []tmux.Session, events []aiEvent, width, budget
 		// nothing under it reads as a panel that failed to load.
 		lines = append(lines, notifyLine{text: helpStyle.Render(padOrTruncate("  없음", width))})
 	}
-	lines = append(lines, sessionBlocks(ai, events, width, budget, selected, own, false)...)
+	lines = append(lines, sessionBlocks(ai, events, width, perSession, budget, selected, own, false)...)
 
 	if len(other) > 0 {
 		lines = append(lines, blank,
 			notifyLine{text: sectionRule("세션", width)}, blank)
-		lines = append(lines, sessionBlocks(other, events, width, budget, selected, own, true)...)
+		lines = append(lines, sessionBlocks(other, events, width, perSession, budget, selected, own, true)...)
 	}
 	return lines
 }
@@ -484,7 +497,7 @@ func notifySessionLines(sessions []tmux.Session, events []aiEvent, width, budget
 // An empty history still draws a line. A cursor sitting on a session that
 // renders nothing under it looks like a panel that failed rather than a session
 // nothing has happened in.
-func sessionEventLines(events []aiEvent, session string, width, budget int) []notifyLine {
+func sessionEventLines(events []aiEvent, session string, width, budget int, sel bool) []notifyLine {
 	if budget <= 0 {
 		return nil
 	}
@@ -502,7 +515,9 @@ func sessionEventLines(events []aiEvent, session string, width, budget int) []no
 			return lines
 		}
 	}
-	if len(lines) == 0 {
+	if len(lines) == 0 && sel {
+		// Only under the cursor. A row that says nothing happened is worth one
+		// line where the cursor is, and seven lines of it everywhere else.
 		return []notifyLine{{
 			text:    helpStyle.Render(padOrTruncate("    아직 없음", width)),
 			session: session,
@@ -550,7 +565,7 @@ func sortByDisplayedAge(ss []tmux.Session) {
 // under a blocked one, and a spacer between blocks.
 //
 // dim marks the second group, whose rows are context rather than the point.
-func sessionBlocks(ss []tmux.Session, events []aiEvent, width, budget int, selected, own string, dim bool) []notifyLine {
+func sessionBlocks(ss []tmux.Session, events []aiEvent, width, perSession, budget int, selected, own string, dim bool) []notifyLine {
 	var lines []notifyLine
 	for i, s := range ss {
 		sel := s.Name == selected
@@ -569,20 +584,26 @@ func sessionBlocks(ss []tmux.Session, events []aiEvent, width, budget int, selec
 				session: s.Name,
 			})
 		}
-		expanded := false
+		// Every session says what last happened to it; only the one under the
+		// cursor says more. The row above already carries the state *now* — what
+		// this adds is a wall clock, the transition before the current one when
+		// the log has moved past it, and the reason a session was blocked on
+		// after it stops being blocked.
+		//
+		// The rows click to the same session as the row above them, and
+		// sessionOrder — which folds consecutive rows with the same owner —
+		// gains no extra stop for the cursor.
+		//
+		// They are drawn unhighlighted, unlike the reason row. One extra inverted
+		// line reads as part of the row; a dozen reads as the whole block having
+		// moved, and what the highlight is for is saying where the cursor is.
+		rows := perSession
 		if sel {
-			// The history opens inside the block, so every row of it clicks to
-			// the same session and sessionOrder — which folds consecutive rows
-			// with the same owner — gains no extra stop for the cursor.
-			//
-			// It is drawn unhighlighted, unlike the reason row above it. One
-			// extra inverted line reads as part of the row; a dozen reads as the
-			// whole block having moved, and what the highlight is for is saying
-			// precisely where the cursor is.
-			history := sessionEventLines(events, s.Name, width, budget)
-			lines = append(lines, history...)
-			expanded = len(history) > 0
+			rows = budget
 		}
+		history := sessionEventLines(events, s.Name, width, rows, sel)
+		lines = append(lines, history...)
+		expanded := sel && len(history) > 0
 		// Between sessions only. The blank belongs to the session above it, which
 		// is what makes a click target two rows tall; skipping it after the last
 		// one keeps the list from trailing off into the next heading, at the cost

@@ -21,9 +21,15 @@ type eventsMergedMsg struct {
 // Update(sessionsLoadedMsg{...}) directly, and doing the merge there would make
 // `go test ./ui` write options into the developer's real tmux server. A command
 // is inert until something runs it.
-func mergeEventsCmd(fresh []aiEvent) tea.Cmd {
+// live is the session list this tick saw. The store drops entries for sessions
+// that are gone: nothing draws them — rows exist for live sessions only — and
+// the keep-one-per-session rule would otherwise hold a dead session's last event
+// forever, since nothing newer ever arrives to replace it.
+func mergeEventsCmd(fresh []aiEvent, live []string) tea.Cmd {
 	return func() tea.Msg {
-		return eventsMergedMsg{events: fromPanelEvents(tmux.MergeEvents(toPanelEvents(fresh)))}
+		return eventsMergedMsg{
+			events: fromPanelEvents(tmux.MergeEvents(toPanelEvents(fresh), live)),
+		}
 	}
 }
 
@@ -90,4 +96,13 @@ func millisOrZero(t time.Time) int64 {
 		return 0
 	}
 	return t.UnixMilli()
+}
+
+// sessionNames is the live list the store prunes against.
+func sessionNames(ss []tmux.Session) []string {
+	names := make([]string, 0, len(ss))
+	for _, s := range ss {
+		names = append(names, s.Name)
+	}
+	return names
 }

@@ -64,7 +64,7 @@ func TestMergeEventsDedupesBySince(t *testing.T) {
 
 		// The same transition as another panel would time it: different At,
 		// identical Since.
-		got := MergeEvents([]PanelEvent{ev("web", AIStateReady, 2_500, 900)})
+		got := MergeEvents([]PanelEvent{ev("web", AIStateReady, 2_500, 900)}, nil)
 
 		if len(got) != 1 {
 			t.Fatalf("merged to %d events, want 1: %v", len(got), got)
@@ -94,7 +94,7 @@ func TestMergeEventsDedupesUntimestampedWithinWindow(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			withMock(t, func(m *mockRunner) {
 				mockEventLog(m, []PanelEvent{ev("api", AIStateWorking, 1_000, 0)})
-				got := MergeEvents([]PanelEvent{ev("api", AIStateWorking, tc.at, 0)})
+				got := MergeEvents([]PanelEvent{ev("api", AIStateWorking, tc.at, 0)}, nil)
 				if len(got) != tc.want {
 					t.Errorf("merged to %d events, want %d: %v", len(got), tc.want, got)
 				}
@@ -111,7 +111,7 @@ func TestMergeEventsKeepsDistinctTransitions(t *testing.T) {
 		got := MergeEvents([]PanelEvent{
 			ev("api", AIStateReady, 1_001, 0),
 			ev("web", AIStateWorking, 1_001, 0),
-		})
+		}, nil)
 		if len(got) != 3 {
 			t.Errorf("merged to %d events, want 3: %v", len(got), got)
 		}
@@ -128,7 +128,7 @@ func TestMergeEventsCapsAtMax(t *testing.T) {
 		}
 		mockEventLog(m, existing)
 
-		got := MergeEvents([]PanelEvent{ev("s", AIStateReady, 999_000, 999)})
+		got := MergeEvents([]PanelEvent{ev("s", AIStateReady, 999_000, 999)}, nil)
 
 		if len(got) != MaxPanelEvents {
 			t.Fatalf("merged to %d events, want %d", len(got), MaxPanelEvents)
@@ -149,7 +149,7 @@ func TestMergeEventsCapsAtMax(t *testing.T) {
 func TestMergeEventsWritesNothingWhenUnchanged(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
 		mockEventLog(m, []PanelEvent{ev("web", AIStateReady, 1_000, 900)})
-		MergeEvents(nil)
+		MergeEvents(nil, nil)
 		if w := writtenLog(m); w != "" {
 			t.Errorf("an idle merge wrote %s", w)
 		}
@@ -165,7 +165,7 @@ func TestMergeEventsSerializationIsDeterministic(t *testing.T) {
 			ev("b", AIStateReady, 1_000, 1),
 			ev("a", AIStateReady, 1_000, 2),
 			ev("c", AIStateWorking, 5_000, 3),
-		})
+		}, nil)
 		first := writtenLog(m)
 		if first == "" {
 			t.Fatal("nothing was written")
@@ -182,4 +182,86 @@ func TestMergeEventsSerializationIsDeterministic(t *testing.T) {
 			t.Errorf("want newest first then name order, got %v", decoded)
 		}
 	})
+}
+
+// The panel draws a line per session, so a session the cut silences reports
+// nothing about itself for as long as a noisier one keeps talking. Measured on a
+// live server before this rule: fifty entries, twenty of them one session's, and
+// two of seven running sessions with nothing in the log at all.
+func TestTrimLogKeepsOneEntryPerSession(t *testing.T) {
+	var events []PanelEvent
+	for i := 0; i < MaxPanelEvents; i++ {
+		events = append(events, ev("noisy", AIStateReady, int64(MaxPanelEvents-i)*1_000, 0))
+	}
+	// Older than everything above, so a plain head-slice drops them entirely.
+	events = append(events,
+		ev("quiet", AIStateWorking, 900, 0),
+		ev("quiet", AIStateReady, 800, 0),
+		ev("silent", AIStateReady, 700, 0),
+	)
+
+	got := trimLog(events, nil)
+
+	last := map[string]int64{}
+	for _, e := range got {
+		if _, seen := last[e.Session]; !seen {
+			last[e.Session] = e.At
+		}
+	}
+	if _, ok := last["quiet"]; !ok {
+		t.Error("quiet was cut out of the log entirely")
+	}
+	if _, ok := last["silent"]; !ok {
+		t.Error("silent was cut out of the log entirely")
+	}
+	if last["quiet"] != 900 {
+		t.Errorf("kept quiet's entry at %d, want its newest 900", last["quiet"])
+	}
+
+	// One apiece: the rule is a floor, not a second log.
+	counts := map[string]int{}
+	for _, e := range got[MaxPanelEvents:] {
+		counts[e.Session]++
+	}
+	for name, n := range counts {
+		if n != 1 {
+			t.Errorf("%s kept %d entries past the cap, want 1", name, n)
+		}
+	}
+
+	// Still newest-first, because the tail it draws from is too — every entry
+	// appended is older than the last one kept.
+	for i := 1; i < len(got); i++ {
+		if got[i-1].At < got[i].At {
+			t.Fatalf("log is out of order at %d: %d then %d", i, got[i-1].At, got[i].At)
+		}
+	}
+}
+
+// Nothing draws a dead session — rows exist for live sessions only — and without
+// this the keep-one rule would hold its last event forever, since nothing newer
+// ever arrives to replace it.
+func TestTrimLogDropsSessionsThatAreGone(t *testing.T) {
+	events := []PanelEvent{
+		ev("live", AIStateReady, 3_000, 0),
+		ev("gone", AIStateReady, 2_000, 0),
+		ev("live", AIStateWorking, 1_000, 0),
+	}
+
+	got := trimLog(events, []string{"live"})
+
+	if len(got) != 2 {
+		t.Fatalf("kept %d events, want 2: %v", len(got), got)
+	}
+	for _, e := range got {
+		if e.Session == "gone" {
+			t.Errorf("an event for a session that no longer exists survived: %v", e)
+		}
+	}
+
+	// nil means "do not judge" — the tests that do not track sessions rely on it,
+	// and so does any caller that cannot enumerate them.
+	if got := trimLog(events, nil); len(got) != 3 {
+		t.Errorf("nil live list dropped events: %v", got)
+	}
 }

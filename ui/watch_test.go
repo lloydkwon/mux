@@ -173,14 +173,15 @@ func TestSessionAtRow(t *testing.T) {
 		{0, ""}, // 🔔 header
 		{1, ""}, // the blank under the header
 		{2, "web"},
-		{3, "web"}, // spacer, still the same block
+		{3, "web"}, // spacer — web has no event of its own to show
 		{4, "api"},
 		{5, "api"}, // the indented waitingFor line
 		{6, "api"}, // spacer
-		{7, "mux"}, // last session: no spacer follows, so a one-row target
+		{7, "mux"},
+		{8, "mux"}, // mux's own last event, one line per session
 		// Nothing follows the sessions any more. The flat log that used to sit
 		// here now opens inside the selected session's block instead.
-		{8, ""},
+		{9, ""},
 		{99, ""}, // past the end
 		{-1, ""},
 	}
@@ -907,9 +908,12 @@ func TestSessionAtRowInsideAnOpenHistory(t *testing.T) {
 		}
 	}
 
-	// mux's own event must not appear under api.
-	if got := ansi.Strip(strings.Join(notifyTexts(m.sessionLines()), "\n")); strings.Contains(got, "✅ 작업 완료") {
-		t.Errorf("another session's event was drawn under api:\n%s", got)
+	// Every session gets its own last event now, so mux's shows up — under mux.
+	// What must not happen is it appearing inside api's block.
+	for _, l := range m.sessionLines() {
+		if l.session == "api" && strings.Contains(ansi.Strip(l.text), "✅ 작업 완료") {
+			t.Errorf("mux's event was drawn inside api's block: %q", ansi.Strip(l.text))
+		}
 	}
 }
 
@@ -928,5 +932,10 @@ func TestOpenHistoryAddsNoCursorStops(t *testing.T) {
 	m.selected = "api"
 	if open := len(m.sessionOrder()); open != closed {
 		t.Errorf("cursor stops = %d with a history open, %d without — want them equal", open, closed)
+	}
+	// Every session carries an event line now, not just the selected one, so the
+	// folding has to hold for all of them.
+	if got, want := len(m.sessionOrder()), len(m.sessions); got != want {
+		t.Errorf("cursor stops = %d for %d sessions — event rows became stops", got, want)
 	}
 }

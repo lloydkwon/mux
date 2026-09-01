@@ -220,6 +220,7 @@ The list shows what each session is doing *now*, but not what it just finished. 
 │                             │    12:41 ⏳    │
 │                             │                │
 │                             │ ✅ web 2h      │
+│                             │    11:20 ✅    │
 │                             │                │
 │                             │ ── 세션        │
 │                             │                │
@@ -229,7 +230,7 @@ The list shows what each session is doing *now*, but not what it just finished. 
 
 Sessions running an AI CLI come first; the rest sit under `── 세션` so every session is reachable without opening the TUI.
 
-**The session under the cursor opens its own history.** It used to be one flat chronological log below the list, and on a real server that was forty rows of whichever session was busiest repeating itself — finding what happened in *this* session meant reading past all of it. Now each session's transitions sit under its own row, and only for the one the cursor is on. Nothing new to press: `M-Up`/`M-Down` already move the cursor, and click and `enter` are still "switch to this session". The history takes only the rows the session list left over, capped, because the pane clips from the bottom without saying so and the sessions are what must survive.
+**Every session shows what last happened to it, and the one under the cursor opens its full history.** It used to be one flat chronological log below the list, and on a real server that was forty rows of whichever session was busiest repeating itself — finding what happened in *this* session meant reading past all of it. Now each session's transitions sit under its own row: one line everywhere, the whole history where the cursor is. The shared log keeps the newest entry of every session its fifty-entry cut would otherwise silence, so a busy session cannot evict a quiet one out of the list entirely. Nothing new to press: `M-Up`/`M-Down` already move the cursor, and click and `enter` are still "switch to this session". The history takes only the rows the session list left over, capped, because the pane clips from the bottom without saying so and the sessions are what must survive.
 
 Every transition into working, approval and ready is logged, so a turn shows both ends and the time between them is readable off the list. Entering a shell is not: that is a detail of how a turn is being served rather than a turn changing hands, and it flaps.
 

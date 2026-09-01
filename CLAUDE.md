@@ -184,7 +184,7 @@ Two action rows — `셸로 나가기` and `새 세션` — were added above `�
 
 It runs as a **separate process**, so it shares no state with the TUI: its own `prevAIStates` — the codebase's only cross-tick history, since a transition can only be seen by diffing — its own TTL caches, and a slower 2s tick (the 500ms rate exists for the TUI cursor row's preview, which reacts to a keystroke; this one reacts to a click).
 
-**The history opens under the session the cursor is on, and nowhere else** (`sessionEventLines`, `ui/notify.go`). It used to be a flat chronological block below the list; measured on a live server that was forty rows of whichever session was busiest repeating `⏳ 작업 중` / `✅ 작업 완료`, so reading one session's history meant reading past every other. Three things about the replacement are load-bearing.
+**Every session says what last happened to it; the cursor's session says more** (`sessionEventLines`, `ui/notify.go`). One line per session, and the selected one opens its history. It used to be a flat chronological block below the list; measured on a live server that was forty rows of whichever session was busiest repeating `⏳ 작업 중` / `✅ 작업 완료`, so reading one session's history meant reading past every other. Three things about the replacement are load-bearing.
 
 The rows carry **their session's name**, and they sit **directly under its row**. `sessionAtRow` and `sessionOrder` index the same slice, so that one field makes every history row click to the same place as the row above it, and `sessionOrder` — which folds *consecutive* rows with the same owner — gains no extra cursor stop. Put them anywhere else in the slice and a dozen history rows become a dozen keyboard stops.
 
@@ -194,7 +194,13 @@ The history is drawn **unhighlighted** while the session row and its reason line
 
 **No new gesture, deliberately.** `M-Up`/`M-Down` already move the cursor, and click and `enter` already mean "switch to this session" — a new `mux nav` verb would need `navKeys`, `navBinds`, `handleKey` and `cmd/mux` changed, and would stay dead for anyone who does not re-run `mux setup-panel`.
 
-**Latest state per session comes from `m.sessions`, never from the log.** The shared log is capped at 50 entries server-wide, so a busy session evicts a quiet one entirely; the session row's badge and age are the only complete answer.
+**The state *now* comes from `m.sessions`; the log says what happened.** The row's badge and age are the complete answer for the former and the log is not — but the line under it adds three things the row cannot: a wall clock, the transition before the current one when the log has moved past it, and the reason a session was blocked on after it stops being blocked (the reason row draws only while `AIStateApproval` holds).
+
+**`trimLog` (`tmux/eventlog.go`) is what makes a line per session possible.** A plain head-slice is recency-only, and recency starves the quiet: measured, fifty entries covering sixty-four minutes, twenty of them one session's, and two of seven running sessions with nothing in the log at all. So the cut keeps the top 50 *and then* the newest entry of every session those 50 missed. The value stays a `[]PanelEvent` and stays sorted — the tail it draws from is newest-first too, so everything appended is older than the last one kept — which is why `sortEvents`, `duplicateAt` and the lock-free merge are untouched.
+
+Raising `MaxPanelEvents` instead was measured and rejected: on tmux 3.4 a `set-option` argv of 16000 bytes goes through and 20000 comes back `command too long` (`MAX_IMSGSIZE`), so at ~90 bytes an entry the ceiling is near 170 — and the order would still be recency, so a session idle since morning falls off anyway.
+
+**Sessions that no longer exist are dropped from the log** (`MergeEvents` takes the live names, from `sessionNames` in `ui/watchevents.go`). Nothing draws them, and without this the keep-one rule would hold a dead session's last event forever, since nothing newer ever arrives to replace it. Measured: six of fifty entries belonged to a session that had already gone; pruning them took the log to 44.
 
 **The event log is the one thing panels do share**, and it lives in the tmux server: the global option `@mux_events` (`tmux/eventlog.go`), read and rewritten by every panel on each tick. Detection stays per-process — only a diff can see a transition — but what it observes goes somewhere all of them read. Without that, a panel created a minute ago opens on `아직 없음` beside panels showing hours of history, because `detectTransitions` records a first sighting rather than reporting it, and every session is a first sighting to a new process.
 

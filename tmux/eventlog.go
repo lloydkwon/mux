@@ -84,7 +84,8 @@ func loadEvents() (string, []PanelEvent) {
 }
 
 // MergeEvents folds this panel's newly observed transitions into the shared log
-// and returns the whole thing, newest first.
+// and returns the whole thing, newest first. live names the sessions that still
+// exist; pass nil to keep everything.
 //
 // Called with no fresh events it still reads, because reading is the only way a
 // panel learns what the others have seen.
@@ -95,7 +96,7 @@ func loadEvents() (string, []PanelEvent) {
 // race drops an event that another panel is about to write again anyway. What
 // that does require is that the same transition produce the same entry
 // everywhere, which is what duplicateAt decides.
-func MergeEvents(fresh []PanelEvent) []PanelEvent {
+func MergeEvents(fresh []PanelEvent, live []string) []PanelEvent {
 	raw, events := loadEvents()
 
 	added := false
@@ -107,9 +108,8 @@ func MergeEvents(fresh []PanelEvent) []PanelEvent {
 		added = true
 	}
 	sortEvents(events)
-	if len(events) > MaxPanelEvents {
-		events = events[:MaxPanelEvents]
-		added = true
+	if kept := trimLog(events, live); len(kept) != len(events) {
+		events, added = kept, true
 	}
 	if !added {
 		return events
@@ -126,6 +126,64 @@ func MergeEvents(fresh []PanelEvent) []PanelEvent {
 	}
 	_ = runner.Run("tmux", "set-option", "-g", eventLogOption, string(encoded))
 	return events
+}
+
+// trimLog cuts the log to size, keeping one entry for every session that the
+// cut would otherwise silence. events must already be newest-first.
+//
+// A plain head-slice is recency-only, and recency alone starves the quiet. On a
+// live server: fifty entries covering sixty-four minutes, twenty of them one
+// session's, and two of the seven running sessions with nothing in the log at
+// all. The panel now draws a line per session, so "nothing at all" is a session
+// that reports nothing about itself for as long as a noisier one keeps talking.
+//
+// Raising MaxPanelEvents does not fix that. It buys time and hits a wall:
+// measured on tmux 3.4, a set-option argv of 16000 bytes goes through and 20000
+// comes back "command too long" (MAX_IMSGSIZE), which at ~90 bytes an entry is
+// somewhere near 170. And the order would still be recency, so a session idle
+// since morning still falls off.
+//
+// The tail scan is what makes the log's cost bounded by *sessions* rather than
+// by traffic, and it costs no schema change: the value stays a []PanelEvent and
+// stays sorted, since the tail is newest-first too and every entry appended from
+// it is older than the last one kept.
+//
+// Sessions in the log that no longer exist are dropped outright. Nothing draws
+// them — the panel renders rows for live sessions only — and without this the
+// keep-one rule would hold their entries forever, since a dead session produces
+// nothing newer to replace them. Measured: six of fifty entries belonged to a
+// session that had already gone.
+func trimLog(events []PanelEvent, live []string) []PanelEvent {
+	if live != nil {
+		alive := make(map[string]bool, len(live))
+		for _, name := range live {
+			alive[name] = true
+		}
+		kept := events[:0:0]
+		for _, e := range events {
+			if alive[e.Session] {
+				kept = append(kept, e)
+			}
+		}
+		events = kept
+	}
+	if len(events) <= MaxPanelEvents {
+		return events
+	}
+
+	kept := events[:MaxPanelEvents:MaxPanelEvents]
+	seen := make(map[string]bool, len(kept))
+	for _, e := range kept {
+		seen[e.Session] = true
+	}
+	for _, e := range events[MaxPanelEvents:] {
+		if seen[e.Session] {
+			continue
+		}
+		seen[e.Session] = true
+		kept = append(kept, e)
+	}
+	return kept
 }
 
 // duplicateAt reports where in the log e already appears, or -1.

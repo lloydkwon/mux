@@ -235,7 +235,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// developer's own server. It runs even with nothing fresh — reading is
 		// how this panel learns what the others have seen.
 		m = m.reanchorOnArrival()
-		return m.reselect(), mergeEventsCmd(fresh)
+		return m.reselect(), mergeEventsCmd(fresh, sessionNames(m.sessions))
 	}
 	return m, nil
 }
