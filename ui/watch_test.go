@@ -172,14 +172,16 @@ func TestSessionAtRow(t *testing.T) {
 	}{
 		{0, ""},    // 🔔 header
 		{1, ""},    // the blank under the header
-		{2, "web"}, // web has no event of its own, so a one-row block
-		{3, "api"},
-		{4, "api"}, // the indented waitingFor line
-		{5, "mux"},
-		{6, "mux"}, // mux's own last event, one line per session
+		{2, "web"}, // web has no event of its own
+		{3, "web"}, // spacer, still the same block
+		{4, "api"},
+		{5, "api"}, // the indented waitingFor line
+		{6, "api"}, // spacer
+		{7, "mux"},
+		{8, "mux"}, // mux's own last event; last session, so no spacer follows
 		// The section break below the list belongs to nobody, so the last
 		// session does not silently gain a row it does not own.
-		{7, ""},
+		{9, ""},
 		{99, ""}, // past the end
 		{-1, ""},
 	}
@@ -896,8 +898,9 @@ func TestSessionAtRowOnTheLastEventLine(t *testing.T) {
 		{2, "api"}, // the session row
 		{3, "api"}, // its blocked-on reason
 		{4, "api"}, // its last event
-		{5, "mux"},
-		{6, "mux"}, // mux's own last event
+		{5, "api"}, // spacer, still the same block
+		{6, "mux"},
+		{7, "mux"}, // mux's own last event
 	} {
 		if got := m.sessionAtRow(tc.row); got != tc.want {
 			t.Errorf("sessionAtRow(%d) = %q, want %q", tc.row, got, tc.want)

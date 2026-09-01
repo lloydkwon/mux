@@ -35,10 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The panel now shows every session's last event on a line under its row, with
   the chronological log of everything below the list. The badge says what a
   session is doing *now*, not what it just finished, and reading that off a flat
-  log meant scanning past whichever session was busiest. The blank line between
-  sessions went with it — it existed to make a click land on a block rather than
-  a single row, which the new line does instead, and it was costing a row per
-  session.
+  log meant scanning past whichever session was busiest.
 - The shared log keeps the newest entry of every session the 50-entry cut would
   otherwise silence, so a busy session can no longer evict a quiet one entirely.
   Measured before this: fifty entries covering sixty-four minutes, twenty of them

@@ -237,15 +237,17 @@ func TestNotifyBlocksAreClickable(t *testing.T) {
 			owners[l.session]++
 		}
 	}
-	if owners["mux"] != 2 { // row + last event
-		t.Errorf("mux owns %d rows, want 2", owners["mux"])
+	if owners["mux"] != 3 { // row + last event + spacer
+		t.Errorf("mux owns %d rows, want 3", owners["mux"])
 	}
-	if owners["api"] != 3 { // row + reason + last event
+	// The spacer goes between sessions, so the last one has none — the accepted
+	// cost of not trailing a blank into the next heading.
+	if owners["api"] != 3 { // row + reason + last event, no spacer
 		t.Errorf("api owns %d rows, want 3", owners["api"])
 	}
 
-	// No blank rows left inside the group: the ones that remain separate groups
-	// and carry no session, so they must sit outside the session rows entirely.
+	// Every row between the first and last owned one belongs to somebody — the
+	// spacer included. A blank that clicks nowhere is just extra height.
 	firstOwned, lastOwned := -1, -1
 	for i, l := range rows {
 		if l.session != "" {
