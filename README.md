@@ -309,9 +309,9 @@ Hiding it per client is not possible — a pane belongs to a window, not a clien
 
 The focus stays in the pane you were working in, both when the panel opens and after you click it.
 
-Drag the pane border to resize the panel — that still works, because tmux handles a border drag itself rather than forwarding it to the pane. The width is remembered per session (in a tmux user option, so it lives exactly as long as the session does) and the panel reopens at it. A first-time panel opens at 48 columns.
+Drag the pane border to resize the panel — that still works, because tmux handles a border drag itself rather than forwarding it to the pane. The width you drag to is remembered on disk (`~/.config/mux/panel.json`) and every open panel follows it on its next tick — one mouse and one number. A first-time panel opens at 36 columns.
 
-Rows are ordered by the number they print — how long the session has held its state — most recent first. Sorting by anything else makes that column non-monotonic, and a session at 41m listed under two at 3h reads as a bug. Rows do move as states change, which is why a session's block includes the blank line under it: the click target is two rows tall, not one.
+Rows are ordered by the number they print — how long the session has held its state — most recent first. Sorting by anything else makes that column non-monotonic, and a session at 41m listed under two at 3h reads as a bug. Rows do move as states change, which is why a session's block includes its event line and the blank under it: the whole block is the click target, not the single row.
 
 Enabling clicks means tmux hands this pane every mouse event, so its own wheel-scroll into copy-mode and drag-to-select stop working *there*; hold Shift for the terminal's native selection.
 
