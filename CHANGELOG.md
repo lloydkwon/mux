@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-09-01
+
 ### Changed
 - A finished turn says how long it took when there is no name to print
   (`✅ 작업 완료 · 3m 12s`). The name a transition prints now comes only from a
