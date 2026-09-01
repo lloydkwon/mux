@@ -216,7 +216,6 @@ The list shows what each session is doing *now*, but not what it just finished. 
 │                             │                │
 │                             │ ⏳ mux 3m ◀    │
 │                             │    13:02 ⏳    │
-│                             │                │
 │                             │ ✅ web 2h      │
 │                             │    11:20 ✅    │
 │                             │                │

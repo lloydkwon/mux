@@ -212,10 +212,12 @@ func TestNotifyLinesSortUsesCreationWithoutState(t *testing.T) {
 	}
 }
 
-// The blank line between sessions exists to make the click target a block
-// rather than a single row, so it has to click to the same session. Spacing
-// that does not is just extra height.
-func TestNotifySpacingIsClickable(t *testing.T) {
+// A session's click target is a block, not a single row. The blank line between
+// sessions used to provide the second row; the line saying what last happened
+// there does it now, which is what let the blank go. Either way every row a
+// session owns has to click to that session — spacing that does not is just
+// extra height.
+func TestNotifyBlocksAreClickable(t *testing.T) {
 	now := time.Now()
 	first := sess("mux", tmux.AIStateWorking)
 	first.AISince = now.Add(-time.Minute) // sorts first
@@ -223,23 +225,42 @@ func TestNotifySpacingIsClickable(t *testing.T) {
 	blocked.AISince = now.Add(-time.Hour) // sorts last
 	blocked.AIWaitingFor = "Bash: git push"
 	sessions := []tmux.Session{first, blocked}
+	events := []aiEvent{
+		{at: now, session: "mux", text: "⏳ 작업 중", state: tmux.AIStateWorking},
+		{at: now.Add(-time.Hour), session: "api", text: "❗ 승인 대기", state: tmux.AIStateApproval},
+	}
 
-	rows := notifyLines(sessions, nil, 40, 0, "", "", false)
+	rows := notifyLines(sessions, events, 40, 30, "", "", false)
 	owners := map[string]int{}
 	for _, l := range rows {
 		if l.session != "" {
 			owners[l.session]++
 		}
 	}
-	if owners["mux"] != 2 { // row + spacer
+	if owners["mux"] != 2 { // row + last event
 		t.Errorf("mux owns %d rows, want 2", owners["mux"])
 	}
-	// The spacer goes between sessions, so the last one has none — the accepted
-	// cost of not trailing a blank into the event separator.
-	if owners["api"] != 2 { // row + reason, no spacer
-		t.Errorf("api owns %d rows, want 2", owners["api"])
+	if owners["api"] != 3 { // row + reason + last event
+		t.Errorf("api owns %d rows, want 3", owners["api"])
 	}
 
+	// No blank rows left inside the group: the ones that remain separate groups
+	// and carry no session, so they must sit outside the session rows entirely.
+	firstOwned, lastOwned := -1, -1
+	for i, l := range rows {
+		if l.session != "" {
+			if firstOwned < 0 {
+				firstOwned = i
+			}
+			lastOwned = i
+		}
+	}
+	for i := firstOwned; i <= lastOwned; i++ {
+		if rows[i].session == "" {
+			t.Errorf("row %d inside the session list belongs to nobody: %q",
+				i, ansi.Strip(rows[i].text))
+		}
+	}
 }
 
 // The help page's legend promises ⌥⌥ for a linked worktree; the panel used to

@@ -615,12 +615,19 @@ func sortByDisplayedAge(ss []tmux.Session) {
 }
 
 // sessionBlocks renders one group: a row per session, an indented reason line
-// under a blocked one, and a spacer between blocks.
+// under a blocked one, and the line saying what last happened there.
+//
+// There is no blank between sessions. There used to be, and it did two jobs —
+// air, and a second row for the click target. The line under each session now
+// does the second job, and the air was costing a row per session on a panel
+// whose whole point is being read at a glance. Groups are still separated:
+// notifySessionLines puts a rule and blanks around the second one, and
+// notifyLines a break before the log.
 //
 // dim marks the second group, whose rows are context rather than the point.
 func sessionBlocks(ss []tmux.Session, events []aiEvent, width, perSession int, selected, own string, dim bool) []notifyLine {
 	var lines []notifyLine
-	for i, s := range ss {
+	for _, s := range ss {
 		sel := s.Name == selected
 		lines = append(lines, notifyLine{
 			text:    notifySessionLine(s, width, rowFlags{selected: sel, dim: dim, own: s.Name == own}),
@@ -649,22 +656,7 @@ func sessionBlocks(ss []tmux.Session, events []aiEvent, width, perSession int, s
 		// Drawn unhighlighted, unlike the reason row: what the highlight is for
 		// is saying precisely which session the cursor is on, and a second
 		// inverted line under every selected row blurs that.
-		last := sessionEventLines(events, s.Name, width, perSession, sel)
-		lines = append(lines, last...)
-		expanded := sel && len(last) > 0
-		// Between sessions only. The blank belongs to the session above it, which
-		// is what makes a click target two rows tall; skipping it after the last
-		// one keeps the list from trailing off into the next heading, at the cost
-		// of the bottom session being a one-row target.
-		if i < len(ss)-1 {
-			// The spacer follows the highlight, except under an open history:
-			// an inverted bar below unhighlighted rows reads as a stray row
-			// rather than as the bottom of this block.
-			lines = append(lines, notifyLine{
-				text:    renderRow(nil, width, sel && !expanded),
-				session: s.Name,
-			})
-		}
+		lines = append(lines, sessionEventLines(events, s.Name, width, perSession, sel)...)
 	}
 	return lines
 }
