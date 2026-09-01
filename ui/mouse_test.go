@@ -12,9 +12,13 @@ import (
 // mouseTestModel is a model sized like a real terminal, holding count sessions
 // under the two action rows.
 func mouseTestModel(count int) Model {
+	// 같은 시각을 준다. 반복문 안에서 time.Now() 를 부르면 세션마다 나노초씩
+	// 어긋나고, recent 정렬이 그 나이를 보므로 행 순서가 뒤집힌다 — 이 테스트가
+	// 알고 싶은 것은 클릭한 행이지 정렬이 아니다. 동률이면 이름순으로 떨어진다.
+	created := time.Now()
 	sessions := make([]tmux.Session, count)
 	for i := range sessions {
-		sessions[i] = tmux.Session{Name: fmt.Sprintf("session-%02d", i), Created: time.Now()}
+		sessions[i] = tmux.Session{Name: fmt.Sprintf("session-%02d", i), Created: created}
 	}
 	m := Model{
 		tree:     newTreeState(),

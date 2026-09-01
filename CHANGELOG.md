@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- The list sorted by a clock it does not show. "Recent" ordered sessions by
+  tmux's `session_activity` while the elapsed column beside it printed the AI
+  state's age, so a correctly sorted list read out of order — measured on a live
+  server, the sort key ran 40s → 53s → 1m → 52m while the column read 39s, 1m,
+  28h, 5m. It now sorts by the value the row prints, the way the panel already
+  did. That is also the more useful clock here: `session_activity` says a pane
+  drew something, which a session left running does whether or not anything
+  happened in it.
 - The session list no longer opens filtered when you summon it from a real
   terminal. Narrowing to the session's project was keyed off the `@project_dir`
   tag alone, so it applied wherever the session was viewed from — including

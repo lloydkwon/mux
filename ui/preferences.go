@@ -162,8 +162,25 @@ func sortedSessions(sessions []tmux.Session, prefs preferences) []tmux.Session {
 			}
 			return sessionNameLess(a.Name, b.Name)
 		default:
-			if !a.Activity.Equal(b.Activity) {
-				return a.Activity.After(b.Activity)
+			// Sort by the value the row actually prints (sessionAge), not by
+			// tmux's session_activity. They are different clocks, and using one
+			// while showing the other is what makes a correctly sorted list look
+			// unsorted: measured on a live server, activity ran 40s → 53s → 1m →
+			// 52m in order while the column beside it read 39s, 1m, 28h, 5m.
+			//
+			// sessionAge is the state's age where a session has live AI state and
+			// its creation otherwise — which is also the more useful clock for a
+			// tool about AI sessions. session_activity says a pane drew something,
+			// so a session left running says "active" while nothing has happened
+			// in it that anyone is waiting on.
+			//
+			// The panel has sorted this way all along (sortByDisplayedAge); this
+			// only brings the list in line with it. Rows move when a state
+			// changes rather than continuously, and in the list a single click
+			// selects without committing, so a row that shifts costs nothing.
+			ageA, ageB := sessionAge(a), sessionAge(b)
+			if !ageA.Equal(ageB) {
+				return ageA.After(ageB)
 			}
 			return sessionNameLess(a.Name, b.Name)
 		}

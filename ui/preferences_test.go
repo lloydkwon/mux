@@ -22,10 +22,15 @@ func TestSortModeRotation(t *testing.T) {
 
 func TestSortedSessions(t *testing.T) {
 	now := time.Now()
+	// Activity is set deliberately against the wanted order: the recent sort
+	// keys off sessionAge — the value the row prints — not tmux's
+	// session_activity. Using one while showing the other is what made a
+	// correctly sorted list look unsorted.
 	sessions := []tmux.Session{
-		{Name: "zeta", Activity: now.Add(-time.Minute)},
-		{Name: "Alpha", Activity: now.Add(-time.Hour)},
-		{Name: "beta", Activity: now},
+		{Name: "zeta", Created: now.Add(-time.Minute), Activity: now.Add(-time.Hour)},
+		{Name: "Alpha", Created: now.Add(-time.Hour), Activity: now},
+		{Name: "beta", AIState: tmux.AIStateWorking, AISince: now,
+			Created: now.Add(-24 * time.Hour), Activity: now.Add(-time.Hour)},
 	}
 
 	tests := []struct {
@@ -34,7 +39,9 @@ func TestSortedSessions(t *testing.T) {
 		want  []string
 	}{
 		{
-			name:  "recent activity",
+			// beta 는 상태가 방금 바뀌었고(AISince), zeta·Alpha 는 상태가 없어
+			// 생성 시각으로 잰다. Activity 순이라면 Alpha 가 맨 앞이었을 것이다.
+			name:  "recent by the age each row prints",
 			prefs: preferences{Sort: sortRecent},
 			want:  []string{"beta", "zeta", "Alpha"},
 		},

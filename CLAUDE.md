@@ -254,7 +254,7 @@ The badge cell is padded to `badgeWidth` (2) even when empty, because state glyp
 
 Two markers became colours instead of columns, which is what freed the gutter from twelve cells to two. The attached session is its name in `colorAccent` (`nameColor`), the active window or pane likewise (`activeColor`) — a marker column costs every row a cell to say something about one of them. The `#3` order label is drawn only when some session in view carries an order.
 
-The list's elapsed column shows the *state's* age for a session with live state (`sessionAge`) and the session's creation age otherwise, and takes the state color — with the glyph folded into the badge, that color is what still marks a blocked row at a glance.
+The list's elapsed column shows the *state's* age for a session with live state (`sessionAge`) and the session's creation age otherwise, and **the recent sort keys off that same value** — `sortedSessions`' default branch, matching the panel's `sortByDisplayedAge`. It used tmux's `session_activity` and that is a different clock: measured on a live server, activity ran 40s → 53s → 1m → 52m in order while the column beside it read 39s, 1m, 28h, 5m, so a correctly sorted list looked unsorted. `session_activity` also says only that a pane drew something, which a session left running does constantly. The column takes the state color — with the glyph folded into the badge, that color is what still marks a blocked row at a glance.
 
 ### Claude live-state chain
 
