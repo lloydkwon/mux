@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -86,10 +87,10 @@ func detectTransitions(prev map[string]aiSnapshot, sessions []tmux.Session, now 
 				state: s.AIState, since: s.AISince})
 		case s.AIState == tmux.AIStateReady && before.state != s.AIState && before.state != tmux.AIStateNone:
 			events = append(events, aiEvent{at: now, session: s.Name,
-				text: transitionText(s), state: s.AIState, since: s.AISince})
+				text: transitionText(s, before), state: s.AIState, since: s.AISince})
 		case s.AIState == tmux.AIStateWorking && before.state != s.AIState:
 			events = append(events, aiEvent{at: now, session: s.Name,
-				text: transitionText(s), state: s.AIState, since: s.AISince})
+				text: transitionText(s, before), state: s.AIState, since: s.AISince})
 		}
 	}
 
@@ -109,20 +110,59 @@ func detectTransitions(prev map[string]aiSnapshot, sessions []tmux.Session, now 
 
 // transitionText is what one logged transition says.
 //
-// The glyph already carries the state, so the words are free to carry what the
-// state cannot: the tool's own name for the work in hand. "작업 중" and
-// "작업 완료" were the same two sentences on every row of the log — true, and
-// saying nothing you could act on. `⏳ panel-session-last-notification` says
-// which turn just started.
+// The glyph already carries the state, so the words are free to carry what it
+// cannot: the tool's own name for the work in hand. "작업 중" and "작업 완료"
+// were the same two sentences on every row of the log — true, and saying
+// nothing anyone could act on.
 //
-// The label stays where there is no task name: a tool that publishes none
-// (anything but Claude today) still has a state worth reporting, and a bare
-// glyph is not a sentence.
-func transitionText(s tmux.Session) string {
+// Where there is no such name the words say how long instead. That is the case
+// for a session someone renamed by hand: the label is fixed, so ClaudeStatus
+// drops it, and a turn that just ended can at least report what it cost. A turn
+// that just *started* has nothing to measure yet, so it keeps the plain label.
+func transitionText(s tmux.Session, before aiSnapshot) string {
 	if s.AITask != "" {
 		return s.AIState.Icon() + " " + s.AITask
 	}
-	return s.AIState.Icon() + " " + aiStateLabel(s.AIState)
+
+	text := s.AIState.Icon() + " " + aiStateLabel(s.AIState)
+	if d, ok := turnLength(before, s); ok {
+		text += " · " + compactDuration(d)
+	}
+	return text
+}
+
+// turnLength is how long the state before this one lasted, and it is only asked
+// for a turn that finished.
+//
+// Both ends have to be stamped. Screen detection carries no timestamp at all, so
+// its snapshots have a zero since — treating that as an epoch would report a
+// turn as having taken fifty-six years.
+func turnLength(before aiSnapshot, s tmux.Session) (time.Duration, bool) {
+	if s.AIState != tmux.AIStateReady || before.since.IsZero() || s.AISince.IsZero() {
+		return 0, false
+	}
+	d := s.AISince.Sub(before.since)
+	if d <= 0 {
+		return 0, false
+	}
+	return d, true
+}
+
+// compactDuration formats a span as "42s"/"3m 12s"/"2h 5m".
+//
+// Seconds survive into the minutes because a turn's cost is read against how
+// long it felt, and "3m" for anything between three and four minutes throws away
+// the half the eye is checking. They go at the hour mark, where they no longer
+// change the answer to anything.
+func compactDuration(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
+	default:
+		return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
+	}
 }
 
 // aiSnapshot is what the detector remembers about a session between ticks.

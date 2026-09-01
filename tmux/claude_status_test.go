@@ -390,3 +390,28 @@ func TestTmuxPaneID(t *testing.T) {
 		}
 	}
 }
+
+// A hand-set name does not move: measured, two renamed sessions carried the
+// same label for a day. Repeating a fixed label on every transition is what the
+// Name field exists to stop, so the user's own naming is dropped and the panel
+// reports the turn's cost instead.
+func TestClaudeTaskNameDropsAUserSetName(t *testing.T) {
+	cases := []struct {
+		source string
+		want   string
+	}{
+		{"derived", "panel-work"},
+		{"auto", "panel-work"},
+		// Missing on 12 of 67 files here — older Claude builds wrote none. That
+		// is not evidence either way, and treating it as the tool's is what mux
+		// did before it read the field at all.
+		{"", "panel-work"},
+		{"user", ""},
+	}
+	for _, c := range cases {
+		got := claudeTaskName(claudeSessionFile{Name: " panel-work ", NameSource: c.source})
+		if got != c.want {
+			t.Errorf("nameSource %q: got %q, want %q", c.source, got, c.want)
+		}
+	}
+}

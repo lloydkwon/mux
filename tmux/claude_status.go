@@ -22,9 +22,18 @@ type ClaudeStatus struct {
 	State      AIState
 	RawStatus  string // verbatim "status", for diagnostics
 	WaitingFor string // verbatim "waitingFor"; set only for AIStateApproval
-	// Name is Claude's own name for the work in hand. It is what turns
-	// "작업 중" into a sentence about something, and it is the one field here
-	// that says *what* rather than *how far along*.
+	// Name is the tool's own name for the work in hand — but only when the tool
+	// chose it. It is what turns "작업 중" into a sentence about something.
+	//
+	// A name the user set by hand is dropped, because it does not move: measured,
+	// two hand-renamed sessions carried the same label for a day while Claude
+	// renamed one of its own three times in an afternoon (formerNames records
+	// them). Repeating a fixed label on every transition is what this field
+	// exists to stop.
+	//
+	// A missing nameSource — older Claude builds, 12 of 67 files here — counts as
+	// the tool's. That is what mux did before it read the field, and there is no
+	// evidence either way to act on.
 	Name      string
 	Since     time.Time // when the current state began; zero when unknown
 	SessionID string
@@ -155,7 +164,7 @@ func parseClaudeStatus(data []byte) (status ClaudeStatus, tmuxRef string, ok boo
 		RawStatus: sf.Status,
 		SessionID: sf.SessionID,
 		PID:       sf.PID,
-		Name:      strings.TrimSpace(sf.Name),
+		Name:      claudeTaskName(sf),
 	}
 	if state == AIStateApproval {
 		status.WaitingFor = sf.WaitingFor
@@ -164,6 +173,15 @@ func parseClaudeStatus(data []byte) (status ClaudeStatus, tmuxRef string, ok boo
 		status.Since = time.UnixMilli(sf.StatusUpdatedAt)
 	}
 	return status, tmuxRef, true
+}
+
+// claudeTaskName is the session name when Claude chose it, and empty when the
+// user did. See ClaudeStatus.Name for why the distinction matters.
+func claudeTaskName(sf claudeSessionFile) string {
+	if sf.NameSource == "user" {
+		return ""
+	}
+	return strings.TrimSpace(sf.Name)
 }
 
 // mapClaudeState reduces Claude's status enum to the AIState we display.

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- A finished turn says how long it took when there is no name to print
+  (`✅ 작업 완료 · 3m 12s`). The name a transition prints now comes only from a
+  session Claude named itself: the state file's `nameSource` distinguishes the
+  tool's own naming (`auto`, `derived`, or missing on older builds) from a name
+  the user set by hand, and a hand-set name does not move — two renamed sessions
+  here carried the same label for a day while Claude renamed one of its own
+  three times in an afternoon. Repeating a fixed label on every transition is
+  what naming the work was meant to stop, so those sessions get the duration.
+
+### Fixed
+- The blank line between sessions in the panel is back. It was removed in 0.3.6
+  on the grounds that the new per-session event line already made a click land
+  on a block rather than a single row — which it does, but the blank's other job
+  turned out to be the load-bearing one: without it seven two-line blocks run
+  together into a wall, on a panel whose whole point is being read at a glance.
+
 ## [0.3.6] - 2026-09-01
 
 ### Added

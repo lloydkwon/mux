@@ -894,15 +894,82 @@ func TestTransitionTextNamesTheWork(t *testing.T) {
 	s := sess("mux", tmux.AIStateWorking)
 	s.AITask = "panel-session-last-notification"
 
-	if got := transitionText(s); got != "⏳ panel-session-last-notification" {
+	if got := transitionText(s, aiSnapshot{}); got != "⏳ panel-session-last-notification" {
 		t.Errorf("transitionText = %q, want the task name", got)
 	}
 
 	// A tool that publishes no task still has a state worth reporting, and a
 	// bare glyph is not a sentence.
 	s.AITask = ""
-	if got := transitionText(s); got != "⏳ 작업 중" {
+	if got := transitionText(s, aiSnapshot{}); got != "⏳ 작업 중" {
 		t.Errorf("transitionText without a task = %q, want the label", got)
+	}
+}
+
+// A session someone renamed by hand carries a label that does not move, so
+// ClaudeStatus drops it — and a finished turn says what it cost instead.
+func TestTransitionTextTimesAnUnnamedTurn(t *testing.T) {
+	now := time.Now()
+	before := aiSnapshot{state: tmux.AIStateWorking, since: now.Add(-3*time.Minute - 12*time.Second)}
+
+	done := sess("mux", tmux.AIStateReady)
+	done.AISince = now
+	if got := transitionText(done, before); got != "✅ 작업 완료 · 3m 12s" {
+		t.Errorf("finished turn = %q, want the duration", got)
+	}
+
+	// A turn that just started has nothing to measure yet.
+	started := sess("mux", tmux.AIStateWorking)
+	started.AISince = now
+	if got := transitionText(started, before); got != "⏳ 작업 중" {
+		t.Errorf("started turn = %q, want the plain label", got)
+	}
+
+	// The name wins where there is one: it says what, which a duration cannot.
+	done.AITask = "panel-work"
+	if got := transitionText(done, before); got != "✅ panel-work" {
+		t.Errorf("named turn = %q, want the name", got)
+	}
+}
+
+// Screen detection stamps nothing, so its snapshots carry a zero time. Reading
+// that as an epoch reports a turn as having taken fifty-six years.
+func TestTurnLengthNeedsBothEndsStamped(t *testing.T) {
+	now := time.Now()
+	done := sess("mux", tmux.AIStateReady)
+	done.AISince = now
+
+	if _, ok := turnLength(aiSnapshot{state: tmux.AIStateWorking}, done); ok {
+		t.Error("an unstamped previous state produced a duration")
+	}
+
+	unstamped := sess("mux", tmux.AIStateReady)
+	if _, ok := turnLength(aiSnapshot{since: now.Add(-time.Minute)}, unstamped); ok {
+		t.Error("an unstamped current state produced a duration")
+	}
+
+	// Clocks can hand back a state that began before the one it replaced.
+	if _, ok := turnLength(aiSnapshot{since: now.Add(time.Minute)}, done); ok {
+		t.Error("a negative span produced a duration")
+	}
+}
+
+func TestCompactDuration(t *testing.T) {
+	cases := []struct {
+		d    time.Duration
+		want string
+	}{
+		{42 * time.Second, "42s"},
+		{time.Minute, "1m 0s"},
+		// Seconds survive into the minutes: "3m" throws away the half the eye
+		// is checking.
+		{3*time.Minute + 12*time.Second, "3m 12s"},
+		{2*time.Hour + 5*time.Minute, "2h 5m"},
+	}
+	for _, c := range cases {
+		if got := compactDuration(c.d); got != c.want {
+			t.Errorf("compactDuration(%s) = %q, want %q", c.d, got, c.want)
+		}
 	}
 }
 

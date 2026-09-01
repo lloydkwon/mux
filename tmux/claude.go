@@ -50,6 +50,10 @@ type claudeSessionFile struct {
 	// "panel-session-last-notification". Present on every live session file
 	// observed, but optional like everything else here.
 	Name string `json:"name"`
+	// NameSource says who named it: "auto" or "derived" for Claude's own, "user"
+	// when someone renamed the session by hand. Observed missing on 12 of 67
+	// files — older Claude builds wrote none.
+	NameSource string `json:"nameSource"`
 	// StatusUpdatedAt is when the current status began, in epoch milliseconds.
 	StatusUpdatedAt int64 `json:"statusUpdatedAt"`
 }
