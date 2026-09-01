@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- The session list no longer opens filtered when you summon it from a real
+  terminal. Narrowing to the session's project was keyed off the `@project_dir`
+  tag alone, so it applied wherever the session was viewed from — including
+  Windows Terminal, where the session manager is opened precisely to see
+  everything, and where the first keystroke became `esc`. The client looking at
+  the list now decides, and only a VS Code integrated terminal narrows it. Both
+  facts come from one `display-message`, so startup costs no more than before.
+
 ### Added
 - `make tmux-check` (`scripts/tmux-assumptions.sh`) verifies what mux assumes
   about tmux against the tmux actually installed, and CI runs it too. Every unit

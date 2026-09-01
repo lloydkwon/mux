@@ -78,8 +78,17 @@ A single click only moves the cursor. Unlike the watch panel — where a click s
 tmux 세션은 **서버** 단위로 존재하고 서버는 사용자당 하나다 — 어느 VS Code 창에서
 열든 `tmux list-sessions`는 전부 같은 목록을 준다. 좁히는 건 mux의 몫이다.
 
-`NewModel`은 시작할 때 `tmux.CurrentProjectDir()`(`display-message -p '#{@project_dir}'`)를
-한 번 읽어 `filterText`의 초기값으로 넣는다. `@project_dir`은 `tmux-project` VS Code
+`NewModel`은 시작할 때 `tmux.ProjectScope()`를 한 번 호출해 `filterText`의 초기값을 정한다.
+
+**좁힐지는 세션의 태그가 아니라 보고 있는 클라이언트가 정한다.** 처음에는 태그만 보고
+좁혔는데, 그러면 Windows Terminal 에서 연 목록까지 같이 좁혀졌다 — 거기서 세션
+매니저를 여는 것은 전체를 보려는 것이라 정반대다. 좁혀서 이득인 쪽은 이 폴더를
+이미 연 편집기 창 하나뿐이다. 훅과 달리 여기서는 클라이언트를 물어봐도 된다:
+사람이 방금 키를 눌러 뜬 화면이라 현재 클라이언트가 반드시 있다.
+
+`#{client_pid}`와 `#{@project_dir}`을 한 포맷에 실어 **왕복 한 번**으로 끝낸다. 둘은
+시작할 때 같이만 쓰이고, 두 번 부르면 Model 을 만드는 모든 테스트가 개발자의 실제
+tmux 서버를 상대로 그 값을 두 번 치른다. `@project_dir`은 `tmux-project` VS Code
 프로필이 세션을 만들 때 다는 태그이고, 태그가 없으면 시딩할 값이 없어 지금까지처럼
 전부 보인다. **이걸 버그로 보고 지우지 말 것** — `esc`가 탈출구다.
 

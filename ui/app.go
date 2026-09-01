@@ -176,8 +176,17 @@ func NewModel() Model {
 	// 이름·경로·프로젝트를 대조하고, esc 한 번이면 전체로 돌아가는 탈출구까지
 	// 갖고 있다. 태그(@project_dir)가 없는 세션에서 열면 시딩할 값이 없어
 	// 지금까지와 똑같이 전부 보인다.
-	m.projectDir = tmux.CurrentProjectDir()
-	m.filterText = m.projectDir
+	// 좁힐지는 세션이 아니라 **보고 있는 쪽**이 정한다. 처음에는 세션의 태그만
+	// 보고 좁혔는데, 그러면 Windows Terminal 에서 연 목록까지 같이 좁혀졌다 —
+	// 거기서 세션 매니저를 여는 것은 전체를 보려는 것이니 정반대다. 좁혀서
+	// 이득인 쪽은 통합 터미널 하나뿐이다.
+	//
+	// 훅과 달리 여기서는 클라이언트를 물어봐도 된다. 사람이 방금 키를 눌러서
+	// 뜬 화면이라 현재 클라이언트가 반드시 있다.
+	if dir, vscode := tmux.ProjectScope(); vscode {
+		m.projectDir = dir
+		m.filterText = dir
+	}
 	return m
 }
 

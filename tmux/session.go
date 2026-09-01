@@ -21,15 +21,44 @@ const listFormat = "#{session_name}|#{session_windows}|#{session_created}|#{sess
 // it is there from the moment the session exists.
 const projectDirOption = "@project_dir"
 
-// CurrentProjectDir reports projectDirOption for the session this process runs
-// in. Empty outside tmux and for untagged sessions, which is what makes scoping
-// on it safe: no tag, no scoping.
-func CurrentProjectDir() string {
-	out, err := runner.Output("tmux", "display-message", "-p", "#{"+projectDirOption+"}")
+// ProjectScope answers, in one round trip, both halves of "should this list open
+// narrowed to a project": the session's projectDirOption, and whether the client
+// looking at it is a VS Code integrated terminal.
+//
+// **vscode is what decides, not the tag.** Narrowing was keyed off the tag alone
+// at first, and that narrowed the list in Windows Terminal too — where a session
+// manager is opened precisely to see everything. The one audience it helps is an
+// editor window that already opened this folder.
+//
+// Asking who is looking is allowed here, unlike on the panel's hook path: this
+// runs from a key the user just pressed, so a current client exists.
+// `after-new-session` fires before any client attaches, which is why the panel
+// keys off the tag instead.
+//
+// One call because the two are only ever wanted together, at startup, before the
+// first frame — and two would cost twice over, including in every test that
+// builds a Model against the developer's own tmux server.
+//
+// Anything unreadable answers false. Guessing "VS Code" wrongly hides the
+// sessions the user opened the list to find.
+//
+// The path goes last and takes the remainder: a pid cannot contain the
+// separator and a path can.
+func ProjectScope() (dir string, vscode bool) {
+	out, err := runner.Output("tmux", "display-message", "-p",
+		"#{client_pid}|#{"+projectDirOption+"}")
 	if err != nil {
-		return ""
+		return "", false
 	}
-	return strings.TrimSpace(string(out))
+	pidStr, dir, found := strings.Cut(strings.TrimSpace(string(out)), "|")
+	if !found {
+		return "", false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(pidStr))
+	if err != nil || pid <= 0 {
+		return "", false
+	}
+	return dir, clientEnvHas(pid, vscodeEnvMarker)
 }
 
 // SessionProjectDir reports projectDirOption for a named session. Empty when
