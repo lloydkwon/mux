@@ -107,6 +107,26 @@ type watchModel struct {
 	// saved to disk and actively held.
 	winPanes int
 
+	// exePath is the binary this process was started from, resolved once at
+	// startup. Empty disables the whole check — which is what every test gets,
+	// and what keeps `go test ./ui` off the filesystem and off tmux here.
+	exePath string
+
+	// exeStamp is what that path looked like when this process started, and
+	// pendingExe is a reading that disagrees with it and is waiting to be seen
+	// twice. A single disagreeing reading is not enough: `install` cannot write
+	// over a running binary (measured: ETXTBSY, which is why `cp` fails there
+	// and `install` unlinks first), so the path briefly names a file that is
+	// still being written. Restarting into that is restarting into a truncated
+	// binary.
+	exeStamp   binaryStamp
+	pendingExe binaryStamp
+
+	// restartRequested is read by RunWatch after the program exits, the same way
+	// the TUI hands back attachTarget: exec cannot run under Bubble Tea, which
+	// holds the terminal in raw mode on the alternate screen.
+	restartRequested bool
+
 	// ownAttached is whether a client was in this pane's session as of the last
 	// refresh. Held so the *arrival* can be seen: a level would undo the user's
 	// own cursor two seconds after they moved it, an edge only fires when they
@@ -147,14 +167,48 @@ func RunWatch() error {
 	// A title mux could not set is not a reason to refuse to draw.
 	_ = tmux.MarkPanelPane(selfPane())
 
-	_, err = tea.NewProgram(
-		watchModel{
-			ownSession:     own,
-			minWindowWidth: tmux.MinWindowWidth(),
-			showHeader:     tmux.PanelHeaderEnabled(),
-		},
-		tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
-	return err
+	// Read once, outside the loop: these are startup facts, and the loop below
+	// only turns again when an exec failed rather than because anything about
+	// the pane changed.
+	minWidth := tmux.MinWindowWidth()
+	header := tmux.PanelHeaderEnabled()
+	exe, exeErr := os.Executable()
+	if exeErr != nil {
+		// Not knowing what we are running disables the restart check and
+		// nothing else. See watchModel.exePath.
+		exe = ""
+	}
+
+	for {
+		final, err := tea.NewProgram(
+			watchModel{
+				ownSession:     own,
+				minWindowWidth: minWidth,
+				showHeader:     header,
+				exePath:        exe,
+				// Taken here rather than on the first tick so the baseline is
+				// the file we actually started from. A tick later it may already
+				// be someone else's.
+				exeStamp: statBinary(exe),
+			},
+			tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+		if err != nil {
+			return err
+		}
+
+		wm, ok := final.(watchModel)
+		if !ok || !wm.restartRequested {
+			return nil
+		}
+
+		// exec returns only when it failed. Returning here would end the process
+		// and take the pane with it, so the panel goes back up on the code we
+		// already have — and the new model stamps the file that would not run,
+		// which is what stops this from looping on a binary that never will.
+		if relaunch(exe) != nil {
+			continue
+		}
+	}
 }
 
 func (m watchModel) Init() tea.Cmd {
@@ -209,6 +263,14 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case watchTickMsg:
 		m, adopt := m.adoptSavedWidth()
+		// Before anything else: a panel running code the user has already
+		// replaced is a panel reporting on a version of itself that no longer
+		// exists, and there is no window event after an install for the hooks to
+		// notice. `mux watch` is one process per pane and lives for days.
+		m, stale := m.checkBinary(statBinary(m.exePath))
+		if stale {
+			return m.requestRestart()
+		}
 		return m, tea.Batch(loadSessions, watchTick(), adopt)
 
 	case sessionsLoadedMsg:
@@ -694,4 +756,48 @@ func (m watchModel) body() string {
 		return helpStyle.Render(fitCells(" AI 세션 없음", m.width))
 	}
 	return strings.Join(notifyTexts(lines), "\n")
+}
+
+// checkBinary compares a fresh reading of the panel's own path against the one
+// taken at startup, and says whether this process is now running code the user
+// has replaced.
+//
+// It is pure so that the decision can be tested without installing anything, and
+// it stands down entirely when exePath is empty — a model built without a
+// baseline never asks the filesystem a question.
+//
+// A disagreeing reading has to arrive twice before it counts, and the two have
+// to agree with *each other*. An install that is still copying moves the size
+// under us, so "different from the baseline" is true well before the file is a
+// binary; "different, and unchanged since I last looked" is the thing worth
+// acting on. An unreadable path — briefly, between the unlink and the create —
+// clears the count rather than deciding anything.
+func (m watchModel) checkBinary(now binaryStamp) (watchModel, bool) {
+	if m.exePath == "" || !m.exeStamp.ok() || !now.ok() || now.same(m.exeStamp) {
+		m.pendingExe = binaryStamp{}
+		return m, false
+	}
+	if !now.same(m.pendingExe) {
+		m.pendingExe = now
+		return m, false
+	}
+	return m, true
+}
+
+// requestRestart quits so RunWatch can exec — unless the user is standing in
+// this pane, in which case it waits.
+//
+// The wait is not about safety; exec keeps the pane and therefore the focus. It
+// is that `m.selected` does not survive, so restarting under someone who is
+// steering with prefix+Tab and j/k moves their cursor back to their own session
+// mid-gesture. The install is not going anywhere, and neither is the next tick.
+//
+// Reached only when checkBinary said so, which needs a baseline no test sets —
+// that is what keeps this tmux call out of `go test ./ui`.
+func (m watchModel) requestRestart() (tea.Model, tea.Cmd) {
+	if tmux.PaneActive(selfPane()) {
+		return m, tea.Batch(loadSessions, watchTick())
+	}
+	m.restartRequested = true
+	return m, tea.Quit
 }

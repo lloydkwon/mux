@@ -228,6 +228,16 @@ Two things about the panel side are easy to undo by accident. The merge is a **`
 
 The log dies with the tmux server, which is right for something called "recent events" — and is why it is an option rather than a file beside `panel.json`.
 
+**The panel picks up a new binary by exec'ing into it.** `mux watch` is one process per pane and lives for days, so installing mux left every open panel running the code it loaded at startup — `/proc/<pid>/exe` reading `(deleted)` was the only sign, and the symptom was a fix that visibly did not take. There is no window event after an install, so `panelHooks` cannot help: nothing fires.
+
+`watchModel` carries the path it started from and a stamp of that file (`ui/restart.go`), re-stats it each tick, and on a change quits so `RunWatch` can `syscall.Exec`. The pane, its width and its focus all survive, because only the process in it changes — measured: the PID stayed put and the exe inode moved from the unlinked one to the new one 4.5 seconds after an install.
+
+Three things about it are load-bearing. **A changed reading has to arrive twice, and the two have to agree with each other.** `install` cannot write over a running binary — measured, that is `ETXTBSY`, which is why `cp` fails there and `install` unlinks first — so the path names a partially written file while the copy runs, and one disagreeing reading arrives long before there is a binary to exec into. **A failed exec must not return**, because `RunWatch` returning ends the process and takes the pane with it; the loop puts the panel back up on the code it has, and the fresh baseline it takes is of the file that would not run, which is what stops it retrying forever. And it **stands down while the pane is active**: exec keeps the focus but not `m.selected`, so restarting under someone steering with `prefix + Tab` and `j`/`k` moves their cursor mid-gesture.
+
+Size and mtime rather than a hash, because this runs every tick and the answer is almost always no; the cost is that reinstalling a byte-identical build still restarts, which costs the cursor and nothing else. An empty `exePath` disables the whole thing — that is what every test gets, and it is what keeps `go test ./ui` from stat'ing anything or reaching the `PaneActive` call.
+
+The TUI does not do this. It is opened, used and quit; the panel is the one that is still running a week later.
+
 Every tmux call it makes must name its own pane (`selfPane()`, from `$TMUX_PANE`). tmux resolves an omitted target to the window's *active* pane, which is the one the user works in — the panel is created detached and never becomes active on its own. A width correction sent without a target shrank the wrong pane, and the panel grew to fill what it gave up.
 
 **The panel names its own pane, and that title is the only thing that survives tmux-resurrect.** `MarkPanelPane` (`tmux/panel.go`) sets `panelTitle` from `RunWatch`, and `findGhostPane` closes a pane that still carries it but is no longer running the panel.

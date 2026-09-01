@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The panel restarts itself when mux is installed over. `mux watch` is one
+  process per pane and lives for days, so replacing the binary left every open
+  panel running the code it had loaded — a fix you had just installed visibly
+  did not take, and nothing said why. There is no window event after an install
+  for the panel hooks to notice, so the panel now watches its own path and
+  `exec`s into the new file: same pane, same width, same focus, and the same PID.
+  A change has to be seen twice before it acts — `install` cannot write over a
+  running binary, so it unlinks and writes a new one, and the path names a
+  half-copied file for as long as that takes. Measured end to end: 4.5 seconds
+  from `install` to the new binary running, and a failed exec leaves the panel
+  up on the code it already had rather than closing the pane.
+
 ## [0.3.7] - 2026-09-01
 
 ### Changed
