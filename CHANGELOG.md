@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-09-01
+
+### Added
+- `make tmux-check` (`scripts/tmux-assumptions.sh`) verifies what mux assumes
+  about tmux against the tmux actually installed, and CI runs it too. Every unit
+  test mocks the runner — that is what keeps them hermetic, and it also means
+  tmux can change underneath mux without a single test failing. The script
+  starts a private server (`-L`, `-f /dev/null`, so your own sessions and hooks
+  are never touched) and checks 22 behaviours the code leans on: the version
+  string `getTmuxVersion` parses, the session-list field count, user options
+  resolving through a pane target, `split-window -l N` giving exactly N columns,
+  `list-panes` remembering the start command the panel is found by, batched
+  captures emitting one separator, and `run-shell` and `after-new-session`
+  expanding `#{pane_id}`. `TMUX_BIN=/path/to/tmux` aims it at a candidate
+  build instead of PATH, which is the point: a new tmux on PATH makes the client
+  new while the running server stays old, and the protocol mismatch rejects every
+  tmux call until the server restarts — taking every session with it. Checked
+  this way against 3.4 and 3.7c: 22/22 on both.
+
 ### Changed
 - A logged transition now names the work instead of restating the state. The
   glyph already says working or done; the words carry Claude's own name for the
@@ -14,12 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It comes from the `name` field of Claude's state file, which every live
   session observed carried. Tools that publish no task keep the label.
 - The panel now shows every session's last event on a line under its row, with
-  the chronological log of everything below the list. The blank line between
-  sessions went with it — that blank existed to make a click land on a block
-  rather than a single row, which the new line does instead, and it was costing
-  a row per session. The badge says what a
+  the chronological log of everything below the list. The badge says what a
   session is doing *now*, not what it just finished, and reading that off a flat
-  log meant scanning past whichever session was busiest.
+  log meant scanning past whichever session was busiest. The blank line between
+  sessions went with it — it existed to make a click land on a block rather than
+  a single row, which the new line does instead, and it was costing a row per
+  session.
 - The shared log keeps the newest entry of every session the 50-entry cut would
   otherwise silence, so a busy session can no longer evict a quiet one entirely.
   Measured before this: fifty entries covering sixty-four minutes, twenty of them
@@ -43,23 +62,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   everything, and where the first keystroke became `esc`. The client looking at
   the list now decides, and only a VS Code integrated terminal narrows it. Both
   facts come from one `display-message`, so startup costs no more than before.
-
-### Added
-- `make tmux-check` (`scripts/tmux-assumptions.sh`) verifies what mux assumes
-  about tmux against the tmux actually installed, and CI runs it too. Every unit
-  test mocks the runner — that is what keeps them hermetic, and it also means
-  tmux can change underneath mux without a single test failing. The script
-  starts a private server (`-L`, `-f /dev/null`, so your own sessions and hooks
-  are never touched) and checks 22 behaviours the code leans on: the version
-  string `getTmuxVersion` parses, the session-list field count, user options
-  resolving through a pane target, `split-window -l N` giving exactly N columns,
-  `list-panes` remembering the start command the panel is found by, batched
-  captures emitting one separator, and `run-shell` and `after-new-session`
-  expanding `#{pane_id}`. `TMUX_BIN=/path/to/tmux` aims it at a candidate
-  build instead of PATH, which is the point: a new tmux on PATH makes the client
-  new while the running server stays old, and the protocol mismatch rejects every
-  tmux call until the server restarts — taking every session with it. Checked
-  this way against 3.4 and 3.7c: 22/22 on both.
 
 ## [0.3.5] - 2026-08-31
 
