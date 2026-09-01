@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -310,26 +311,27 @@ func TestNotifySessionLineDropsBranchFirst(t *testing.T) {
 	}
 }
 
-// A fixed name column strands the text far right of every short name. It must
-// follow the name instead, which means its start moves with the name's length.
-func TestNotifyEventLineHugsName(t *testing.T) {
-	at := time.Now()
-	start := func(session string) int {
-		row := ansi.Strip(notifyEventLine(
-			aiEvent{at: at, session: session, text: "✅ 작업 완료"}, 44))
-		i := strings.Index(row, session)
-		if i < 0 {
-			t.Fatalf("row %q is missing the session name", row)
-		}
-		if got := row[i+len(session) : i+len(session)+1]; got != " " {
-			t.Fatalf("row %q: %q after the name, want one space", row, got)
-		}
-		return strings.Index(row, "✅")
-	}
+// Inside its own session's block the name is the one thing every row would
+// repeat, so it goes. What has to survive is the time and what happened — the
+// session row above only ever says the state *now*.
+func TestSessionEventLineDropsTheName(t *testing.T) {
+	at := time.Date(2026, 9, 1, 14, 23, 1, 0, time.Local)
+	row := ansi.Strip(sessionEventLine(
+		aiEvent{at: at, session: "dimont-onboarding", text: "✅ 작업 완료"}, 44))
 
-	short, long := start("mux"), start("dimont-onboarding")
-	if short >= long {
-		t.Errorf("text starts at %d for a short name and %d for a long one — want it to follow the name", short, long)
+	if strings.Contains(row, "dimont-onboarding") {
+		t.Errorf("row %q repeats the session name", row)
+	}
+	for _, want := range []string{"14:23:01", "✅ 작업 완료"} {
+		if !strings.Contains(row, want) {
+			t.Errorf("row %q is missing %q", row, want)
+		}
+	}
+	if !strings.HasPrefix(row, "    ") {
+		t.Errorf("row %q is not indented under its session", row)
+	}
+	if got := ansi.StringWidth(row); got != 44 {
+		t.Errorf("row measures %d cells, want 44", got)
 	}
 }
 
@@ -342,7 +344,7 @@ func TestNotifyMarksOwnSession(t *testing.T) {
 	other.GitBranch = "main"
 	sessions := []tmux.Session{mine, other}
 
-	rows := ansi.Strip(strings.Join(notifyTexts(notifySessionLines(sessions, 40, "", "project")), "\n"))
+	rows := ansi.Strip(strings.Join(notifyTexts(notifySessionLines(sessions, nil, 40, 0, "", "project")), "\n"))
 	marked := 0
 	for _, line := range strings.Split(rows, "\n") {
 		if strings.Contains(line, ownMarker) {
@@ -358,7 +360,7 @@ func TestNotifyMarksOwnSession(t *testing.T) {
 
 	// No own session known — the panel used to have no idea, and marking
 	// something anyway would be a guess.
-	none := ansi.Strip(strings.Join(notifyTexts(notifySessionLines(sessions, 40, "", "")), "\n"))
+	none := ansi.Strip(strings.Join(notifyTexts(notifySessionLines(sessions, nil, 40, 0, "", "")), "\n"))
 	if strings.Contains(none, ownMarker) {
 		t.Errorf("marked a row with no own session known:\n%s", none)
 	}
@@ -617,6 +619,106 @@ func TestAiWaitingLabel(t *testing.T) {
 	for raw, want := range cases {
 		if got := aiWaitingLabel(raw); got != want {
 			t.Errorf("aiWaitingLabel(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+// The panel has no scrollbar and fixedBox clips from the bottom without saying
+// so. An open history therefore may only use room the sessions left over — and
+// where they left none, it must take nothing at all.
+//
+// The sessions themselves have never been rationed: a pane too short for the
+// list clips it, with or without a history. What this pins is that the history
+// is not what does the pushing.
+func TestOpenHistoryOnlyUsesSpareRoom(t *testing.T) {
+	now := time.Now()
+	var sessions []tmux.Session
+	for i := 0; i < 7; i++ {
+		s := sess(fmt.Sprintf("session-%d", i), tmux.AIStateWorking)
+		s.AISince = now.Add(-time.Duration(i) * time.Minute)
+		sessions = append(sessions, s)
+	}
+	var events []aiEvent
+	for i := 0; i < 50; i++ {
+		events = append(events, aiEvent{
+			at: now.Add(-time.Duration(i) * time.Minute), session: "session-3",
+			text: "⏳ 작업 중", state: tmux.AIStateWorking,
+		})
+	}
+
+	for _, height := range []int{8, 12, 18, 24, 40, 67} {
+		bare := notifyLines(sessions, nil, 44, height, "session-3", "", false)
+		full := notifyLines(sessions, events, 44, height, "session-3", "", false)
+
+		switch {
+		case len(bare) >= height:
+			// 세션만으로 이미 pane 을 넘겼다 — 이력이 한 줄이라도 더하면
+			// 잘려 나가는 것은 세션 쪽이다.
+			if len(full) != len(bare) {
+				t.Errorf("height %d: history added %d rows to a pane already full",
+					height, len(full)-len(bare))
+			}
+		case len(full) > height:
+			t.Errorf("height %d: %d lines — the history overflowed the pane", height, len(full))
+		}
+
+		// 어느 높이에서든, 이력이 없을 때 그려지던 세션은 그대로 그려져야 한다.
+		bareText := ansi.Strip(strings.Join(notifyTexts(bare), "\n"))
+		fullText := ansi.Strip(strings.Join(notifyTexts(full), "\n"))
+		for _, s := range sessions {
+			if strings.Contains(bareText, s.Name) && !strings.Contains(fullText, s.Name) {
+				t.Errorf("height %d: %s was pushed out by the history:\n%s", height, s.Name, fullText)
+			}
+		}
+	}
+}
+
+// Room left over is not a reason to fill it. Past the cap one session's history
+// stops being detail under a row and starts being the panel.
+func TestOpenHistoryIsCapped(t *testing.T) {
+	now := time.Now()
+	var events []aiEvent
+	for i := 0; i < 40; i++ {
+		events = append(events, aiEvent{
+			at: now.Add(-time.Duration(i) * time.Minute), session: "api",
+			text: "⏳ 작업 중", state: tmux.AIStateWorking,
+		})
+	}
+
+	lines := sessionEventLines(events, "api", 44, expandBudget(1000))
+	if len(lines) != maxExpandedEvents {
+		t.Errorf("history = %d rows with room to spare, want the cap %d", len(lines), maxExpandedEvents)
+	}
+}
+
+// A cursor on a session that draws nothing under it looks like a panel that
+// failed, not like a session nothing has happened in.
+func TestOpenHistorySaysWhenThereIsNone(t *testing.T) {
+	lines := sessionEventLines(nil, "api", 44, 5)
+	if len(lines) != 1 {
+		t.Fatalf("empty history = %d rows, want 1", len(lines))
+	}
+	if got := ansi.Strip(lines[0].text); !strings.Contains(got, "아직 없음") {
+		t.Errorf("row %q does not say the history is empty", got)
+	}
+	if lines[0].session != "api" {
+		t.Errorf("the row owner is %q, want api — it must click like the rest of the block", lines[0].session)
+	}
+}
+
+// Every row the panel draws is exactly width cells; a short one leaves the pane
+// showing whatever was under it.
+func TestOpenHistoryRowWidths(t *testing.T) {
+	now := time.Now()
+	events := []aiEvent{
+		{at: now, session: "api", text: "❗ 승인 대기 · Bash: git push --force-with-lease", state: tmux.AIStateApproval},
+		{at: now, session: "api", text: "✅", state: tmux.AIStateReady},
+	}
+	for _, width := range []int{24, 30, 44, 60} {
+		for _, l := range sessionEventLines(events, "api", width, 5) {
+			if got := ansi.StringWidth(l.text); got != width {
+				t.Errorf("width %d: row measures %d cells (%q)", width, got, ansi.Strip(l.text))
+			}
 		}
 	}
 }

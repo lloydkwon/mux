@@ -211,29 +211,57 @@ type notifyLine struct {
 	session string
 }
 
-// notifyLines builds the whole panel: sessions on top, recent transitions
-// below. Every line is exactly width cells. Returns nil when there is nothing to
-// report, so callers can tell "empty" from "a box of blanks".
+// notifyLines builds the whole panel. Every line is exactly width cells. Returns
+// nil when there is nothing to report, so callers can tell "empty" from "a box
+// of blanks".
 //
-// The two halves stay separate functions because they answer different questions
-// and degrade differently, not because anything places them apart.
+// The transition log used to be a second half below the sessions, in one flat
+// chronological list. On a real server that was forty-odd rows of whichever
+// session was busiest repeating itself, and finding what happened in *this*
+// session meant reading past all of it. Now each session's own history opens
+// under its row, and only for the one the cursor is on.
+//
+// The budget is why the session block is rendered twice. Knowing how many rows
+// the expansion may take means knowing how tall the list is without it, and
+// computing that arithmetically would put the block's layout rules in two
+// places. Rendering costs string assembly and nothing else — sessionLines()
+// already redraws the whole panel on every click lookup.
 func notifyLines(sessions []tmux.Session, events []aiEvent, width, height int, selected, own string, showHeader bool) []notifyLine {
-	lines := notifySessionLines(sessions, width, selected, own)
-	if len(lines) == 0 && len(events) == 0 {
+	bare := notifySessionLines(sessions, nil, width, 0, selected, own)
+	if len(bare) == 0 {
 		return nil
 	}
-	// A section break, not session spacing: this blank carries no session, so it
-	// separates the two halves without stretching the last session's click block.
-	// Skipped when there are no sessions, or it would double up with the blank
-	// already sitting under the heading.
-	if len(lines) > 0 {
-		lines = append(lines, notifyLine{text: blankRow(width)})
+
+	header := 0
+	if showHeader {
+		header = len(panelHeaderLines(sessions, width, height, selected))
 	}
-	lines = append(lines, notifyEventLines(events, width)...)
+	lines := notifySessionLines(sessions, events, width,
+		expandBudget(height-header-len(bare)), selected, own)
 	if !showHeader {
 		return lines
 	}
 	return append(panelHeaderLines(sessions, width, height, selected), lines...)
+}
+
+// maxExpandedEvents caps the history under one session however much room is
+// left. Without it a quiet moment on a tall pane turns the panel into one
+// session's log with the others pushed under it, which is not a sidebar.
+const maxExpandedEvents = 12
+
+// expandBudget is how many history rows the selected session may take: whatever
+// the sessions did not use, never more than the cap and never negative. A pane
+// too short to spare a row simply shows no history — the session rows are what
+// must survive, since they are the panel.
+func expandBudget(spare int) int {
+	switch {
+	case spare < 0:
+		return 0
+	case spare > maxExpandedEvents:
+		return maxExpandedEvents
+	default:
+		return spare
+	}
 }
 
 const (
@@ -403,7 +431,7 @@ func fitRight(left, right rowSeg, width int) []rowSeg {
 //
 // Glyphs and colors come from aiGlyph/aiStateColor, the same deciders the list
 // uses — a second mapping here would drift from the rows it sits next to.
-func notifySessionLines(sessions []tmux.Session, width int, selected, own string) []notifyLine {
+func notifySessionLines(sessions []tmux.Session, events []aiEvent, width, budget int, selected, own string) []notifyLine {
 	if width <= 0 {
 		return nil
 	}
@@ -437,26 +465,68 @@ func notifySessionLines(sessions []tmux.Session, width int, selected, own string
 		// nothing under it reads as a panel that failed to load.
 		lines = append(lines, notifyLine{text: helpStyle.Render(padOrTruncate("  없음", width))})
 	}
-	lines = append(lines, sessionBlocks(ai, width, selected, own, false)...)
+	lines = append(lines, sessionBlocks(ai, events, width, budget, selected, own, false)...)
 
 	if len(other) > 0 {
 		lines = append(lines, blank,
 			notifyLine{text: sectionRule("세션", width)}, blank)
-		lines = append(lines, sessionBlocks(other, width, selected, own, true)...)
+		lines = append(lines, sessionBlocks(other, events, width, budget, selected, own, true)...)
 	}
 	return lines
 }
 
-// notifyEventLines builds the transition log half.
-func notifyEventLines(events []aiEvent, width int) []notifyLine {
-	lines := []notifyLine{{text: sectionRule("최근 이벤트", width)}}
-	if len(events) == 0 {
-		return append(lines, notifyLine{text: helpStyle.Render(padOrTruncate(" 아직 없음", width))})
+// sessionEventLines renders one session's own history, indented under its row.
+//
+// The name is left out on purpose: inside that session's block it is the one
+// thing every row would repeat. What is left — a time and what happened — is
+// what the session row cannot say, since it only ever shows the state now.
+//
+// An empty history still draws a line. A cursor sitting on a session that
+// renders nothing under it looks like a panel that failed rather than a session
+// nothing has happened in.
+func sessionEventLines(events []aiEvent, session string, width, budget int) []notifyLine {
+	if budget <= 0 {
+		return nil
 	}
+
+	var lines []notifyLine
 	for _, e := range events {
-		lines = append(lines, notifyLine{text: notifyEventLine(e, width)})
+		if e.session != session {
+			continue
+		}
+		lines = append(lines, notifyLine{
+			text:    sessionEventLine(e, width),
+			session: session,
+		})
+		if len(lines) == budget {
+			return lines
+		}
+	}
+	if len(lines) == 0 {
+		return []notifyLine{{
+			text:    helpStyle.Render(padOrTruncate("    아직 없음", width)),
+			session: session,
+		}}
 	}
 	return lines
+}
+
+// sessionEventLine renders "    14:23:01 ✅ 작업 완료" for one logged event.
+//
+// Indented past the badge column so the block reads as belonging to the row
+// above it, and given an explicit text width rather than letting renderRow
+// truncate: that cuts without a marker, so a clipped reason would read as the
+// whole reason.
+func sessionEventLine(e aiEvent, width int) string {
+	head := "    " + e.at.Format("15:04:05") + " "
+	avail := width - ansi.StringWidth(head)
+	if avail < 2 {
+		return renderRow(nil, width, false)
+	}
+	return renderRow([]rowSeg{
+		{text: head, color: colorMuted},
+		{text: fitCells(e.text, avail), color: aiStateColor(e.state)},
+	}, width, false)
 }
 
 // sortByDisplayedAge orders sessions by the same value their rows print, most
@@ -480,7 +550,7 @@ func sortByDisplayedAge(ss []tmux.Session) {
 // under a blocked one, and a spacer between blocks.
 //
 // dim marks the second group, whose rows are context rather than the point.
-func sessionBlocks(ss []tmux.Session, width int, selected, own string, dim bool) []notifyLine {
+func sessionBlocks(ss []tmux.Session, events []aiEvent, width, budget int, selected, own string, dim bool) []notifyLine {
 	var lines []notifyLine
 	for i, s := range ss {
 		sel := s.Name == selected
@@ -499,12 +569,32 @@ func sessionBlocks(ss []tmux.Session, width int, selected, own string, dim bool)
 				session: s.Name,
 			})
 		}
+		expanded := false
+		if sel {
+			// The history opens inside the block, so every row of it clicks to
+			// the same session and sessionOrder — which folds consecutive rows
+			// with the same owner — gains no extra stop for the cursor.
+			//
+			// It is drawn unhighlighted, unlike the reason row above it. One
+			// extra inverted line reads as part of the row; a dozen reads as the
+			// whole block having moved, and what the highlight is for is saying
+			// precisely where the cursor is.
+			history := sessionEventLines(events, s.Name, width, budget)
+			lines = append(lines, history...)
+			expanded = len(history) > 0
+		}
 		// Between sessions only. The blank belongs to the session above it, which
 		// is what makes a click target two rows tall; skipping it after the last
 		// one keeps the list from trailing off into the next heading, at the cost
 		// of the bottom session being a one-row target.
 		if i < len(ss)-1 {
-			lines = append(lines, notifyLine{text: renderRow(nil, width, sel), session: s.Name})
+			// The spacer follows the highlight, except under an open history:
+			// an inverted bar below unhighlighted rows reads as a stray row
+			// rather than as the bottom of this block.
+			lines = append(lines, notifyLine{
+				text:    renderRow(nil, width, sel && !expanded),
+				session: s.Name,
+			})
 		}
 	}
 	return lines
@@ -648,36 +738,4 @@ func notifySessionLine(s tmux.Session, width int, f rowFlags) string {
 		{text: branch, color: faded},
 	}
 	return renderRow(segs, width, selected)
-}
-
-// notifyEventLine renders "14:23:01 name ✅ 작업 완료" for one logged event.
-//
-// The name is not padded to a column: what happened should read as a sentence
-// continuing from the session it happened to, and a fixed column strands the
-// text far to the right of every short name.
-func notifyEventLine(e aiEvent, width int) string {
-	stamp := e.at.Format("15:04:05")
-	head := " " + stamp + " "
-	avail := width - ansi.StringWidth(head)
-	if avail < 2 {
-		return renderRow(nil, width, false)
-	}
-
-	// A very long name still has to leave the text room to say something, so it
-	// gives up half the line — but only then.
-	name := e.session
-	if cap := avail / 2; ansi.StringWidth(name) > cap {
-		name = fitCells(name, cap)
-	}
-
-	// Explicit width rather than letting renderRow truncate: it cuts without a
-	// marker, so a clipped reason would read as the whole reason.
-	textWidth := avail - ansi.StringWidth(name) - 1
-
-	segs := []rowSeg{
-		{text: head},
-		{text: name},
-		{text: " " + fitCells(e.text, textWidth), color: aiStateColor(e.state)},
-	}
-	return renderRow(segs, width, false)
 }

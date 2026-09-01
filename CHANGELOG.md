@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- The panel's transition log now opens under the session the cursor is on
+  instead of running as one flat chronological block below the list. On a real
+  server that block was forty rows of whichever session was busiest repeating
+  itself, so reading one session's history meant reading past every other.
+  `M-Up`/`M-Down` already move the cursor, so there is nothing new to press, and
+  click and `enter` still switch sessions. The history takes only the rows the
+  session list left over and is capped besides — the pane clips from the bottom
+  without saying so, and the sessions are what must survive.
+
 ### Fixed
 - The list sorted by a clock it does not show. "Recent" ordered sessions by
   tmux's `session_activity` while the elapsed column beside it printed the AI

@@ -215,20 +215,21 @@ The list shows what each session is doing *now*, but not what it just finished. 
 │ ❯ _                         │    permission  │
 │                             │                │
 │                             │ ⏳ mux 3m ◀    │
+│                             │    13:02 ⏳    │
+│                             │    12:58 ✅    │
+│                             │    12:41 ⏳    │
 │                             │                │
 │                             │ ✅ web 2h      │
 │                             │                │
 │                             │ ── 세션        │
 │                             │                │
 │                             │    notes 3h    │
-│                             │                │
-│                             │ ── 최근 이벤트 │
-│                             │ 13:00 api ❗   │
-│                             │ 12:59 web ✅   │
 └─────────────────────────────┴────────────────┘
 ```
 
-Sessions running an AI CLI come first; the rest sit under `── 세션` so every session is reachable without opening the TUI. Recent transitions are listed under those.
+Sessions running an AI CLI come first; the rest sit under `── 세션` so every session is reachable without opening the TUI.
+
+**The session under the cursor opens its own history.** It used to be one flat chronological log below the list, and on a real server that was forty rows of whichever session was busiest repeating itself — finding what happened in *this* session meant reading past all of it. Now each session's transitions sit under its own row, and only for the one the cursor is on. Nothing new to press: `M-Up`/`M-Down` already move the cursor, and click and `enter` are still "switch to this session". The history takes only the rows the session list left over, capped, because the pane clips from the bottom without saying so and the sessions are what must survive.
 
 Every transition into working, approval and ready is logged, so a turn shows both ends and the time between them is readable off the list. Entering a shell is not: that is a detail of how a turn is being served rather than a turn changing hands, and it flaps.
 

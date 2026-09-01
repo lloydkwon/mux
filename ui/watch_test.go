@@ -178,11 +178,9 @@ func TestSessionAtRow(t *testing.T) {
 		{5, "api"}, // the indented waitingFor line
 		{6, "api"}, // spacer
 		{7, "mux"}, // last session: no spacer follows, so a one-row target
-		// The section break belongs to no session — if it did, the last session
-		// would silently get the two-row target the layout just took away.
+		// Nothing follows the sessions any more. The flat log that used to sit
+		// here now opens inside the selected session's block instead.
 		{8, ""},
-		{9, ""},  // ── 최근 이벤트
-		{10, ""}, // the event row
 		{99, ""}, // past the end
 		{-1, ""},
 	}
@@ -870,5 +868,65 @@ func TestAdoptSavedWidthClampsWithoutWritingBack(t *testing.T) {
 	}
 	if w := tmux.SavedPanelWidth(); w != 60 {
 		t.Errorf("saved width is now %d — the clamp leaked into the global value", w)
+	}
+}
+
+// The history opens inside its session's block, so every row of it clicks to
+// that session — the same target as the row above it. Anything else would be a
+// row that looks attached and goes somewhere else.
+func TestSessionAtRowInsideAnOpenHistory(t *testing.T) {
+	now := time.Now()
+	blocked := sess("api", tmux.AIStateApproval)
+	blocked.AISince = now.Add(-time.Hour)
+	blocked.AIWaitingFor = "Bash: git push"
+	old := sess("mux", tmux.AIStateWorking)
+	old.AISince = now.Add(-24 * time.Hour)
+
+	m := watchTestModel(40, 30)
+	m.sessions = []tmux.Session{old, blocked}
+	m.selected = "api"
+	m.events = []aiEvent{
+		{at: now, session: "api", text: "❗ 승인 대기", state: tmux.AIStateApproval},
+		{at: now.Add(-time.Minute), session: "api", text: "⏳ 작업 중", state: tmux.AIStateWorking},
+		{at: now.Add(-2 * time.Minute), session: "mux", text: "✅ 작업 완료", state: tmux.AIStateReady},
+	}
+
+	for _, tc := range []struct {
+		row  int
+		want string
+	}{
+		{2, "api"}, // the session row
+		{3, "api"}, // its blocked-on reason
+		{4, "api"}, // history, newest first
+		{5, "api"},
+		{6, "api"}, // spacer, still the same block
+		{7, "mux"}, // the next session, pushed down by the history
+	} {
+		if got := m.sessionAtRow(tc.row); got != tc.want {
+			t.Errorf("sessionAtRow(%d) = %q, want %q", tc.row, got, tc.want)
+		}
+	}
+
+	// mux's own event must not appear under api.
+	if got := ansi.Strip(strings.Join(notifyTexts(m.sessionLines()), "\n")); strings.Contains(got, "✅ 작업 완료") {
+		t.Errorf("another session's event was drawn under api:\n%s", got)
+	}
+}
+
+// The cursor steps between sessions. Folding the history into its session's
+// block is what keeps a dozen history rows from becoming a dozen extra stops.
+func TestOpenHistoryAddsNoCursorStops(t *testing.T) {
+	now := time.Now()
+	m := watchTestModel(40, 30)
+	m.sessions = []tmux.Session{sess("api", tmux.AIStateApproval), sess("mux", tmux.AIStateWorking)}
+	m.events = []aiEvent{
+		{at: now, session: "api", text: "❗ 승인 대기", state: tmux.AIStateApproval},
+		{at: now.Add(-time.Minute), session: "api", text: "⏳ 작업 중", state: tmux.AIStateWorking},
+	}
+
+	closed := len(m.sessionOrder())
+	m.selected = "api"
+	if open := len(m.sessionOrder()); open != closed {
+		t.Errorf("cursor stops = %d with a history open, %d without — want them equal", open, closed)
 	}
 }

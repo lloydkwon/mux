@@ -16,6 +16,9 @@ import (
 func TestWatchDrawsSharedLogItNeverObserved(t *testing.T) {
 	m := watchTestModel(48, 30)
 	m.sessions = []tmux.Session{sess("api", tmux.AIStateReady)}
+	// 이력은 커서가 놓인 세션 아래에만 펼쳐진다. 실제 패널에서는 autoSelect 가
+	// 첫 틱에 커서를 놓으므로, 여기서도 그 상태를 만들어 준다.
+	m.selected = "api"
 
 	if got := len(m.events); got != 0 {
 		t.Fatalf("a fresh model already has %d events", got)
@@ -40,6 +43,7 @@ func TestWatchDrawsSharedLogItNeverObserved(t *testing.T) {
 func TestWatchSwitchFailureStaysLocal(t *testing.T) {
 	m := watchTestModel(48, 30)
 	m.sessions = []tmux.Session{sess("api", tmux.AIStateReady)}
+	m.selected = "api"
 
 	updated, _ := m.Update(switchFailedMsg{session: "api", err: errors.New("boom")})
 	w := updated.(watchModel)
