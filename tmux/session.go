@@ -202,6 +202,7 @@ func parseLine(line string, statuses map[string]ClaudeStatus, screens map[string
 		s.AIState = st.State
 		s.AITool = "claude"
 		s.AIWaitingFor = st.WaitingFor
+		s.AITask = st.Name
 		s.AISince = st.Since
 		s.AIPID = st.PID
 

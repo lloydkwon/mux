@@ -885,3 +885,41 @@ func TestPerSessionLinesAreAllOrNothing(t *testing.T) {
 		}
 	}
 }
+
+// "작업 중" and "작업 완료" were the same two sentences on every row of the log.
+// The glyph already carries the state, so the words carry what it cannot.
+func TestTransitionTextNamesTheWork(t *testing.T) {
+	s := sess("mux", tmux.AIStateWorking)
+	s.AITask = "panel-session-last-notification"
+
+	if got := transitionText(s); got != "⏳ panel-session-last-notification" {
+		t.Errorf("transitionText = %q, want the task name", got)
+	}
+
+	// A tool that publishes no task still has a state worth reporting, and a
+	// bare glyph is not a sentence.
+	s.AITask = ""
+	if got := transitionText(s); got != "⏳ 작업 중" {
+		t.Errorf("transitionText without a task = %q, want the label", got)
+	}
+}
+
+// The detector is what puts the text into the log, so the name has to survive
+// the trip — the log stores what was rendered, not the state to re-render from.
+func TestDetectTransitionsCarriesTheTaskName(t *testing.T) {
+	now := time.Now()
+	before := map[string]aiSnapshot{"mux": {state: tmux.AIStateReady, since: now.Add(-time.Hour)}}
+
+	working := sess("mux", tmux.AIStateWorking)
+	working.AISince = now
+	working.AITask = "fix-comma-code-parsing-bug"
+
+	events, _ := detectTransitions(before, []tmux.Session{working}, now)
+
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1: %v", len(events), events)
+	}
+	if !strings.Contains(events[0].text, "fix-comma-code-parsing-bug") {
+		t.Errorf("logged %q, want the task name in it", events[0].text)
+	}
+}

@@ -34,9 +34,14 @@ type Session struct {
 	// when no provider answered, in which case the tool is inferred from
 	// ActiveCommand instead.
 	AITool       string
-	AIWaitingFor string    // why the tool is blocked; only for AIStateApproval
-	AISince      time.Time // when the current state began; zero if unknown
-	AIPID        int       // pid of the process publishing the state; 0 if none
+	AIWaitingFor string // why the tool is blocked; only for AIStateApproval
+	// AITask is the tool's own name for the work in hand, when it publishes one
+	// (today only Claude, via the "name" field of its state file). Empty
+	// otherwise — a session with no task name is not an error, it is a session
+	// whose tool does not say.
+	AITask  string
+	AISince time.Time // when the current state began; zero if unknown
+	AIPID   int       // pid of the process publishing the state; 0 if none
 
 	// WindowIndex and PaneIndex locate a pane inside the session. They are
 	// strings because nothing does arithmetic on them and tmux may render either

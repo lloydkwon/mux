@@ -20,11 +20,15 @@ const claudeStatusTTL = 1 * time.Second
 // is the only producer of a non-zero AIState.
 type ClaudeStatus struct {
 	State      AIState
-	RawStatus  string    // verbatim "status", for diagnostics
-	WaitingFor string    // verbatim "waitingFor"; set only for AIStateApproval
-	Since      time.Time // when the current state began; zero when unknown
-	SessionID  string
-	PID        int
+	RawStatus  string // verbatim "status", for diagnostics
+	WaitingFor string // verbatim "waitingFor"; set only for AIStateApproval
+	// Name is Claude's own name for the work in hand. It is what turns
+	// "작업 중" into a sentence about something, and it is the one field here
+	// that says *what* rather than *how far along*.
+	Name      string
+	Since     time.Time // when the current state began; zero when unknown
+	SessionID string
+	PID       int
 }
 
 // Elapsed reports how long the session has been in its current state. It
@@ -151,6 +155,7 @@ func parseClaudeStatus(data []byte) (status ClaudeStatus, tmuxRef string, ok boo
 		RawStatus: sf.Status,
 		SessionID: sf.SessionID,
 		PID:       sf.PID,
+		Name:      strings.TrimSpace(sf.Name),
 	}
 	if state == AIStateApproval {
 		status.WaitingFor = sf.WaitingFor

@@ -200,6 +200,12 @@ The per-session line is drawn **unhighlighted** while the session row and its re
 
 **No new gesture, deliberately.** `M-Up`/`M-Down` already move the cursor, and click and `enter` already mean "switch to this session" — a new `mux nav` verb would need `navKeys`, `navBinds`, `handleKey` and `cmd/mux` changed, and would stay dead for anyone who does not re-run `mux setup-panel`.
 
+**A logged transition names the work, not the state** (`transitionText`, `ui/notify.go`). The glyph already carries the state, so the words are free for what it cannot say: Claude's own name for the turn in hand, read from the `name` field of its state file (`claudeSessionFile.Name` → `ClaudeStatus.Name` → `Session.AITask`). `작업 중` and `작업 완료` were the same two sentences on every row of the log — true, and nothing anyone could act on. Every live session file observed carried a name.
+
+The label is the fallback, not the format: a tool that publishes no task still has a state worth reporting, and a bare glyph is not a sentence. Approval keeps `승인 대기 · <이유>` — what it is blocked *on* outranks what the turn is called.
+
+The task name is **not** on the session row, and that was measured rather than assumed: at the panel's 47 columns only one of five real sessions could seat both it and the branch, so putting it there costs the branch on most rows. The line under each session has the whole width to itself and sits inside the same block, which is where it goes.
+
 **The state *now* comes from `m.sessions`; the log says what happened.** The row's badge and age are the complete answer for the former and the log is not — but the line under it adds three things the row cannot: a wall clock, the transition before the current one when the log has moved past it, and the reason a session was blocked on after it stops being blocked (the reason row draws only while `AIStateApproval` holds).
 
 **`trimLog` (`tmux/eventlog.go`) is what makes a line per session possible.** A plain head-slice is recency-only, and recency starves the quiet: measured, fifty entries covering sixty-four minutes, twenty of them one session's, and two of seven running sessions with nothing in the log at all. So the cut keeps the top 50 *and then* the newest entry of every session those 50 missed. The value stays a `[]PanelEvent` and stays sorted — the tail it draws from is newest-first too, so everything appended is older than the last one kept — which is why `sortEvents`, `duplicateAt` and the lock-free merge are untouched.

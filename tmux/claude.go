@@ -46,6 +46,10 @@ type claudeSessionFile struct {
 	Status string `json:"status"`
 	// WaitingFor explains the block; present only when Status == "waiting".
 	WaitingFor string `json:"waitingFor"`
+	// Name is what Claude calls the work in hand, e.g.
+	// "panel-session-last-notification". Present on every live session file
+	// observed, but optional like everything else here.
+	Name string `json:"name"`
 	// StatusUpdatedAt is when the current status began, in epoch milliseconds.
 	StatusUpdatedAt int64 `json:"statusUpdatedAt"`
 }

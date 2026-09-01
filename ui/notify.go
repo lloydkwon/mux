@@ -86,12 +86,10 @@ func detectTransitions(prev map[string]aiSnapshot, sessions []tmux.Session, now 
 				state: s.AIState, since: s.AISince})
 		case s.AIState == tmux.AIStateReady && before.state != s.AIState && before.state != tmux.AIStateNone:
 			events = append(events, aiEvent{at: now, session: s.Name,
-				text:  s.AIState.Icon() + " " + aiStateLabel(s.AIState),
-				state: s.AIState, since: s.AISince})
+				text: transitionText(s), state: s.AIState, since: s.AISince})
 		case s.AIState == tmux.AIStateWorking && before.state != s.AIState:
 			events = append(events, aiEvent{at: now, session: s.Name,
-				text:  s.AIState.Icon() + " " + aiStateLabel(s.AIState),
-				state: s.AIState, since: s.AISince})
+				text: transitionText(s), state: s.AIState, since: s.AISince})
 		}
 	}
 
@@ -107,6 +105,24 @@ func detectTransitions(prev map[string]aiSnapshot, sessions []tmux.Session, now 
 	}
 
 	return events, next
+}
+
+// transitionText is what one logged transition says.
+//
+// The glyph already carries the state, so the words are free to carry what the
+// state cannot: the tool's own name for the work in hand. "작업 중" and
+// "작업 완료" were the same two sentences on every row of the log — true, and
+// saying nothing you could act on. `⏳ panel-session-last-notification` says
+// which turn just started.
+//
+// The label stays where there is no task name: a tool that publishes none
+// (anything but Claude today) still has a state worth reporting, and a bare
+// glyph is not a sentence.
+func transitionText(s tmux.Session) string {
+	if s.AITask != "" {
+		return s.AIState.Icon() + " " + s.AITask
+	}
+	return s.AIState.Icon() + " " + aiStateLabel(s.AIState)
 }
 
 // aiSnapshot is what the detector remembers about a session between ticks.

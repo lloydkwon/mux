@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- A logged transition now names the work instead of restating the state. The
+  glyph already says working or done; the words carry Claude's own name for the
+  turn — `⏳ panel-session-last-notification` rather than a second `⏳ 작업 중`.
+  It comes from the `name` field of Claude's state file, which every live
+  session observed carried. Tools that publish no task keep the label.
 - The panel now shows every session's last event on a line under its row, with
   the chronological log of everything below the list. The blank line between
   sessions went with it — that blank existed to make a click land on a block
