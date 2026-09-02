@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   half-copied file for as long as that takes. Measured end to end: 4.5 seconds
   from `install` to the new binary running, and a failed exec leaves the panel
   up on the code it already had rather than closing the pane.
+- Recent events survive a tmux server dying. The shared log still lives in the
+  server option that panels read every tick, but it is now mirrored to
+  `~/.config/mux/events.json`, and any running session with no history in a new
+  server is filled back in from there. Filling in happens per session rather
+  than once at startup, because sessions come back over minutes, not at once.
 
 ### Changed
 - The TUI's remote-attach socket moved from `/tmp` to `~/.config/mux/tui.sock`.

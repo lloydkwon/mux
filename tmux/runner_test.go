@@ -75,10 +75,15 @@ func withMock(t *testing.T, fn func(m *mockRunner)) {
 	oldPanelState := panelStateFile
 	stateDir := t.TempDir()
 	panelStateFile = func() (string, error) { return filepath.Join(stateDir, "panel.json"), nil }
+	// 이벤트 보관본도 같은 디렉터리로. MergeEvents 를 도는 테스트가 개발자의 실제
+	// 이벤트 이력에 쓰면 안 되고, 반대로 그 이력을 읽어 와 단언이 흔들려도 안 된다.
+	oldArchive := eventArchiveFile
+	eventArchiveFile = func() (string, error) { return filepath.Join(stateDir, "events.json"), nil }
 	defer func() {
 		runner = old
 		homeDir = oldHome
 		panelStateFile = oldPanelState
+		eventArchiveFile = oldArchive
 		claudeStatusCacheMu.Lock()
 		claudeStatusCache = cachedClaudeStatuses{}
 		claudeStatusCacheMu.Unlock()

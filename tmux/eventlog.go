@@ -24,9 +24,12 @@ const (
 	// that every panel on the server sees the same list, whichever session or
 	// window it happens to be in.
 	//
-	// Living on the server rather than on disk is the right lifetime too. A
-	// "recent events" list describes what has happened while these sessions have
-	// been up; it should die with them, and nothing has to clean it up.
+	// The option is still the right lifetime for the *drawn* view: it describes
+	// what has happened while these sessions have been up, and it should die with
+	// them. What was wrong was equating the server's life with the user's — a
+	// socket can be unlinked out from under a living server, and then the server
+	// is dead to everyone but itself. eventarchive.go is the durable copy that
+	// case needs; this stays the thing panels read every tick.
 	eventLogOption = "@mux_events"
 
 	// eventDedupWindowMillis is how far apart two sightings of the same
@@ -100,6 +103,26 @@ func MergeEvents(fresh []PanelEvent, live []string) []PanelEvent {
 	raw, events := loadEvents()
 
 	added := false
+
+	// 살아 있는데 옵션에 항목이 하나도 없는 세션은 보관본에서 채운다. 새 서버에서는
+	// 모든 세션이 여기 걸리므로 "옵션이 비었을 때"라는 별도 규칙이 필요 없다.
+	//
+	// **이건 반드시 trimLog 앞이다.** 뒤로 옮기면 채워 넣은 만큼 옵션 값이 커진 채로
+	// set-option 에 실려 16KB MAX_IMSGSIZE 벽을 넘고, 그 실패는 아래에서 버려지므로
+	// 로그가 *조용히* 갱신을 멈춘다. 이 변경이 tmux 를 망가뜨릴 수 있는 유일한 길이다.
+	var archive []PanelEvent
+	archiveLoaded := false
+	if missing := missingSessions(events, live); len(missing) > 0 {
+		archive, archiveLoaded = loadArchive(), true
+		for _, e := range archive {
+			if !missing[e.Session] || duplicateAt(events, e) >= 0 {
+				continue
+			}
+			events = append(events, e)
+			added = true
+		}
+	}
+
 	for _, e := range fresh {
 		if duplicateAt(events, e) >= 0 {
 			continue
@@ -108,24 +131,54 @@ func MergeEvents(fresh []PanelEvent, live []string) []PanelEvent {
 		added = true
 	}
 	sortEvents(events)
+
+	// trimLog 앞의 목록을 붙잡아 둔다. 보관본은 *이걸* 합쳐야 한다 — 잘린 뒤의
+	// 목록을 합치면 같은 병합에서 죽은 세션의 이력은 파일에 한 번도 못 들어가고,
+	// 그러면 보관본은 이미 가지고 있던 것만 지키는 셈이 되어 존재 이유가 없어진다.
+	// trimLog 은 새 배열에 담아 돌려주므로 이 슬라이스는 그대로 살아 있다.
+	preTrim := events
 	if kept := trimLog(events, live); len(kept) != len(events) {
 		events, added = kept, true
 	}
-	if !added {
-		return events
+
+	optionWritten := false
+	if added {
+		if encoded, err := json.Marshal(events); err == nil && string(encoded) != raw {
+			// Nothing to say: skip the write so N idle panels are not all
+			// rewriting the same value at each other every two seconds.
+			_ = runner.Run("tmux", "set-option", "-g", eventLogOption, string(encoded))
+			optionWritten = true
+		}
 	}
 
-	encoded, err := json.Marshal(events)
-	if err != nil {
-		return events
-	}
-	// Nothing to say: skip the write so N idle panels are not all rewriting the
-	// same value at each other every two seconds.
-	if string(encoded) == raw {
-		return events
-	}
-	_ = runner.Run("tmux", "set-option", "-g", eventLogOption, string(encoded))
+	mergeArchive(preTrim, fresh, archive, archiveLoaded, optionWritten)
 	return events
+}
+
+// mergeArchive 는 보관본을 갱신한다. 옵션 쪽 판단과 분리된 두 번째 비교가 필요한
+// 이유는, 옵션의 조기 반환들이 "*옵션이* 바뀌었나"로 판단하기 때문이다. 파일 쓰기를
+// 거기 얹으면 정상 틱에서도, 새 패널의 첫 병합에서도 한 번도 안 써서 — 정작 서버가
+// 죽는 순간 파일은 늘 낡아 있다.
+//
+// 한가한 틱에는 파일을 열지도 않는다. 채울 세션도 없고 옵션도 안 바뀌었으면
+// syscall 이 0이다: 패널 일곱 × 2초 × 영원히 = 디스크 I/O 없음.
+//
+// 잠금은 두지 않는다 — 옵션이 그렇듯. 두 패널이 서로 다른 시야로 동시에 union 해도
+// 각자 상대의 항목을 *더한* 결과를 쓰므로, 진 쪽의 항목은 다음 틱에 옵션(=수렴한
+// 공유본)에서 다시 합쳐져 복원된다. union 의 두 번째 항이 이 패널의 관측이 아니라
+// 병합된 옵션값인 것이 그 회복의 근거다.
+func mergeArchive(preTrim, fresh, archive []PanelEvent, archiveLoaded, optionWritten bool) {
+	if !archiveLoaded && !optionWritten {
+		return
+	}
+	if !archiveLoaded {
+		archive = loadArchive()
+	}
+	next := trimArchive(unionEvents(archive, preTrim, fresh), nowMillis())
+	if sameEvents(next, archive) {
+		return
+	}
+	saveArchive(next)
 }
 
 // trimLog cuts the log to size, keeping one entry for every session that the
