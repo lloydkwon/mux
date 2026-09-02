@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from `install` to the new binary running, and a failed exec leaves the panel
   up on the code it already had rather than closing the pane.
 
+### Changed
+- The TUI's remote-attach socket moved from `/tmp` to `~/.config/mux/tui.sock`.
+  Its old home was justified as a path that did not depend on environment
+  variables, which was not true — `os.TempDir()` reads `$TMPDIR`. When `/tmp`
+  was cleared the TUI stayed running while its socket disappeared, and
+  `mux switch` failed with nothing to say.
+
 ## [0.3.7] - 2026-09-01
 
 ### Changed
