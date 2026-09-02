@@ -180,6 +180,36 @@ echo
 echo "클라이언트 조회 (VS Code 판별)"
 ok "붙은 클라이언트가 없으면 빈 출력" "" "$(t list-clients -t a -F '#{client_pid}')"
 
+# ── 10. 서버 특정과 소켓 되살리기 ────────────────────────────────────────────
+# tmux/revive.go 전체가 여기 달려 있다. 2026-09-01 /tmp 이 비워지며 소켓이
+# unlink 됐고, 서버는 살아 있는데 아무도 닿을 수 없어 세션 7개가 통째로 사라진
+# 것처럼 보였다. man 이 문서화한 SIGUSR1 복구가 그 답인데, 이 세 가지가 전부
+# 실제로 그렇게 동작해야 성립한다.
+echo
+echo "서버 특정과 소켓 되살리기"
+SOCK="${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$SOCKET"
+SPID=$(t display-message -p '#{pid}')
+ok "#{pid} 가 살아 있는 프로세스" "yes" \
+	"$(kill -0 "$SPID" 2>/dev/null && echo yes || echo no)"
+ok "#{pid} 가 tmux 서버다 (comm 으로 확인)" "tmux: server" \
+	"$(cat /proc/"$SPID"/comm 2>/dev/null)"
+ok "#{socket_path} 가 실제 소켓 경로" "$SOCK" "$(t display-message -p '#{socket_path}')"
+
+# 소켓을 지우면 서버는 살아 있어도 아무도 닿지 못한다 — 사고의 핵심.
+rm -f "$SOCK"
+t list-sessions >/dev/null 2>&1
+ok "소켓이 없으면 호출이 실패한다" "no" \
+	"$(t has-session -t a 2>/dev/null && echo yes || echo no)"
+ok "그래도 서버는 살아 있다" "yes" \
+	"$(kill -0 "$SPID" 2>/dev/null && echo yes || echo no)"
+
+# man: "the SIGUSR1 signal may be sent to the tmux server process to recreate it".
+kill -USR1 "$SPID" 2>/dev/null
+for _ in $(seq 1 20); do [ -S "$SOCK" ] && break; sleep 0.1; done
+ok "SIGUSR1 이 소켓을 다시 만든다" "yes" "$([ -S "$SOCK" ] && echo yes || echo no)"
+ok "그리고 세션이 그대로 돌아온다" "yes" \
+	"$(t has-session -t a 2>/dev/null && echo yes || echo no)"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
 	echo "$CHECKED 개 전부 통과 — $VERSION 에서 mux 의 가정이 유지됩니다."

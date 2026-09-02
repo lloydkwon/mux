@@ -188,6 +188,7 @@ func main() {
 		Use:   "watch",
 		Short: "Live AI session panel for a dedicated tmux pane",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			reviveAndRemember()
 			return ui.RunWatch()
 		},
 	}
@@ -265,7 +266,19 @@ func main() {
 //
 // A bootstrap that cannot happen is not a reason to refuse to run: every failure
 // falls through to drawing here, which is exactly what mux did before.
+// reviveAndRemember 는 tmux 서버가 소켓만 잃었다면 되살리고, 닿아 있는 서버를
+// 다음을 위해 적어 둔다.
+//
+// 둘 다 조용히 실패한다. 소켓이 멀쩡한 평소에는 파일 stat 한 번으로 끝나고,
+// 되살릴 것이 없을 때 아무 말도 하지 않아야 한다 — 사용자가 방금 친 명령의 답으로
+// "복구할 게 없었다"를 출력하는 것은 소음이다.
+func reviveAndRemember() {
+	tmux.ReviveServer()
+	tmux.RememberServer()
+}
+
 func runRoot() error {
+	reviveAndRemember()
 	if shouldBootstrap() {
 		// Returns only on failure — attach-session replaces this process.
 		_ = tmux.AttachAndPopup()
@@ -351,6 +364,9 @@ const defaultBorderWidth = 80
 // Pressing prefix + a still reports. That is an answer to a key the user just
 // pressed, and it has somewhere to go.
 func runPanelAuto(target string, auto bool) error {
+	// 훅 경로라 왕복을 늘리지 않는다 — 되살리기만 하고 기록은 하지 않는다.
+	// 기록은 TUI 와 패널 시작이 맡고, 패널은 창 이벤트마다 새로 뜬다.
+	tmux.ReviveServer()
 	err := tmux.TogglePanel(target, auto)
 	if auto {
 		return nil

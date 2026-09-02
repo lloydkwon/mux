@@ -75,6 +75,12 @@ func withMock(t *testing.T, fn func(m *mockRunner)) {
 	oldPanelState := panelStateFile
 	stateDir := t.TempDir()
 	panelStateFile = func() (string, error) { return filepath.Join(stateDir, "panel.json"), nil }
+	// 같은 이유로 서버 메모도 옮긴다. RememberServer 는 진입점마다 불리므로, 이게
+	// 없으면 그 경로를 도는 테스트가 개발자의 실제 ~/.config/mux/server.json 을
+	// 덮어쓴다 — 그러면 다음 사고 때 되살릴 서버를 잘못 가리킨다.
+	// panel.json 과 한 디렉터리를 쓰는 것은 프로덕션이 그러기 때문이다.
+	oldServerState := serverStateFile
+	serverStateFile = func() (string, error) { return filepath.Join(stateDir, "server.json"), nil }
 	// 이벤트 보관본도 같은 디렉터리로. MergeEvents 를 도는 테스트가 개발자의 실제
 	// 이벤트 이력에 쓰면 안 되고, 반대로 그 이력을 읽어 와 단언이 흔들려도 안 된다.
 	oldArchive := eventArchiveFile
@@ -83,6 +89,7 @@ func withMock(t *testing.T, fn func(m *mockRunner)) {
 		runner = old
 		homeDir = oldHome
 		panelStateFile = oldPanelState
+		serverStateFile = oldServerState
 		eventArchiveFile = oldArchive
 		claudeStatusCacheMu.Lock()
 		claudeStatusCache = cachedClaudeStatuses{}

@@ -19,6 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   half-copied file for as long as that takes. Measured end to end: 4.5 seconds
   from `install` to the new binary running, and a failed exec leaves the panel
   up on the code it already had rather than closing the pane.
+- A tmux server that lost only its socket is revived instead of abandoned.
+  `/tmp` was emptied on 2026-09-01; the socket file went with it, and a server
+  holding seven sessions and thirty live Claude processes kept running while
+  nothing could reach it — every later `tmux` call found no socket and started a
+  fresh, empty server, so mux showed an empty list and an empty event log and it
+  looked as though everything had been lost. tmux documents the recovery
+  (SIGUSR1 recreates a removed socket) and mux now does it: it records the
+  server's pid, start time and socket path while it can still ask, and signals
+  only that process, only when the socket is actually gone. It never acts while
+  a socket exists — reviving an old server there would seize the path back and
+  orphan the one you are using — and never on a pid whose start time no longer
+  matches.
 - Recent events survive a tmux server dying. The shared log still lives in the
   server option that panels read every tick, but it is now mirrored to
   `~/.config/mux/events.json`, and any running session with no history in a new
