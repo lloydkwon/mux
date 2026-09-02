@@ -154,6 +154,71 @@ Attaching has to come first, and that is not a preference. Measured: with a serv
 
 It stands down with no sessions: there is nothing to attach to, and creating one to attach to means naming it for the user, while the list mux draws instead already offers `New tmux session`, which asks. Every other failure — old tmux, no server, no executable — falls through to drawing in place, which is what mux did before.
 
+### 패널의 두 버튼: 왼쪽은 전환, 오른쪽은 에디터
+
+패널에서 **왼쪽 클릭은 세션 전환**이고 **오른쪽 클릭은 그 세션의 프로젝트 폴더를
+VS Code 로 여는 것**이다. 오른쪽 클릭은 **전환하지 않는다** — 지금 일하던 터미널을
+떠나지 않고 다른 프로젝트의 에디터만 여는 것이 이 제스처가 있는 이유이고, 옮기고
+싶으면 왼쪽 버튼이 바로 옆에 있다.
+
+**옵션이 없는 것이 결정이다.** 처음에는 `@mux_panel_editor` 뒤에 두고 모든 클릭이
+에디터를 열게 했는데, 옵션이 막으려던 것은 "훑어보려고 누른 클릭에 창이 뜨는 것"
+하나였다. 버튼으로 가르면 그 위험 자체가 없어진다 — 오른쪽 버튼은 실수로 눌리지
+않는다. 그래서 제스처가 opt-in 이고, 옵션은 지웠다. 되돌리고 싶어지면 그게 무엇을
+막아 주는지부터 물을 것.
+
+**tmux 설정에 더할 것이 없다는 것은 실측이다.** tmux 기본 `MouseDown3Pane` 은
+`if-shell "#{||:#{mouse_any_flag},…}" { select-pane -t = ; send-keys -M }
+{ display-menu … }` 이고, 패널 pane 의 `mouse_any_flag` 는 1이다(Bubble Tea 가 마우스
+리포팅을 켜므로). 그래서 참 분기를 타 오른쪽 클릭이 그대로 앱에 전달된다. 거짓
+분기였다면 tmux 자신의 pane 메뉴가 떴을 것이고, 이 기능은 사용자 tmux.conf 를 고쳐야만
+동작했을 것이다.
+
+그 바인딩이 `send-keys -M` **앞에 `select-pane -t =` 를 돌린다**는 것이 두 번째로
+중요하다: 오른쪽 클릭 뒤 패널은 active pane 이 되어 있다. 그래서
+`openSessionEditor` 도 `restoreFocus()` 를 부른다. 전환과 달리 **뒤이어 사용자를
+패널에서 꺼내 줄 것이 아무것도 없으므로**, 여기서 빠뜨리면 포커스가 패널에 남는다.
+
+**키보드는 뜻이 하나다.** `enter` 와 `mux nav enter`(= `prefix + Enter`)는 왼쪽 클릭과
+같이 전환만 한다. 오른쪽 버튼에 해당하는 키는 없다 — 필요해지면 `navKeys`·`navBinds`·
+`handleKey`·`cmd/mux` 를 다 고치고 사용자가 `mux setup-panel` 을 다시 돌려야 하므로,
+그 값을 치를 이유가 생기기 전까지는 두지 않는다.
+
+**`editorBin` 하나가 유일한 스위치다.** `RunWatch` 가 시작할 때 `findEditor()` 로 한 번
+채우고, 비어 있으면 오른쪽 클릭이 no-op 이다. 제로값이 off 이므로 `watchModel{...}` 을
+손으로 만드는 기존 테스트들이 아무것도 실행하지 않는다 — `exePath` 가 자가 재시작을
+끄는 것과 같은 방식이고, 이게 `go test ./ui` 를 개발자의 데스크톱에서 떼어 놓는다.
+
+**폴더는 `ProjectDir` 우선, 없으면 `Directory`.** `types.go` 가 이미 이유를 적어 뒀다 —
+`Directory` 는 활성 pane 을 따라 움직이고 AI 의 cwd 로 덮이기까지 하지만 `@project_dir`
+은 세션이 열린 폴더로 고정이다. `listFormat` 이 둘 다 실어 오므로 tmux 호출은 늘지
+않는다.
+
+**PATH 만 보면 안 된다** (`findEditor`, `ui/editor.go`). WSL 에서는 Windows 설치본이
+interop 으로 tmux 서버의 PATH 에 올라와 있어 `LookPath` 로 끝나지만(실측:
+`/mnt/c/.../Microsoft VS Code/bin`), snap·flatpak·`/opt` 타르볼·macOS 앱 번들은 `code`
+라는 이름을 PATH 에 하나도 남기지 않을 수 있다. 그때 "설치 안 됨" 이라고 답하는 것은
+사용자가 보고 있는 애플리케이션에 대해 틀린 말이다.
+
+**`Start()` 가 아니라 타임아웃 걸린 `Run()` 인 이유가 있다.** 패널은 tmux 서버에서
+환경을 물려받고 거기엔 `WSL_INTEROP=/run/WSL/<n>_interop` 이 들어 있다(실측). 그 소켓은
+WSL 세션과 함께 죽는데 tmux 서버는 그보다 오래 살므로, 그 뒤로 `/mnt/c/...` 실행은 전부
+실패한다. 띄우고 잊으면 그 실패는 아무 데도 닿지 않고 **클릭이 아무 일도 안 하는 것처럼**
+보인다. 종료 코드를 기다려야 `⚠ VS Code 실행 실패` 가 패널 로그에 남는다. 이미
+`tea.Cmd` 의 고루틴 안이므로 기다리는 대가는 이 커맨드의 메시지가 늦는 것뿐이다.
+타임아웃(10초)은 멈춘 셤이 고루틴을 영영 붙잡는 것에 대한 상한이지 정상 동작의 일부가
+아니다.
+
+`Setsid` 는 패널 pane 이 닫힐 때 반쯤 뜬 에디터가 같이 죽지 않게 한다 — tmux 는 pane 의
+프로세스 그룹에 신호를 보내고, 셤이 진짜 애플리케이션에 넘기기 전까지는 아직 우리
+그룹에 있다. stdin/stdout 은 `nil`(=`/dev/null`)이어야 한다: 패널은 alt-screen TUI 라
+자식이 한 줄만 써도 목록 위에 남는다. stderr 만 받아 `firstLine` 으로 한 줄로 줄여
+에러에 붙인다(`tmux/runner.go` 의 `withStderr` 와 같은 이유, 폭이 40칸이라는 것이 추가
+이유).
+
+**실패는 `m.local` 에만 넣는다.** 이 pane 의 실행이 실패한 것이지 다른 창의 소식이
+아니다 — `switchFailedMsg` 가 공유 로그에 가지 않는 것과 같은 규칙이다.
+
 ### The line above the pane you work in
 
 `pane-border-status top` plus a `pane-border-format` that calls `mux border` (`ui/border.go`, `cmd/mux`'s `runBorder`, installed by `SetupPanel`) puts the session's summary — name, directory, tool, live state, branch — on the *other* column, above the shell. It is the only row of that side mux gets to write in: the pane is the user's terminal, and its title already belongs to whatever runs there (Claude Code names its pane after the task in hand, so taking it over would cost more than the line gives).

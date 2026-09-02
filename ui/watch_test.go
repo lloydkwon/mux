@@ -227,6 +227,11 @@ func TestWatchOnlyLeftPressActs(t *testing.T) {
 	if _, cmd := m.Update(tea.MouseMsg{Y: 0, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}); cmd != nil {
 		t.Error("clicking the header acted")
 	}
+	// Left and right are the two answers this panel has. Anything else — the
+	// middle button, a wheel tilt — must fall through rather than pick one.
+	if _, cmd := m.Update(tea.MouseMsg{Y: 2, Button: tea.MouseButtonMiddle, Action: tea.MouseActionPress}); cmd != nil {
+		t.Error("the middle button acted")
+	}
 }
 
 // The panel shows no output to read first, so a click is the decision — it does

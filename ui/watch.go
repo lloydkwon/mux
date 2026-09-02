@@ -127,6 +127,16 @@ type watchModel struct {
 	// holds the terminal in raw mode on the alternate screen.
 	restartRequested bool
 
+	// editorBin is the editor a right click opens a session's folder in, resolved
+	// once at startup. Empty means there is none to run, which is the whole
+	// switch — there is no option, because the gesture is the opt-in: a right
+	// click is not something anyone presses by accident, which is exactly what an
+	// option would have been protecting them from.
+	//
+	// The zero value being off is what keeps every test that builds a watchModel
+	// by hand from launching anything — the same reason exePath works that way.
+	editorBin string
+
 	// ownAttached is whether a client was in this pane's session as of the last
 	// refresh. Held so the *arrival* can be seen: a level would undo the user's
 	// own cursor two seconds after they moved it, an edge only fires when they
@@ -172,6 +182,10 @@ func RunWatch() error {
 	// the pane changed.
 	minWidth := tmux.MinWindowWidth()
 	header := tmux.PanelHeaderEnabled()
+	// Looked for unconditionally: not finding one stands the right click down,
+	// which is the same answer an "off" option would have given and costs no
+	// configuration to reach.
+	editorBin := findEditor()
 	exe, exeErr := os.Executable()
 	if exeErr != nil {
 		// Not knowing what we are running disables the restart check and
@@ -185,6 +199,7 @@ func RunWatch() error {
 				ownSession:     own,
 				minWindowWidth: minWidth,
 				showHeader:     header,
+				editorBin:      editorBin,
 				exePath:        exe,
 				// Taken here rather than on the first tick so the baseline is
 				// the file we actually started from. A tick later it may already
@@ -233,18 +248,33 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		// Press only. A release carries the same button under SGR, and a drag
-		// arrives as motion — neither should switch sessions.
-		if msg.Button != tea.MouseButtonLeft || msg.Action != tea.MouseActionPress {
+		// arrives as motion — neither is a click.
+		if msg.Action != tea.MouseActionPress {
 			return m, nil
 		}
 		name := m.sessionAtRow(msg.Y)
 		if name == "" {
 			return m, nil
 		}
-		// The panel shows no output to read first, so a click is the decision.
-		// The keyboard keeps the two steps it needs: `mux nav` moves the cursor
-		// and enter commits.
-		return m, switchToSession(name)
+		switch msg.Button {
+		case tea.MouseButtonLeft:
+			// The panel shows no output to read first, so a click is the
+			// decision. The keyboard keeps the two steps it needs: `mux nav`
+			// moves the cursor and enter commits.
+			return m, switchToSession(name)
+		case tea.MouseButtonRight:
+			// The other half of the move, on the button nobody presses while
+			// skimming. It does not switch: opening a project's editor without
+			// leaving the terminal you are working in is the case this exists
+			// for, and a left click is right there for the other one.
+			//
+			// Measured against a real server: tmux's default MouseDown3Pane
+			// forwards the press to the pane when the application has mouse
+			// reporting on (`mouse_any_flag` is 1 here), so this needs nothing
+			// in anyone's tmux.conf.
+			return m, openSessionEditor(name, m.editorBin, m.editorDirFor(name))
+		}
+		return m, nil
 
 	case switchFailedMsg:
 		// Surface it in the log rather than failing silently: the session can
@@ -252,6 +282,17 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// this pane's click failed, which is not news in anyone else's window.
 		m.local = pushEvents(m.local, []aiEvent{{
 			at: time.Now(), session: msg.session, text: "⚠ 전환 실패: " + msg.err.Error(),
+		}})
+		m.events = combineEvents(m.shared, m.local)
+		return m, nil
+
+	case editorFailedMsg:
+		// Same channel as a failed switch, and local for the same reason: this is
+		// what happened in this pane, not news for anyone else's window. The
+		// switch itself succeeded, so the row is already where the user asked to
+		// be — this only says the editor did not follow.
+		m.local = pushEvents(m.local, []aiEvent{{
+			at: time.Now(), session: msg.session, text: "⚠ VS Code 실행 실패: " + msg.err.Error(),
 		}})
 		m.events = combineEvents(m.shared, m.local)
 		return m, nil
@@ -689,6 +730,11 @@ type switchFailedMsg struct {
 	err     error
 }
 
+type editorFailedMsg struct {
+	session string
+	err     error
+}
+
 // switchToSession moves the current tmux client. It stays a tea.Cmd rather than
 // quitting first, the way the TUI's attach must: switch-client returns normally
 // instead of replacing this process, so the panel survives the switch.
@@ -706,6 +752,60 @@ func switchToSession(name string) tea.Cmd {
 		}
 		return nil
 	}
+}
+
+// openSessionEditor opens a session's project folder without moving the client.
+//
+// The focus has to be handed back for the same reason a switch hands it back,
+// and it is easier to miss here: tmux's own MouseDown3Pane runs `select-pane`
+// before forwarding the press, so after a right click the panel *is* the active
+// pane — and unlike a switch, nothing else afterwards would take the user out
+// of it.
+func openSessionEditor(name, bin, dir string) tea.Cmd {
+	return func() tea.Msg {
+		restoreFocus()
+
+		if bin == "" || dir == "" {
+			return nil
+		}
+		if err := openEditor(bin, dir); err != nil {
+			return editorFailedMsg{session: name, err: err}
+		}
+		return nil
+	}
+}
+
+// editorDirFor is the folder to open for a session, or "" when there is nothing
+// to open — no editor was found, or the panel does not know that session.
+//
+// ProjectDir first: types.go says why, and it is the whole reason that field
+// exists. Directory follows the active pane and is overwritten by the AI's own
+// cwd, so on a session whose shell has wandered it names somewhere that is not
+// the project. @project_dir does not move.
+//
+// Costs no tmux call: listFormat already carries both, so m.sessions has them.
+func (m watchModel) editorDirFor(name string) string {
+	if m.editorBin == "" {
+		return ""
+	}
+	s, ok := sessionByName(m.sessions, name)
+	if !ok {
+		return ""
+	}
+	if s.ProjectDir != "" {
+		return s.ProjectDir
+	}
+	return s.Directory
+}
+
+// sessionByName finds a session in the slice the panel last loaded.
+func sessionByName(sessions []tmux.Session, name string) (tmux.Session, bool) {
+	for _, s := range sessions {
+		if s.Name == name {
+			return s, true
+		}
+	}
+	return tmux.Session{}, false
 }
 
 // sessionAtRow maps a pane row to the session on it, empty when that row is not

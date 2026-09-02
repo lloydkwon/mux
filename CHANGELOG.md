@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Right-clicking a session in the panel opens its project folder in VS Code.
+  A left click still switches to the session and nothing else; the right button
+  is the other half of the move, and it deliberately does *not* switch — opening
+  a project's editor without leaving the terminal you are working in is the case
+  it exists for. There is no option to turn on, because the gesture is already
+  the opt-in: nobody presses the right button while skimming a list, which is
+  the only thing an option would have been protecting them from. `enter` and
+  `prefix + Enter` keep their one meaning and switch, like a left click.
+  Nothing is needed in tmux.conf. tmux's default `MouseDown3Pane` forwards the
+  press to a pane whose application has mouse reporting on — measured against a
+  real server, where the panel's `mouse_any_flag` is 1 — and it runs
+  `select-pane` first, so the right click hands the focus back the way a switch
+  does.
+  The folder is the session's `@project_dir` when it has one and its directory
+  otherwise: the tag is fixed to the folder the session was opened for, while
+  the directory follows the active pane and is overwritten by an AI's own
+  working directory. Nothing extra is asked of tmux — `list-sessions` already
+  carries both.
+  `code` is looked up on `PATH` first and then in the standard install
+  locations (deb/rpm, snap, flatpak, `/opt`, macOS bundles), because a snap or a
+  flatpak can leave nothing named `code` on `PATH` at all. Under WSL the Windows
+  install is already on the tmux server's `PATH` over interop and opens a
+  Remote-WSL window with no special case. Finding nothing makes the right click
+  a no-op.
+  A failed launch is reported in the panel's own log instead of being dropped:
+  under WSL a tmux server outliving its WSL session carries a dead
+  `WSL_INTEROP`, after which every launch fails — fire-and-forget would make
+  that look exactly like the click doing nothing.
+
 ## [0.3.8] - 2026-09-02
 
 ### Added
