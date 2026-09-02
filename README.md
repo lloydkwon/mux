@@ -342,12 +342,18 @@ Pair with [skimd](https://github.com/lunemis/skimd) to review AI-generated markd
 | `n` | Create new session |
 | `r` | Rename session |
 | `x` | Delete session (with confirmation) |
+| `m` | Edit the selected session's note (empty clears) |
+| `v` | Select mode — hand the mouse back so you can drag-copy |
 | `0`–`9` | Set selected session's order (`0` clears) |
 | `o` | Rotate sort: recent → name → order |
 | `/` | Filter sessions by name or path |
 | `Esc` | Clear filter / cancel |
 | `?` | Help — marker legend and the full key list |
 | `q` | Quit |
+
+**A session can carry a note you wrote** (`m`), shown after the badge as `✎ …`. It is for what nothing can work out by looking — "blocked until the labelling run finishes" — so that a list of seven sessions still says what each is waiting on. The note lives on the tmux session itself (the `@mux_note` option), so renaming the session keeps it and `mux watch` sees the same text without a second store; it does not survive the tmux server dying. When the row runs out of room the **branch** goes first and the note second: the branch is repeated by the preview header and by the border above your pane, while the note appears nowhere else. In the panel the note is its own line under the session, because at 36 columns that row has no cells to spare.
+
+`v` gives the mouse back to the terminal so you can select and copy what is on screen, and **stops the refresh while it does** — with the list still redrawing twice a second the selection is wiped before you finish making it. `v` or `Esc` resumes both.
 
 `?` opens a full-screen page explaining every marker a row can carry (`▶`/`▼`, the brighter name of the attached session, `#N`, the elapsed column, `⌥`, the AI badge) alongside the keys above — the footer bar can list a key but cannot explain a glyph. The page is written in Korean, matching `README.ko.md`.
 

@@ -35,6 +35,18 @@ const (
 	// sessionTailReserve is what the age, the badge and their separators hold
 	// back for themselves: "  12m  ✅".
 	sessionTailReserve = 2 + elapsedWidth + 2 + badgeWidth
+
+	// noteGlyph marks a user's own note about a session. One cell, pinned by
+	// TestGlyphWidthsAreStable — a glyph that measures differently from what it
+	// draws shifts every column after it.
+	noteGlyph = "✎"
+
+	// minNoteWidth is the narrowest note segment worth drawing, its two-space
+	// separator and the glyph included: below it there are barely four cells of
+	// text left, which is a note you have to open the editor to read anyway. The
+	// note is dropped whole rather than shown as an ellipsis with nothing in
+	// front of it.
+	minNoteWidth = 10
 )
 
 // The action rows' labels. Constants because the column sizes itself around
@@ -85,7 +97,8 @@ func renderListView(items []listItem, cursor int, filter string, t *treeState, i
 	// Both decided across the whole list rather than the visible slice: a column
 	// that appeared and vanished as you scrolled would move every name with it.
 	showOrder := anyOrdered(items)
-	nameWidth := sessionNameWidth(items, innerWidth, showOrder)
+	showNote := anyNoted(items)
+	nameWidth := sessionNameWidth(items, innerWidth, showOrder, showNote)
 
 	lines := make([]string, innerHeight)
 	for i := 0; i < innerHeight; i++ {
@@ -117,7 +130,7 @@ func renderSessionList(sessions []tmux.Session, cursor int, filter string, inner
 //
 // Sized to the content rather than fixed because a fixed column leaves a hole
 // between a short name and its age — and the hole is where the eye has to jump.
-func sessionNameWidth(items []listItem, innerWidth int, showOrder bool) int {
+func sessionNameWidth(items []listItem, innerWidth int, showOrder, showNote bool) int {
 	longest := 0
 	for _, it := range items {
 		var label string
@@ -139,7 +152,11 @@ func sessionNameWidth(items []listItem, innerWidth int, showOrder bool) int {
 	if showOrder {
 		order = orderWidth
 	}
-	room := innerWidth - rowGutter - order - sessionTailReserve - minBranchWidth
+	note := 0
+	if showNote {
+		note = minNoteWidth
+	}
+	room := innerWidth - rowGutter - order - sessionTailReserve - minBranchWidth - note
 	return clampInt(min(longest, room), sessionNameMin, sessionNameMax)
 }
 
@@ -147,6 +164,20 @@ func sessionNameWidth(items []listItem, innerWidth int, showOrder bool) int {
 func anyOrdered(items []listItem) bool {
 	for _, it := range items {
 		if it.kind == itemSession && it.order > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// anyNoted reports whether any session in the list carries a note.
+//
+// Whole-list rather than per-row, for the reason anyOrdered is: the name column
+// is one width for every row, and a reserve that appeared and vanished as you
+// scrolled would move every name with it.
+func anyNoted(items []listItem) bool {
+	for _, it := range items {
+		if it.kind == itemSession && it.session != nil && it.session.Note != "" {
 			return true
 		}
 	}
@@ -209,21 +240,46 @@ func formatSessionRow(s tmux.Session, order int, expanded, selected, showOrder b
 
 	name := fitCells(s.Name, nameWidth)
 
+	// The note carries its own two-space separator so it lands where the age and
+	// the badge do, and so the whole segment can be dropped as one piece.
+	note := ""
+	if s.Note != "" {
+		note = "  " + noteGlyph + " " + s.Note
+	}
+
 	branch := ""
 	if s.GitBranch != "" {
 		branch = branchGlyph(s) + " " + s.GitBranch
 	}
+
 	// One cell short of the width: renderRow pads the leftover at the end, and
 	// that leftover is the right margin.
 	used := rowGutter + ansi.StringWidth(orderLabel) + nameWidth + sessionTailReserve
-	if room := width - used - 1; room < ansi.StringWidth(branch) {
-		if room >= minBranchWidth {
-			branch = fitCells(branch, room)
+	room := width - used - 1
+
+	// The branch yields first, and the order is the whole point. The branch is
+	// said again by the preview header and by `mux border` on the pane the user
+	// is in; the note is written by hand and appears nowhere else, so it is the
+	// last thing this row gives up.
+	if ansi.StringWidth(note)+ansi.StringWidth(branch) > room {
+		if branchRoom := room - ansi.StringWidth(note); branchRoom >= minBranchWidth {
+			branch = fitCells(branch, branchRoom)
 		} else {
 			branch = ""
 		}
 	}
-	gap := width - used - ansi.StringWidth(branch)
+	// Only with the branch already gone does the note give ground: cut to what
+	// is left, then dropped whole below the point where there is nothing left to
+	// read.
+	if ansi.StringWidth(note) > room {
+		if room >= minNoteWidth {
+			note = fitCells(note, room)
+		} else {
+			note = ""
+		}
+	}
+
+	gap := width - used - ansi.StringWidth(note) - ansi.StringWidth(branch)
 	if gap < 0 {
 		gap = 0
 	}
@@ -240,6 +296,7 @@ func formatSessionRow(s tmux.Session, order int, expanded, selected, showOrder b
 		// Always emitted, blank when there is no AI CLI, so the columns after it
 		// line up whether or not a row has a badge.
 		{text: "  " + padOrTruncate(glyph, badgeWidth), color: aiBadgeColor(s)},
+		{text: note, color: colorMuted},
 		{text: strings.Repeat(" ", gap)},
 		{text: branch, color: colorMuted},
 	}

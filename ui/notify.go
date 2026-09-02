@@ -688,6 +688,31 @@ func sessionBlocks(ss []tmux.Session, events []aiEvent, width, perSession int, s
 			text:    notifySessionLine(s, width, rowFlags{selected: sel, dim: dim, own: s.Name == own}),
 			session: s.Name,
 		})
+		// The note sits directly under the name, because it is that session's
+		// subtitle and has to be read with it.
+		//
+		// It is a row of its own rather than a column on the row above: at the
+		// panel's default 36 cells that row has nothing spare — the name, the
+		// age, the ◀ and the branch already spend all of it — so a note beside
+		// the branch would mean no branch, on every row that has a note.
+		//
+		// Unlike the event line it is not budgeted: a note is on some sessions
+		// and not others, so the "all or nothing" rule that governs the event
+		// lines does not apply. When the pane runs short the log at the bottom
+		// is what yields, which is what it is last for.
+		if s.Note != "" {
+			// Two spaces then the glyph puts the note's text in the same column
+			// the session's name starts in, so the block reads as one thing. One
+			// cell short of the width for the reason every other row is: the pad
+			// renderRow adds at the end is the right margin, and a note long
+			// enough to fill the row would otherwise touch the pane's edge.
+			lines = append(lines, notifyLine{
+				text: renderRow([]rowSeg{
+					{text: fitCells("  "+noteGlyph+" "+s.Note, width-1), color: colorMuted},
+				}, width, sel),
+				session: s.Name,
+			})
+		}
 		if s.AIState == tmux.AIStateApproval && s.AIWaitingFor != "" {
 			// The reason is part of its session's block: anywhere in the block
 			// clicks to the same session, which is simpler to predict than a

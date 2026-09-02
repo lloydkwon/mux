@@ -22,7 +22,7 @@ var allAIStates = []tmux.AIState{
 // tries to apply is undone — the only workable rule is that measured width
 // equals drawn width.
 func TestGlyphWidthsAreStable(t *testing.T) {
-	oneCell := []string{"▶", "▼", "◀", "○", "*", "✦", "◈", "⬡", "✧", "⌥", "─"}
+	oneCell := []string{"▶", "▼", "◀", "○", "*", "✦", "◈", "⬡", "✧", "⌥", "─", noteGlyph}
 	// Screen detection brought sixteen more tools, and every one of their icons
 	// shares the same badge slot. Taken from the map rather than copied here, so
 	// a tool added later cannot skip this check.
@@ -95,32 +95,36 @@ func TestFormatSessionRowWidthInvariant(t *testing.T) {
 	now := time.Now()
 	branches := []string{"", "main", "feature/a-very-long-branch-name-here"}
 	names := []string{"a", "mux", "a-fairly-long-session-name-indeed", "한글세션이름"}
+	notes := []string{"", "라벨링", "라벨링 작업이 끝나야 다음 단계로 넘어갈 수 있다"}
 	widths := []int{10, 16, 22, 30, 46, 62, 78}
 
 	for _, st := range allAIStates {
 		for _, name := range names {
 			for _, branch := range branches {
-				for _, cmd := range []string{"bash", "claude"} {
-					for _, order := range []int{0, 1, 42} {
-						for _, attached := range []bool{false, true} {
-							for _, expanded := range []bool{false, true} {
-								for _, selected := range []bool{false, true} {
-									s := tmux.Session{
-										Name:          name,
-										Created:       now.Add(-90 * time.Second),
-										Attached:      attached,
-										ActiveCommand: cmd,
-										GitBranch:     branch,
-										AIState:       st,
-										AISince:       now.Add(-3 * time.Minute),
-									}
-									for _, w := range widths {
-										for _, showOrder := range []bool{false, true} {
-											for _, nameWidth := range []int{sessionNameMin, 20, sessionNameMax} {
-												row := formatSessionRow(s, order, expanded, selected, showOrder, nameWidth, w)
-												if got := ansi.StringWidth(ansi.Strip(row)); got != w {
-													t.Fatalf("width=%d name column=%d state=%v name=%q branch=%q cmd=%s order=%d: got %d cells (%q)",
-														w, nameWidth, st, name, branch, cmd, order, got, ansi.Strip(row))
+				for _, note := range notes {
+					for _, cmd := range []string{"bash", "claude"} {
+						for _, order := range []int{0, 1, 42} {
+							for _, attached := range []bool{false, true} {
+								for _, expanded := range []bool{false, true} {
+									for _, selected := range []bool{false, true} {
+										s := tmux.Session{
+											Name:          name,
+											Created:       now.Add(-90 * time.Second),
+											Attached:      attached,
+											ActiveCommand: cmd,
+											GitBranch:     branch,
+											Note:          note,
+											AIState:       st,
+											AISince:       now.Add(-3 * time.Minute),
+										}
+										for _, w := range widths {
+											for _, showOrder := range []bool{false, true} {
+												for _, nameWidth := range []int{sessionNameMin, 20, sessionNameMax} {
+													row := formatSessionRow(s, order, expanded, selected, showOrder, nameWidth, w)
+													if got := ansi.StringWidth(ansi.Strip(row)); got != w {
+														t.Fatalf("width=%d name column=%d state=%v name=%q branch=%q note=%q cmd=%s order=%d: got %d cells (%q)",
+															w, nameWidth, st, name, branch, note, cmd, order, got, ansi.Strip(row))
+													}
 												}
 											}
 										}
@@ -292,12 +296,12 @@ func TestSessionNameWidthIsSharedAndBounded(t *testing.T) {
 
 	// Wide enough for everything: the column is the longest label, and the
 	// action rows count — they share it.
-	if got, want := sessionNameWidth(items, 80, false), len("a-longer-session-name"); got != want {
+	if got, want := sessionNameWidth(items, 80, false, false), len("a-longer-session-name"); got != want {
 		t.Errorf("width = %d, want the longest name %d", got, want)
 	}
 
 	// Narrow: bounded by what is left after the gutter, the tail and a branch.
-	narrow := sessionNameWidth(items, 40, false)
+	narrow := sessionNameWidth(items, 40, false, false)
 	if narrow >= 40-rowGutter-sessionTailReserve {
 		t.Errorf("width %d leaves nothing for the tail at 40 cells", narrow)
 	}
@@ -307,7 +311,65 @@ func TestSessionNameWidthIsSharedAndBounded(t *testing.T) {
 
 	// Short names do not leave a hole: the column shrinks to fit them.
 	short := []listItem{{kind: itemSession, session: &tmux.Session{Name: "a", Created: now}}}
-	if got := sessionNameWidth(short, 80, false); got != sessionNameMin {
+	if got := sessionNameWidth(short, 80, false, false); got != sessionNameMin {
 		t.Errorf("width for one short name = %d, want the floor %d", got, sessionNameMin)
+	}
+}
+
+// TestSessionRowNoteYieldsAfterBranch pins the priority, which is the whole
+// point of the note column. The branch is repeated by the preview header and by
+// `mux border`; the note is written by hand and appears nowhere else, so the
+// branch has to be the one that goes first.
+func TestSessionRowNoteYieldsAfterBranch(t *testing.T) {
+	s := tmux.Session{
+		Name:      "matchingByLocal",
+		Created:   time.Now().Add(-3 * time.Minute),
+		GitBranch: "main",
+		Note:      "라벨링 끝나야 진행",
+	}
+	row := func(w int) string {
+		return ansi.Strip(formatSessionRow(s, 0, false, false, false, 16, w))
+	}
+
+	// Wide: both.
+	if got := row(70); !strings.Contains(got, "라벨링 끝나야 진행") || !strings.Contains(got, "main") {
+		t.Errorf("at 70 want note and branch, got %q", got)
+	}
+	// Squeezed: the branch is gone while the note is still whole.
+	if got := row(56); strings.Contains(got, "main") || !strings.Contains(got, "라벨링 끝나야 진행") {
+		t.Errorf("at 56 want the note whole and no branch, got %q", got)
+	}
+	// Tighter: the note itself is cut, and says so.
+	if got := row(46); !strings.Contains(got, noteGlyph) || !strings.Contains(got, "...") {
+		t.Errorf("at 46 want a truncated note, got %q", got)
+	}
+	// Narrower than minNoteWidth: dropped whole rather than left as a bare
+	// glyph and an ellipsis, which says nothing the empty space does not.
+	if got := row(30); strings.Contains(got, noteGlyph) {
+		t.Errorf("at 30 want no note at all, got %q", got)
+	}
+}
+
+// A note must not cost the branch on a row wide enough for both, which is what
+// the reserve in sessionNameWidth is for.
+func TestSessionNameWidthReservesRoomForNotes(t *testing.T) {
+	noted := tmux.Session{Name: "a-longer-session-name", Note: "메모"}
+	plain := tmux.Session{Name: "a-longer-session-name"}
+	items := []listItem{{kind: itemSession, session: &noted}}
+	bare := []listItem{{kind: itemSession, session: &plain}}
+
+	if !anyNoted(items) {
+		t.Fatal("anyNoted false for a session with a note")
+	}
+	if anyNoted(bare) {
+		t.Fatal("anyNoted true for a session with none")
+	}
+
+	// At a width where the name is bounded by the room left rather than by its
+	// own length, the reserve has to show up as a narrower name column.
+	withNote := sessionNameWidth(items, 46, false, true)
+	without := sessionNameWidth(bare, 46, false, false)
+	if withNote >= without {
+		t.Errorf("name column %d with notes, %d without — the reserve did nothing", withNote, without)
 	}
 }

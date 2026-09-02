@@ -46,6 +46,7 @@ const (
 	modeFilter
 	modeConfirmKill
 	modeOrder
+	modeNote
 	modeHelp
 	modeSetupOffer
 )
@@ -73,6 +74,7 @@ type Model struct {
 	filterMod      filterModel
 	confirmKillMod confirmKillModel
 	orderModel     orderModel
+	noteModel      noteModel
 	filterText     string
 	// projectDir는 시작할 때 한 번 읽는 @project_dir. filterText의 초기값이자,
 	// "이건 사용자가 친 필터가 아니다"를 구분하는 표식 — 액션 행을 계속 보여주는
@@ -87,6 +89,11 @@ type Model struct {
 	previewKey      previewKey       // (session, window, pane) the cache belongs to
 	tokenUsage      *tmux.TokenUsage // cached token usage for current AI session
 	tokenSession    string           // session name the token cache belongs to
+	// selectMode suspends mouse reporting *and* the refresh tick so the
+	// terminal can select and copy what is on screen. Both halves are needed:
+	// with the tick still running the redraw two ticks later wipes the
+	// selection the user is halfway through making.
+	selectMode bool
 }
 
 type tickMsg time.Time
@@ -216,6 +223,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
+		// Select mode drops the tick entirely rather than skipping the work: a
+		// rescheduled tick still redraws, and a redraw is what clears the
+		// terminal's selection. toggleSelectMode starts it again.
+		if m.selectMode {
+			return m, nil
+		}
 		cmds := []tea.Cmd{loadSessions, tick()}
 		if it := m.currentItem(); it != nil && it.session != nil {
 			cmds = append(cmds, refreshPreview(previewKeyForItem(*it)))
@@ -336,6 +349,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.focusItemSession(msg.sessionName)
 		return m, nil
 
+	case sessionNoteMsg:
+		// No preference write and no rename/kill fix-up: the note lives on the
+		// tmux session itself, so it is already stored and the next tick's
+		// loadSessions is what brings it back.
+		m.mode = modeList
+		m.focusSession = msg.sessionName
+		return m, loadSessions
+
 	case setupInstalledMsg:
 		// Success needs no announcement — the keys simply work from here. What
 		// must not be silent is a failure, or the user believes they are set up.
@@ -356,6 +377,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateConfirmKill(msg)
 	case modeOrder:
 		return m.updateOrder(msg)
+	case modeNote:
+		return m.updateNote(msg)
 	case modeHelp:
 		// Any key closes, like confirmKillModel's default cancel. Guarding on
 		// KeyMsg keeps the 500ms tick from dismissing the page on its own.
@@ -430,6 +453,16 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.renameModel.input.Focus()
 			}
 
+		case "m":
+			if it := m.currentItem(); it != nil && it.kind == itemSession {
+				m.mode = modeNote
+				m.noteModel = newNoteModel(it.session.Name, it.session.Note)
+				return m, m.noteModel.input.Focus()
+			}
+
+		case "v":
+			return m.toggleSelectMode()
+
 		case "/":
 			m.mode = modeFilter
 			m.filterMod = newFilterModel(m.filterText)
@@ -440,6 +473,9 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "esc":
+			if m.selectMode {
+				return m.toggleSelectMode()
+			}
 			if m.filterText != "" {
 				m.filterText = ""
 				m.applyFilter()
@@ -681,6 +717,32 @@ func (m Model) updateOrder(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// toggleSelectMode hands the mouse back to the terminal, and takes it again.
+//
+// Mux keeps mouse reporting on so rows can be clicked, and the price — spelled
+// out in cmd/mux/main.go — is the terminal's own drag-select. This gives it back
+// for as long as the user wants to copy something, then restores both the
+// reporting and the tick that draws over it.
+func (m Model) toggleSelectMode() (tea.Model, tea.Cmd) {
+	m.selectMode = !m.selectMode
+	if m.selectMode {
+		return m, tea.DisableMouse
+	}
+	// The tick is restarted here and nowhere else: nothing else is scheduling
+	// one while select mode holds, so a missed restart freezes the list for good.
+	return m, tea.Batch(tea.EnableMouseCellMotion, tick(), loadSessions)
+}
+
+func (m Model) updateNote(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "esc" {
+		m.mode = modeList
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.noteModel, cmd = m.noteModel.Update(msg)
+	return m, cmd
+}
+
 func (m *Model) currentItem() *listItem {
 	if m.cursor >= 0 && m.cursor < len(m.items) {
 		return &m.items[m.cursor]
@@ -756,6 +818,8 @@ func (m Model) View() string {
 		return m.viewWithOverlay(m.renameModel.View())
 	case modeOrder:
 		return m.viewWithOverlay(m.orderModel.View())
+	case modeNote:
+		return m.viewWithOverlay(m.noteModel.View())
 	case modeHelp:
 		return m.viewHelp()
 	case modeSetupOffer:
@@ -773,6 +837,10 @@ func (m Model) extraBar() string {
 		return m.filterMod.View()
 	case m.mode == modeConfirmKill:
 		return m.confirmKillMod.View()
+	case m.selectMode:
+		// Says the screen has stopped moving as well as how to leave: a frozen
+		// list with no explanation reads as mux having hung.
+		return helpStyle.Render("select mode: drag to copy, refresh paused (v/esc resume)")
 	case m.filterText != "":
 		return helpStyle.Render(fmt.Sprintf("filter: %s (esc clear)", m.filterText))
 	case m.err != nil:
@@ -892,13 +960,14 @@ func (m Model) viewWithOverlay(overlay string) string {
 func renderHelp() string {
 	keys := []struct{ key, desc string }{
 		{"↑↓/jk", "navigate"},
-		{"click", "select"},
 		{"tab", "expand"},
 		{"⇧tab", "collapse"},
 		{"enter/2click", "attach"},
 		{"n", "new"},
 		{"x", "kill"},
 		{"r", "rename"},
+		{"m", "memo"},
+		{"v", "copy"},
 		{"0-9", "order"},
 		{"o", "sort"},
 		{"/", "filter"},

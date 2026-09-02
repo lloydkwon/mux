@@ -99,7 +99,7 @@ func renderHelpBody() string {
 		"",
 		helpLegendRow("▶ ▼", "접힘 / 펼침", "이름", "밝은 이름 = attach 중"),
 		helpLegendRow("#3", "고정 정렬 순서", "12m", "세션 나이 (AI 상태면 유지 시간)"),
-		helpLegendRow("⌥", "git 브랜치", "⌥⌥", "연결된 worktree"),
+		helpLegendRow("⌥ ⌥⌥", "브랜치 / worktree", noteGlyph, "세션 메모"),
 		"",
 		titleStyle.Render(" AI 배지") + helpStyle.Render(" · 상태 글리프가 도구 아이콘을 대체한다"),
 		aiToolLegend(),
@@ -113,6 +113,7 @@ func renderHelpBody() string {
 		helpKeyRow("enter 더블클릭", "attach", "o", "정렬 순환"),
 		helpKeyRow("/", "검색", "esc", "검색 해제"),
 		helpKeyRow("?", "도움말", "q", "종료"),
+		helpKeyRow("m", "메모 편집", "v", "선택 모드 (복사)"),
 	}
 	return strings.Join(lines, "\n")
 }

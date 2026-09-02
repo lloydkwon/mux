@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Sessions can carry a note you wrote (`m` in the TUI). Everything else on a row
+  is something mux worked out by looking — the name, the directory, the branch,
+  the AI badge — and none of it can say "this one is blocked until the labelling
+  run finishes", which is the thing you actually have to remember about it. The
+  note is stored on the tmux session itself (`@mux_note`), so it rides the same
+  `list-sessions` call every other field does, renaming the session keeps it, and
+  the panel and `mux border` see the same text with no second store to keep in
+  step; it dies with the tmux server, which is the price of not having one. On a
+  list row it sits after the badge as `✎ …` and the **branch** is what yields
+  first when the row runs short — the branch is repeated by the preview header
+  and by the border above your pane, while the note appears nowhere else. In the
+  panel it is a line of its own under the session rather than a column, because
+  at 36 columns that row has nothing spare, and it carries its session's name so
+  the click target stays whole.
+- `v` gives the mouse back to the terminal so screen text can be selected and
+  copied, and stops the refresh for as long as it holds. Mouse reporting is what
+  makes rows clickable and what costs the terminal's own drag-select; handing it
+  back is only half the fix, because a list still redrawing twice a second wipes
+  a selection before it is finished. `v` or `Esc` restores both.
 - The panel restarts itself when mux is installed over. `mux watch` is one
   process per pane and lives for days, so replacing the binary left every open
   panel running the code it had loaded — a fix you had just installed visibly

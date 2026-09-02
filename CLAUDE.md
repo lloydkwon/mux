@@ -96,9 +96,11 @@ tmux 서버를 상대로 그 값을 두 번 치른다. `@project_dir`은 `tmux-p
 `applyFilter`는 이름·`Directory`·`ProjectDir` 셋을 대조한다. `ProjectDir`이 필요한
 이유가 핵심이다: `Directory`는 활성 pane을 따라 움직이고 Claude의 cwd로 덮이기까지
 하지만, `@project_dir`은 세션이 열린 폴더로 고정이라 pane이 딴 데 가 있어도 그 세션은
-자기 프로젝트 목록에 남는다. `listFormat`이 `#{@project_dir}`을 마지막 필드로 싣고
-오므로 tmux 호출은 늘지 않는다 — 대신 `parseLine`의 `SplitN`은 11이고, 필드를
-더하면 그 숫자와 테스트 픽스처를 같이 고쳐야 한다.
+자기 프로젝트 목록에 남는다. `listFormat`이 `#{@project_dir}`을 싣고 오므로 tmux
+호출은 늘지 않는다 — 대신 `parseLine`의 `SplitN`은 12이고(마지막 필드는 이제
+`@mux_note`다), 필드를 더하면 그 숫자와 테스트 픽스처, 그리고
+`scripts/tmux-assumptions.sh`의 필드 수 단언을 같이 고쳐야 한다. 하한은 11로 남아
+있는데, 그 이유는 아래 "세션 메모는 tmux 옵션에 산다"에 있다.
 
 시딩된 필터에서는 액션 행("새 셸"/"새 세션")을 계속 보여준다(`m.filterText == m.projectDir`).
 사용자가 친 필터가 아니라 기본 시야이므로, 여기서 액션이 사라지면 VS Code에서 연
@@ -307,6 +309,75 @@ It was hex once, all of it chosen against a dark terminal. Measured on GitHub Li
 - Every rendered panel must return exactly `panelHeight` lines and exact widths, or the two columns desynchronize.
 - **Width compensation is impossible here.** The frame re-pads every line to the column width, so any cell a row subtracts to account for a wide glyph is added straight back. The only workable rule is to emit glyphs whose drawn width equals `ansi.StringWidth` — verify a new glyph before using it (`TestGlyphWidthsAreStable` in `ui/list_test.go` pins the current set). Emoji measure and draw 2; most geometric shapes measure and draw 1.
 - **Never wrap a row containing nested styled spans in an outer style.** A nested `lipgloss.Render` emits its own `ESC[0m`, which resets the *background* too, so a colored segment mid-row strips the selection highlight from everything after it. `renderRow` (`ui/layout.go`) builds rows from `rowSeg` values where each span re-states the full style, background included.
+
+### 세션 메모는 tmux 옵션에 산다
+
+세션 행의 다른 모든 것은 mux 가 알아낸 것이다 — 이름, 디렉터리, 브랜치, AI 배지.
+사람이 쓴 것은 `Session.Note` 하나뿐이고, 그게 `@mux_note` 세션 옵션이다
+(`tmux/note.go`).
+
+**옵션인 이유는 `@project_dir` 이 옵션인 이유와 같다.** `listFormat` 에 실으면
+tmux 호출이 한 번도 늘지 않고 TUI·패널·`mux border` 가 같은 값을 본다. 그리고 옵션은
+이름이 아니라 *세션* 에 붙으므로, `preferences.json` 의 `Orders` 가 rename/kill 마다
+필요로 하는 보정 코드가 여기엔 없다. `sessionNoteMsg` 핸들러에 저장 코드가 없는 게
+그 결과다 — 값은 이미 tmux 에 있고 다음 틱의 `loadSessions` 가 가져온다.
+
+대가는 tmux 서버와 함께 죽는다는 것이다. 그 전제는 2026-09-01 에 한 번 깨졌고
+(`tmux/eventarchive.go`), 그때는 메모도 같이 간다. 아카이브를 두지 않은 것은 결정이지
+누락이 아니다 — 필요해지면 `events.json` 이 `@mux_events` 에 대해 하는 일을 그대로
+복제하면 된다.
+
+**`@mux_note` 는 `listFormat` 의 마지막 필드여야 하고, `parseLine` 의 하한은 11 로
+남아야 한다.** 마지막인 이유: `SplitN` 의 잔여값 자리라 `|` 가 든 메모가 온전히 실린다
+— 유일하게 사용자가 직접 치는 값이므로 그 성질이 필요한 것도 이 필드뿐이다. 하한이
+11 인 이유: 한 칸 모자란 줄은 `parseLine` 이 거부하고, 거부된 세션은 목록에서 통째로
+사라진다. 메모 하나 때문에 치를 값이 아니다. `scripts/tmux-assumptions.sh` 3절이
+실측한다 — 쓰고, 포맷 마지막 칸으로 돌아오고, `-ut` 로 사라진다.
+
+**`sanitizeNote` 가 개행을 지우는 것이 load-bearing 이다.** `list-sessions -F` 는 세션당
+한 줄이므로, 개행이 든 메모는 그 세션의 줄을 둘로 쪼개고 양쪽 다 파싱에 실패해 세션이
+목록에서 사라진다. 손으로 `set-option` 한 경우까지 막을 수는 없어서 읽는 쪽
+(`parseLine`)에서도 한 번 더 통과시킨다.
+
+**행에서는 브랜치가 먼저 양보한다** (`ui/list.go` 의 `formatSessionRow`). 지금까지
+브랜치가 유일한 탄력 컬럼이었으므로 뒤집기 쉬운 순서인데, 근거가 있다: 브랜치는
+프리뷰 헤더와 pane 위 border 가 다시 말해 주고, 메모는 사용자가 쓴 것이라 다른
+어디에도 없다. `minNoteWidth` 아래로는 잘라 보이느니 통째로 버린다 — 글리프와
+말줄임표만 남은 칸은 빈칸보다 나은 게 없다. `anyNoted` 가 `sessionNameWidth` 에서
+자리를 예약하는 것은 `anyOrdered` 와 같은 이유다(스크롤 중에 이름 폭이 움직이면 안
+된다). 그 예약은 **메모를 가진 세션이 하나라도 있을 때만** 지불되고, 대신 그런 목록의
+이름 컬럼은 좁아진다.
+
+**패널에서는 메모가 브랜치 옆이 아니라 세션 행 아래 줄이다.** 기본 폭 36칸에서
+`notifySessionLine` 의 가용폭은 31칸이고 이름·나이·`◀`·브랜치가 이미 전부 쓴다 —
+거기 메모를 끼우면 메모가 있는 모든 행에서 브랜치가 사라진다. 승인 대기 사유 줄이
+쓰는 패턴을 그대로 쓴다: 같은 세션 이름을 달아 `sessionAtRow` 의 클릭 블록과
+`sessionOrder` 의 커서 접힘을 유지하고, 이름과 같은 칸에서 시작하도록 두 칸 들여쓰고,
+`width-1` 로 잘라 다른 행이 지키는 오른쪽 여백을 지킨다. 이벤트 줄과 달리
+`perSession` 예산에 넣지 않는 이유는 "전부 아니면 전무" 규칙이 적용되지 않기
+때문이다 — 메모는 원래 일부 세션에만 있다.
+
+### 선택 모드는 틱도 멈춘다
+
+`v` (`toggleSelectMode`, `ui/app.go`) 는 `tea.DisableMouse` 를 보내 마우스 리포팅을 끈다.
+그것만으로는 절반이다: 목록이 0.5초마다 다시 그려지면 터미널이 선택 영역을 지우므로,
+선택을 끝내기도 전에 사라진다. 그래서 `tickMsg` 핸들러가 선택 모드에서 **다음 틱을
+예약하지 않고** 그냥 돌아간다 — 화면이 얼어야 긁을 수 있다.
+
+되살리는 곳이 `toggleSelectMode` 한 군데뿐인 것이 그래서 중요하다. 선택 모드가 도는
+동안 틱을 들고 있는 것이 아무것도 없으므로, 여기서 다시 걸지 않으면 목록이 영영 멈춘다.
+
+`extraBar` 가 그리는 줄은 장식이 아니다. 설명 없이 멈춘 목록은 mux 가 죽은 것으로
+읽히므로, 갱신이 멈췄다는 것과 어떻게 빠져나오는지를 같이 말한다. `chromeTop` 이
+extraBar 유무로 마우스 행 보정을 이미 하므로 복귀 후 클릭 좌표는 저절로 맞는다.
+
+무엇이 복사되는지는 어디서 도느냐에 달렸다. tmux 안이면 tmux 의 copy-mode, 팝업
+안이면(팝업에는 copy-mode 가 없다) 터미널 자신의 선택 — WSL/Windows Terminal 에서
+실제로 원하는 쪽이 후자다. 어느 쪽이든 **화면에 그려진 글자**를 긁는 것이라
+`maxSessionNameDisplay` 나 `maxPathDisplay` 로 잘린 값이 복사될 수 있다.
+
+패널(`mux watch`)에는 넣지 않았다. 별도 프로세스라 자기 토글과 자기 틱을 따로 가져야
+한다.
 
 ### One AI badge, two facts
 

@@ -992,3 +992,49 @@ func TestDetectTransitionsCarriesTheTaskName(t *testing.T) {
 		t.Errorf("logged %q, want the task name in it", events[0].text)
 	}
 }
+
+// TestNotifyNoteRowBelongsToItsSession is the panel half of the note feature.
+//
+// The note is a row of its own because the session row has no cells to spare at
+// the panel's default width, and a row that is not owned by its session breaks
+// both the click map (sessionAtRow indexes the same slice) and the keyboard
+// cursor (sessionOrder skips rows owned by nobody).
+func TestNotifyNoteRowBelongsToItsSession(t *testing.T) {
+	now := time.Now()
+	noted := sess("mux", tmux.AIStateWorking)
+	noted.AISince = now.Add(-time.Minute)
+	noted.Note = "라벨링 후 진행"
+	plain := sess("api", tmux.AIStateWorking)
+	plain.AISince = now.Add(-time.Hour)
+
+	rows := notifyLines([]tmux.Session{noted, plain}, nil, 40, 30, "", "", false)
+
+	noteRow := -1
+	sessionRow := -1
+	for i, l := range rows {
+		if strings.Contains(ansi.Strip(l.text), noted.Name) {
+			sessionRow = i
+		}
+		if strings.Contains(ansi.Strip(l.text), "라벨링 후 진행") {
+			noteRow = i
+		}
+	}
+	if noteRow < 0 {
+		t.Fatal("the note was not drawn")
+	}
+	if rows[noteRow].session != "mux" {
+		t.Errorf("note row owned by %q, want mux", rows[noteRow].session)
+	}
+	// Directly under the name: the note is that session's subtitle and has to
+	// be read with it, not after whatever else the block carries.
+	if noteRow != sessionRow+1 {
+		t.Errorf("note row at %d, session row at %d — want it immediately below", noteRow, sessionRow)
+	}
+	// A session with no note gets no row, so the panel does not grow a blank
+	// line under every session to make room for the few that have one.
+	for _, l := range rows {
+		if l.session == "api" && strings.Contains(ansi.Strip(l.text), noteGlyph) {
+			t.Errorf("session with no note drew one: %q", ansi.Strip(l.text))
+		}
+	}
+}

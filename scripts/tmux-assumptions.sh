@@ -88,13 +88,15 @@ PANE=$(t list-panes -t a -F '#{pane_id}' | head -1)
 WIN=$(t display-message -p -t "$PANE" '#{window_id}')
 
 # ── 2. 세션 목록 포맷 ────────────────────────────────────────────────────────
-# tmux/session.go 의 listFormat. parseLine 이 '|' 로 11칸을 기대하고, 마지막이
-# @project_dir 이라 비어 있어도 칸은 있어야 한다.
+# tmux/session.go 의 listFormat. parseLine 은 최소 11칸을 요구하고 12칸까지 읽으며,
+# 마지막이 @mux_note 라 비어 있어도 칸은 있어야 한다. 메모가 맨 뒤인 것은 그 값만
+# 사용자가 직접 치는 것이라, SplitN 의 잔여값 자리여야 '|' 가 들어가도 안전하기
+# 때문이다.
 echo
 echo "세션 목록 (tmux/session.go listFormat)"
-LF='#{session_name}|#{session_windows}|#{session_created}|#{session_attached}|#{pane_current_path}|#{session_activity}|#{pane_current_command}|#{pane_pid}|#{window_index}|#{pane_index}|#{@project_dir}'
+LF='#{session_name}|#{session_windows}|#{session_created}|#{session_attached}|#{pane_current_path}|#{session_activity}|#{pane_current_command}|#{pane_pid}|#{window_index}|#{pane_index}|#{@project_dir}|#{@mux_note}'
 LINE=$(t list-sessions -F "$LF" | head -1)
-ok "필드 11칸" "11" "$(printf '%s' "$LINE" | awk -F'|' '{print NF}')"
+ok "필드 12칸" "12" "$(printf '%s' "$LINE" | awk -F'|' '{print NF}')"
 ok "첫 칸이 세션 이름" "a" "$(printf '%s' "$LINE" | cut -d'|' -f1)"
 
 # ── 3. 사용자 옵션 ───────────────────────────────────────────────────────────
@@ -109,6 +111,15 @@ ok "세션 옵션이 pane 대상 포맷에서 해석된다" "/tmp/proj" \
 ok "list-sessions 포맷에서도 해석된다" "/tmp/proj" \
 	"$(t list-sessions -F '#{@project_dir}' -f '#{==:#{session_name},a}')"
 ok "다른 세션에는 새지 않는다" "" "$(t show-options -qv -t b @project_dir)"
+# @mux_note. 세션 메모는 이 왕복 하나에 전부 얹혀 있다 — 쓰고, listFormat 으로
+# 돌아오고, 지우면 사라진다. 파이프가 든 메모까지 확인하는 이유는 그게 마지막
+# 필드여서 안전하다는 것이 parseLine 의 전제이기 때문이다.
+t set-option -t a @mux_note '라벨링 후 진행 | 2차'
+ok "세션 메모 쓰기/읽기" "라벨링 후 진행 | 2차" "$(t show-options -qv -t a @mux_note)"
+ok "메모가 list-sessions 포맷 마지막 칸으로 온다" "라벨링 후 진행 | 2차" \
+	"$(t list-sessions -F "$LF" -f '#{==:#{session_name},a}' | cut -d'|' -f12-)"
+t set-option -ut a @mux_note
+ok "세션 옵션 -ut 로 해제" "" "$(t show-options -qv -t a @mux_note)"
 t set-option -w -t "$WIN" @mux_panel_off 1
 ok "창 옵션 -w 쓰기/읽기" "1" "$(t show-options -wqv -t "$WIN" @mux_panel_off)"
 t set-option -wu -t "$WIN" @mux_panel_off

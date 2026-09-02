@@ -25,6 +25,12 @@ type Session struct {
 	// what makes it usable as project identity.
 	ProjectDir string
 
+	// Note is the one-line note the user attached to this session, from the
+	// @mux_note tmux option. Everything else on this struct is something mux
+	// worked out; this is the only field a person wrote. Empty is the normal
+	// case and never an error — most sessions do not need one.
+	Note string
+
 	// Live AI CLI state. Two providers reach this: the tool's own state file
 	// (today only Claude, via ~/.claude/sessions) and screen detection
 	// (tmux/detect, twenty agents). The state file wins where both answer,
