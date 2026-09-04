@@ -221,6 +221,59 @@ ok "SIGUSR1 이 소켓을 다시 만든다" "yes" "$([ -S "$SOCK" ] && echo yes 
 ok "그리고 세션이 그대로 돌아온다" "yes" \
 	"$(t has-session -t a 2>/dev/null && echo yes || echo no)"
 
+# ── 11. 클라이언트 목록과 유령 분리 ──────────────────────────────────────────
+# tmux/client.go 의 clientListFormat 과 StaleClients. 패널이 이 목록만 보고
+# detach-client 를 부르므로, 여기서 어긋나면 «붙어 있는 터미널이 끊긴다» —
+# 이 저장소에서 잘못됐을 때 가장 비싼 축에 드는 동작이다.
+#
+# #{client_activity} 를 유닉스 초로 읽는 것이 핵심 가정이다. #{t:client_activity}
+# 는 "Thu Sep  3 18:58:18 2026" 처럼 서버 로케일에 따라 나와 파싱할 수 없다.
+echo
+echo "클라이언트 목록 (tmux/client.go)"
+
+# 클라이언트가 있어야 답이 나오는 절이라 pty 를 하나 붙인다. script(1) 이 없으면
+# 이 절만 건너뛴다 — 나머지 검사를 통째로 못 돌리게 만들 이유가 없다.
+if command -v script >/dev/null 2>&1; then
+	script -qfc "$TMUX_BIN -L $SOCKET -f /dev/null attach-session -t a" /dev/null \
+		>/dev/null 2>&1 &
+	SCRIPT_PID=$!
+	for _ in $(seq 1 30); do
+		[ -n "$(t list-clients -F '#{client_tty}' 2>/dev/null)" ] && break
+		sleep 0.1
+	done
+
+	CF='#{client_tty}|#{client_width}|#{client_height}|#{client_session}|#{client_activity}'
+	CLINE=$(t list-clients -F "$CF" | head -1)
+	ok "필드 5칸" "5" "$(printf '%s' "$CLINE" | awk -F'|' '{print NF}')"
+	okc "첫 칸이 tty 경로" "/dev/" "$(printf '%s' "$CLINE" | cut -d'|' -f1)"
+	ok "폭이 숫자" "yes" \
+		"$(printf '%s' "$CLINE" | awk -F'|' '{print ($2 ~ /^[0-9]+$/) ? "yes" : "no"}')"
+	ok "붙은 세션 이름이 실린다" "a" "$(printf '%s' "$CLINE" | cut -d'|' -f4)"
+	# 로케일 문자열이 아니라 유닉스 초여야 한다. 파싱에 실패하면 parseClientLine 이
+	# 그 줄을 버리므로 조용히 «유령이 하나도 없다» 가 된다.
+	ok "client_activity 가 유닉스 초" "yes" \
+		"$(printf '%s' "$CLINE" | awk -F'|' '{print ($5 ~ /^[0-9]{9,}$/) ? "yes" : "no"}')"
+	ok "그리고 최근이다 (10분 안)" "yes" \
+		"$(printf '%s' "$CLINE" | awk -F'|' -v n="$(date +%s)" \
+			'{print (n - $5 < 600) ? "yes" : "no"}')"
+
+	# detach-client -t <tty> 가 그 클라이언트만 끊고 세션은 남긴다.
+	TTY=$(printf '%s' "$CLINE" | cut -d'|' -f1)
+	t detach-client -t "$TTY" 2>/dev/null
+	for _ in $(seq 1 30); do
+		[ -z "$(t list-clients -F '#{client_tty}' 2>/dev/null)" ] && break
+		sleep 0.1
+	done
+	ok "detach-client -t <tty> 가 그 클라이언트를 끊는다" "" \
+		"$(t list-clients -F '#{client_tty}' 2>/dev/null)"
+	ok "세션은 살아 있다" "yes" \
+		"$(t has-session -t a 2>/dev/null && echo yes || echo no)"
+	kill "$SCRIPT_PID" 2>/dev/null || true
+	wait "$SCRIPT_PID" 2>/dev/null || true
+else
+	echo "  SKIP  script(1) 이 없어 pty 를 못 붙였습니다"
+fi
+
 echo
 if [ "$FAILED" -eq 0 ]; then
 	echo "$CHECKED 개 전부 통과 — $VERSION 에서 mux 의 가정이 유지됩니다."

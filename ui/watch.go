@@ -137,6 +137,17 @@ type watchModel struct {
 	// by hand from launching anything — the same reason exePath works that way.
 	editorBin string
 
+	// ghostIdle is how long a differently-sized client must sit idle before this
+	// panel disconnects it, resolved once at startup like every other
+	// preference here. Zero disables the check — which is what every test gets,
+	// the same mechanism exePath and editorBin use.
+	ghostIdle time.Duration
+
+	// lastGhostCheck is when the question was last asked. The panel ticks every
+	// two seconds; a terminal abandoned yesterday does not need answering that
+	// often, and there is one panel per window asking.
+	lastGhostCheck time.Time
+
 	// ownAttached is whether a client was in this pane's session as of the last
 	// refresh. Held so the *arrival* can be seen: a level would undo the user's
 	// own cursor two seconds after they moved it, an edge only fires when they
@@ -186,6 +197,10 @@ func RunWatch() error {
 	// which is the same answer an "off" option would have given and costs no
 	// configuration to reach.
 	editorBin := findEditor()
+	// A preference, read once for the same reason minWidth is: it does not
+	// change between ticks, and asking every two seconds costs a show-options
+	// per panel per tick to be told the same number.
+	ghostIdle := tmux.GhostClientIdle()
 	exe, exeErr := os.Executable()
 	if exeErr != nil {
 		// Not knowing what we are running disables the restart check and
@@ -200,6 +215,7 @@ func RunWatch() error {
 				minWindowWidth: minWidth,
 				showHeader:     header,
 				editorBin:      editorBin,
+				ghostIdle:      ghostIdle,
 				exePath:        exe,
 				// Taken here rather than on the first tick so the baseline is
 				// the file we actually started from. A tick later it may already
@@ -297,6 +313,19 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.events = combineEvents(m.shared, m.local)
 		return m, nil
 
+	case ghostDetachedMsg:
+		// Local, like a failed switch: several panels see the same ghost and one
+		// of them wins the race, so putting this in the shared log would draw a
+		// line in every window for something one pane did. The session named is
+		// the one the ghost was sitting in, which is the row a reader would go
+		// looking at.
+		m.local = pushEvents(m.local, []aiEvent{{
+			at: time.Now(), session: msg.session,
+			text: "⌁ 유령 클라이언트 분리: " + msg.tty + " (" + msg.size + ")",
+		}})
+		m.events = combineEvents(m.shared, m.local)
+		return m, nil
+
 	case eventsMergedMsg:
 		m.shared = msg.events
 		m.events = combineEvents(m.shared, m.local)
@@ -312,7 +341,17 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if stale {
 			return m.requestRestart()
 		}
-		return m, tea.Batch(loadSessions, watchTick(), adopt)
+		// Who is attached, at its own slower cadence. Last in the batch and
+		// last in the tick for a reason: it is the only thing here that acts on
+		// something outside this pane, so everything the user is looking at is
+		// already on its way before it runs.
+		var ghost tea.Cmd
+		if due, ok := m.dueForGhostCheck(time.Now()); ok {
+			m, ghost = due, ghostCheckCmd(m.ghostIdle)
+		} else {
+			m = due
+		}
+		return m, tea.Batch(loadSessions, watchTick(), adopt, ghost)
 
 	case sessionsLoadedMsg:
 		m.err = msg.err

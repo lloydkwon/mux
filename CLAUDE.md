@@ -363,6 +363,23 @@ Batching the correction into the switch — `switch-client … ; resize-pane …
 
 The real cure is environmental: a stale narrow client pinning one window is what makes that window the only one whose size changes. Detaching it removes the wobble entirely.
 
+**So the panel now removes it, on a timer** (`tmux/client.go`, `ui/watchghost.go`). The ghost is usually mux's own: `mux` typed outside tmux attaches and draws a popup (`AttachAndPopup`), and a terminal closed without quitting that popup leaves the attachment behind. Measured 2026-09-04 — a 269x69 client idle for seventeen hours held two windows at 269 while the live 237x53 client re-laid them out on every visit. That is the wobble `applyResize` had been correcting after the fact.
+
+`StaleClients` is pure and takes `now`, and **all four of its rules are load-bearing** because the action is disconnecting somebody's terminal:
+
+1. More than one client — a lone client is the user, however long they have been away.
+2. Its size differs from the newest client's. **This is the harm**, and fixing exactly the symptom is the point: a same-size idler changes no layout, so taking it would be tidying at the user's expense.
+3. Idle longer than the threshold.
+4. Not the newest client — that one *is* the user, by definition of the only signal there is.
+
+`@mux_ghost_client_idle` sets the threshold in minutes, read once in `RunWatch` like `MinWindowWidth`. **Zero is honoured here rather than falling back to the default**, unlike `MinWindowWidth`'s: this switch turns off something that disconnects a terminal, so "off" has to be reachable. Only a missing or unparseable value takes `DefaultGhostClientIdle` (30m).
+
+Three things keep it from firing where it should not. It runs on **its own minute cadence**, not the 2s tick — one panel per window all asking the same server about a terminal abandoned yesterday. It is a **`tea.Cmd`**, for the reason `mergeEventsCmd` is: `ui` has no mock runner, so doing it inline would make `go test ./ui` disconnect the developer's own terminal. And `ghostIdle` **zero disables the whole check**, which is what every hand-built `watchModel` in the tests carries — the same mechanism `exePath` and `editorBin` use.
+
+`DetachTTY` refuses an empty tty, and that guard is not cosmetic: `detach-client` with no `-t` disconnects whoever runs it, which from a panel is the user. `parseClientLine` drops a line it cannot fully parse for the mirror-image reason — a half-filled `Client` carries a zero `Activity`, which reads as epoch-old, precisely the shape that gets a client disconnected. The report goes to `m.local`, not the shared log: several panels see the same ghost and one wins the race, so sharing would draw a line in every window for what one pane did.
+
+`scripts/tmux-assumptions.sh` §11 measures the whole chain against a real client (attached through `script(1)`, skipped where that is missing): the five-field format, that `#{client_activity}` is **unix seconds** — `#{t:client_activity}` renders a locale-dependent string that cannot be parsed — and that `detach-client -t <tty>` takes that client and leaves the session running. 40/40 on tmux 3.4.
+
 `modeHelp` is the deliberate exception: it carries no state, so it has no sub-model struct, no `Model` field, and no completion message — just an enum value, a `case` in the mode dispatch that resets to `modeList` on any `tea.KeyMsg`, and `viewHelp` in `View`. Don't add a `helpModel` to make it match the others. It also renders through `fixedBox` instead of `viewWithOverlay`, because a centered box has no size bound and the page is taller than a `mux popup` gets on an 80x24 terminal (68x19) — that budget is pinned by `TestHelpBodyFitsPopup`, and adding a line to `renderHelpBody` will fail it.
 
 ### The palette is the terminal's

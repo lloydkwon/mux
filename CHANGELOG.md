@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The panel disconnects clients that were forgotten. A terminal left attached at
+  a different size is what makes tmux re-lay out a window on every visit — its
+  default `window-size latest` sizes a window to whichever client last used it —
+  and the panel had been correcting the result after the fact. The ghost is
+  usually mux's own: `mux` typed outside tmux attaches and draws a popup, and a
+  terminal closed without quitting that popup leaves the attachment. Measured
+  2026-09-04, a 269x69 client idle for seventeen hours held two windows at 269
+  while the live 237x53 client fought them back. Four rules gate it, and every
+  one has to hold before anything is disconnected: more than one client, a size
+  differing from the newest client's, idle past the threshold, and not the
+  newest client itself. `@mux_ghost_client_idle` sets that threshold in minutes
+  and `0` turns the whole thing off.
+
 ### Fixed
 - A panel no longer opens wider than half its window. The saved width is one
   number shared by every panel on the machine, and `split-window` took it
