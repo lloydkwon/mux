@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -118,7 +119,7 @@ func scanClaudeStatuses() map[string]ClaudeStatus {
 		if !ok {
 			continue
 		}
-		session := claudeSessionName(ref, panes)
+		session := claudeSessionName(ref, panes, status.PID)
 		if session == "" {
 			continue
 		}
@@ -255,32 +256,77 @@ func demoteServerShell(pid int) AIState {
 // for over half an hour because the session had been renamed `mux` → `my-mux`.
 //
 // So the pane id wins, and the recorded name is the fallback for the case the
-// pane list could not be read at all.
-func claudeSessionName(ref string, panes map[string]string) string {
-	if name, ok := panes[tmuxPaneID(ref)]; ok {
-		return name
+// pane list could not be read at all — «that case only».
+//
+// A pane the list does not contain is a pane that is gone, and the file naming
+// it is a ghost: Claude leaves the file behind, and the process can outlive its
+// pane (a window closed while the process kept running). Letting that file fall
+// back to the session *name* lets a ghost claim a session that is very much
+// alive. Measured: `my-mux` carried two files — this session at `@0.%0`, and a
+// two-day-old `idle` one at `@27.%83`, a window that no longer existed. Whenever
+// the live session was running a background shell its state ranked `shell`(1),
+// below the ghost's `idle`(2), so moreUrgent handed the row to the ghost and the
+// panel showed `✅ my-mux 1d` for a session that had just done something.
+//
+// nil means the pane list could not be read at all — there the recorded name is
+// all there is, and it is better than nothing. An empty-but-non-nil map means
+// tmux answered and knows of no panes, which is the ghost case again.
+//
+// A matching pane id is not enough on its own. Ids restart at %0 when a tmux
+// server does, so a file from a previous server can name a pane that now belongs
+// to somebody else — measured, `dimont-onboarding:@0.%0` written three days
+// earlier matched the current server's %0, which was `my-mux`, and the panel
+// showed a dead session's finished turn on a live one. So the process has to
+// live in that pane too. Where that cannot be determined (no /proc) the pane
+// match stands, which is what mux did before this check existed.
+func claudeSessionName(ref string, panes map[string]paneInfo, pid int) string {
+	if p, ok := panes[tmuxPaneID(ref)]; ok {
+		if under, known := pidInPane(pid, p.pid); known && !under {
+			return ""
+		}
+		return p.session
 	}
-	return tmuxSessionName(ref)
+	if panes == nil {
+		return tmuxSessionName(ref)
+	}
+	return ""
 }
+
+// pidInPane is a seam: the scan is otherwise pure given its inputs, and tests
+// cannot conjure a real process tree. The same shape as isAlive.
+var pidInPane = pidUnder
 
 // paneSessions maps every live pane id to the session holding it. Returns nil
 // when tmux cannot be asked, which callers read as "no pane is known" and fall
 // back to the name Claude recorded.
-func paneSessions() map[string]string {
-	out, err := runner.Output("tmux", "list-panes", "-a", "-F", "#{pane_id} #{session_name}")
+// paneInfo is what a live pane says about itself: which session it is in, and
+// what process sits at the top of it. The pid is what tells a matching pane id
+// apart from a *reused* one — see pidUnder.
+type paneInfo struct {
+	session string
+	pid     int
+}
+
+func paneSessions() map[string]paneInfo {
+	out, err := runner.Output("tmux", "list-panes", "-a", "-F", "#{pane_id} #{pane_pid} #{session_name}")
 	if err != nil {
 		return nil
 	}
 
-	result := make(map[string]string)
+	result := make(map[string]paneInfo)
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		// Pane id first, because a session name may contain spaces and a pane id
-		// never does.
-		id, name, found := strings.Cut(line, " ")
-		if !found || id == "" || name == "" {
+		// Pane id first, then pid, because a session name may contain spaces and
+		// neither of the first two ever does — so the name takes the remainder.
+		id, rest, found := strings.Cut(line, " ")
+		if !found || id == "" {
 			continue
 		}
-		result[id] = name
+		pidStr, name, found := strings.Cut(rest, " ")
+		if !found || name == "" {
+			continue
+		}
+		pid, _ := strconv.Atoi(pidStr)
+		result[id] = paneInfo{session: name, pid: pid}
 	}
 	return result
 }

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A session's AI badge no longer picks up a state file belonging to a pane on a
+  different tmux server. Claude Code records the pane it runs in as
+  `<session>:@<window>.%<pane>`, and pane ids restart from `%0` on every new
+  server — so a state file left by a session on a server that has since died
+  matched whichever pane happens to hold `%0` now, and its badge and age were
+  drawn on an unrelated session. Observed as `my-mux` reporting `1d` minutes
+  after it was started. The pane's own pid is now required to be an ancestor of
+  the process the file names, and a file whose pane cannot be found is dropped
+  rather than falling back to the session name in the reference.
+
 ### Added
 - Right-clicking a session in the panel opens its project folder in VS Code.
   A left click still switches to the session and nothing else; the right button

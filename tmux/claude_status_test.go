@@ -43,13 +43,16 @@ func withClaudeSessions(t *testing.T, files map[string]string, aliveFn func(int,
 	oldRunner := runner
 	SetRunner(newMockRunner())
 
-	oldHome, oldAlive := homeDir, isAlive
+	oldHome, oldAlive, oldUnder := homeDir, isAlive, pidInPane
 	homeDir = func() (string, error) { return home, nil }
 	isAlive = aliveFn
+	// 기본은 「모른다」다. 진짜 /proc 을 읽게 두면 픽스처의 낮은 pid 가 이 기계에
+	// 실제로 존재해 답이 기계마다 달라진다 — 한 번 그렇게 깨졌다.
+	pidInPane = func(int, int) (bool, bool) { return false, false }
 	resetClaudeStatusCache()
 	defer func() {
 		runner = oldRunner
-		homeDir, isAlive = oldHome, oldAlive
+		homeDir, isAlive, pidInPane = oldHome, oldAlive, oldUnder
 		resetClaudeStatusCache()
 	}()
 
@@ -304,7 +307,7 @@ func withClaudePanes(t *testing.T, files map[string]string, panes string, fn fun
 	t.Helper()
 	withClaudeSessions(t, files, nil, func() {
 		m := newMockRunner()
-		m.OnOutput([]byte(panes), nil, "tmux", "list-panes", "-a", "-F", "#{pane_id} #{session_name}")
+		m.OnOutput([]byte(panes), nil, "tmux", "list-panes", "-a", "-F", "#{pane_id} #{pane_pid} #{session_name}")
 		old := runner
 		SetRunner(m)
 		resetClaudeStatusCache()
@@ -325,7 +328,7 @@ func withClaudePanes(t *testing.T, files map[string]string, panes string, fn fun
 func TestScanClaudeStatusesFollowsARenamedSession(t *testing.T) {
 	files := map[string]string{"15767.json": fixtureWaiting} // recorded "myname:@0.%0"
 
-	withClaudePanes(t, files, "%0 renamed-later\n", func() {
+	withClaudePanes(t, files, "%0 111 renamed-later\n", func() {
 		got := scanClaudeStatuses()
 
 		if _, stale := got["myname"]; stale {
@@ -357,19 +360,19 @@ func TestScanClaudeStatusesFallsBackToTheRecordedName(t *testing.T) {
 	})
 }
 
-// A session name may contain spaces; a pane id never does, which is why the
-// pane id leads the format.
-func TestPaneSessionsSplitOnTheFirstSpaceOnly(t *testing.T) {
+// A session name may contain spaces; neither a pane id nor a pid ever does,
+// which is why those two lead the format and the name takes the remainder.
+func TestPaneSessionsSplitOnTheFirstSpacesOnly(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
-		m.OnOutput([]byte("%0 my project\n%1 solo\n"), nil,
-			"tmux", "list-panes", "-a", "-F", "#{pane_id} #{session_name}")
+		m.OnOutput([]byte("%0 111 my project\n%1 222 solo\n"), nil,
+			"tmux", "list-panes", "-a", "-F", "#{pane_id} #{pane_pid} #{session_name}")
 
 		got := paneSessions()
-		if got["%0"] != "my project" {
-			t.Errorf("pane %%0 = %q, want %q", got["%0"], "my project")
+		if got["%0"].session != "my project" || got["%0"].pid != 111 {
+			t.Errorf("pane %%0 = %+v, want {my project 111}", got["%0"])
 		}
-		if got["%1"] != "solo" {
-			t.Errorf("pane %%1 = %q, want %q", got["%1"], "solo")
+		if got["%1"].session != "solo" || got["%1"].pid != 222 {
+			t.Errorf("pane %%1 = %+v, want {solo 222}", got["%1"])
 		}
 	})
 }
@@ -414,4 +417,69 @@ func TestClaudeTaskNameDropsAUserSetName(t *testing.T) {
 			t.Errorf("nameSource %q: got %q, want %q", c.source, got, c.want)
 		}
 	}
+}
+
+// pane id 가 맞아도 그 프로세스가 거기 살지 않으면 세션을 차지하면 안 된다.
+//
+// tmux 서버가 새로 뜨면 pane id 는 %0 부터 다시 시작한다. 그래서 이전 서버가 쓴
+// 상태 파일이 지금 서버의 남의 pane 을 정확히 가리킬 수 있다. 실측: 3일 된
+// `dimont-onboarding:@0.%0` 이 현재 서버의 %0(=my-mux) 에 붙어, 방금 무언가를 한
+// 세션 옆에 죽은 세션의 「작업 완료」가 떴다. 가르는 것은 이름이 아니라 프로세스다.
+func TestScanClaudeStatusesIgnoresAReusedPaneID(t *testing.T) {
+	live := `{"pid":100,"tmux":"work:@0.%0","status":"shell","statusUpdatedAt":1786273497562}`
+	ghost := `{"pid":200,"tmux":"gone:@0.%0","status":"idle","statusUpdatedAt":1786000000000}`
+
+	withClaudePanes(t, map[string]string{"1-live.json": live, "2-ghost.json": ghost},
+		"%0 111 work\n", func() {
+			// pane %0 의 프로세스는 111 이고, 거기 사는 것은 100 뿐이다.
+			pidInPane = func(pid, anc int) (bool, bool) { return pid == 100 && anc == 111, true }
+			got := scanClaudeStatuses()
+			s, ok := got["work"]
+			if !ok {
+				t.Fatal("살아 있는 세션이 사라졌다")
+			}
+			if s.PID != 100 {
+				t.Errorf("pid %d 가 이겼다 — 재사용된 pane id 로 유령이 세션을 차지했다", s.PID)
+			}
+			if len(got) != 1 {
+				t.Errorf("항목이 %d 개다: %v — 유령이 자기 항목을 만들었다", len(got), got)
+			}
+		})
+}
+
+// 없어진 pane 을 가리키는 상태 파일도 그 세션을 차지하면 안 된다.
+//
+// 프로세스가 자기 pane 보다 오래 살 수 있다(창을 닫아도 프로세스는 돈다). 그 파일이
+// 세션 «이름» 으로 폴백하면 살아 있는 세션의 행을 유령이 가져간다. 실측: my-mux 에
+// 파일이 둘이었고, 없는 창 @27.%83 의 이틀 된 idle 이 배경 셸 때문에 shell(1) 이 된
+// 살아 있는 쪽을 urgency 로 눌렀다.
+func TestScanClaudeStatusesIgnoresAGhostPane(t *testing.T) {
+	live := `{"pid":100,"tmux":"work:@0.%0","status":"shell","statusUpdatedAt":1786273497562}`
+	ghost := `{"pid":200,"tmux":"work:@27.%83","status":"idle","statusUpdatedAt":1786000000000}`
+
+	withClaudePanes(t, map[string]string{"1-live.json": live, "2-ghost.json": ghost},
+		"%0 111 work\n", func() {
+			got := scanClaudeStatuses()
+			s, ok := got["work"]
+			if !ok {
+				t.Fatal("살아 있는 세션이 사라졌다")
+			}
+			if s.PID != 100 {
+				t.Errorf("pid %d 가 이겼다 — 없는 pane 의 유령이 세션을 차지했다", s.PID)
+			}
+		})
+}
+
+// 폴백 자체는 남아 있어야 한다. pane 목록을 «아예 못 읽었을» 때는 Claude 가 적어 둔
+// 이름이 가진 전부이고, 그때 버리면 tmux 밖에서 도는 mux 가 배지를 통째로 잃는다.
+func TestScanClaudeStatusesFallsBackWhenPanesUnreadable(t *testing.T) {
+	files := map[string]string{
+		"1.json": `{"pid":100,"tmux":"work:@0.%0","status":"busy","statusUpdatedAt":1786273497562}`,
+	}
+	// withClaudeSessions 의 빈 mock 은 list-panes 에 에러를 돌려준다 = nil 목록.
+	withClaudeSessions(t, files, nil, func() {
+		if s, ok := scanClaudeStatuses()["work"]; !ok || s.PID != 100 {
+			t.Errorf("pane 목록을 못 읽었을 때 이름 폴백이 사라졌다: %v", scanClaudeStatuses())
+		}
+	})
 }
