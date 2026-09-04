@@ -104,6 +104,20 @@ func TogglePanel(target string, auto bool) error {
 		return nil
 	}
 
+	// The window width is wanted twice — by the auto gate below and by the width
+	// clamp further down — but only sometimes, and the gate's earlier checks
+	// short-circuit more often than not. Read at most once, and only if asked.
+	winWidth, winWidthRead := 0, false
+	windowWidth := func() (int, bool) {
+		if !winWidthRead {
+			winWidthRead = true
+			if w, err := WindowWidth(target); err == nil {
+				winWidth = w
+			}
+		}
+		return winWidth, winWidth > 0
+	}
+
 	session, sessionErr := SessionForPane(target)
 	if auto {
 		// A session the tmux-project profile opened belongs to one VS Code
@@ -118,7 +132,7 @@ func TogglePanel(target string, auto bool) error {
 		if sessionErr == nil && SessionOnlyInVSCode(session) {
 			return nil
 		}
-		if w, err := WindowWidth(target); err == nil && w < MinWindowWidth() {
+		if w, ok := windowWidth(); ok && w < MinWindowWidth() {
 			return nil
 		}
 	} else {
@@ -142,6 +156,20 @@ func TogglePanel(target string, auto bool) error {
 	width := defaultPanelWidth
 	if w := SavedPanelWidth(); w > 0 {
 		width = w
+	}
+	// Never open past half the window. The saved width is one number shared by
+	// every panel on the machine, so a window narrower than the one it was
+	// dragged in would otherwise open a panel wider than the work pane — and
+	// `mux watch` would shrink it on its first frame, which is a flash of the
+	// wrong size on every window the panel appears in. Clamping here is the
+	// same rule the panel holds itself to, applied before anyone can see it.
+	if w, ok := windowWidth(); ok && width > MaxPanelWidth(w) {
+		width = MaxPanelWidth(w)
+	}
+	if width < MinPanelWidth {
+		// A window too small for the floor is one the gate above should already
+		// have refused; if it got here anyway, the floor wins over the ceiling.
+		width = MinPanelWidth
 	}
 
 	// -d keeps the focus in the pane you were working in. No -b, so the panel

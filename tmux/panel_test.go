@@ -1101,3 +1101,58 @@ func TestWindowShapeRefusesAPartialAnswer(t *testing.T) {
 		})
 	}
 }
+
+// 저장폭은 기계 전체가 공유하는 숫자 하나다. 그것을 드래그한 창보다 좁은 창에서
+// 패널을 열면, 작업 pane 보다 넓은 패널이 열리고 `mux watch` 가 첫 프레임에 줄인다 —
+// 패널이 뜨는 모든 창에서 잘못된 크기가 한 번씩 번쩍인다. 창의 절반이 상한이고,
+// 그 상한은 아무도 보기 전에 여기서 적용돼야 한다.
+func TestTogglePanelClampsTheSavedWidthToHalfTheWindow(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
+			"-F", "#{pane_id} #{pane_start_command}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
+		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
+		// 149칸 창 — VS Code 통합 터미널 크기. 천장은 74.
+		m.OnOutput([]byte("149\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
+
+		if err := SavePanelWidth(100); err != nil {
+			t.Fatalf("SavePanelWidth: %v", err)
+		}
+		if err := TogglePanel("%3", false); err != nil {
+			t.Fatalf("TogglePanel: %v", err)
+		}
+		if !ran(m, "-l 74 ") {
+			t.Errorf("ran %v, want the ceiling 74 rather than the saved 100", m.runs)
+		}
+		// 상한은 깎기만 하고 되쓰지 않는다 — 좁은 창 하나가 나머지 패널을 끌어내리면
+		// 안 된다. adoptSavedWidth 가 지키는 규칙과 같은 규칙이다.
+		if w := SavedPanelWidth(); w != 100 {
+			t.Errorf("saved width is now %d — the clamp leaked into the global value", w)
+		}
+	})
+}
+
+// 창 폭을 못 읽으면 상한도 없다. 모르는 것을 근거로 폭을 깎느니 저장폭을 그대로
+// 쓰는 편이 낫다 — 후자는 패널이 한 번 줄어들 뿐이고, 전자는 멀쩡한 창에서 패널을
+// 반으로 자른다.
+func TestTogglePanelKeepsTheSavedWidthWhenTheWindowWillNotSay(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		mockPanelWindow(m)
+		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
+			"-F", "#{pane_id} #{pane_start_command}")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
+		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
+		// #{window_width} 는 모킹하지 않는다 = 읽기 실패.
+
+		if err := SavePanelWidth(52); err != nil {
+			t.Fatalf("SavePanelWidth: %v", err)
+		}
+		if err := TogglePanel("%3", false); err != nil {
+			t.Fatalf("TogglePanel: %v", err)
+		}
+		if !ran(m, "-l 52 ") {
+			t.Errorf("ran %v, want the saved width 52", m.runs)
+		}
+	})
+}

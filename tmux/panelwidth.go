@@ -16,6 +16,23 @@ import (
 // hand-edited file open a pane the renderer immediately gives up on.
 const MinPanelWidth = 24
 
+// MaxPanelWidth is the widest the panel may be held at: half its window.
+//
+// The counterpart to MinPanelWidth, and here for the same reason — it is the
+// ceiling on both sides of the round trip. TogglePanel clamps the width it opens
+// a panel at, and the panel itself clamps what it will hold; two copies of the
+// number would let a panel open at a width it immediately rejects, which is a
+// guaranteed flash of the wrong size on every window it appears in.
+//
+// A width the panel arrives at by accident must not become the width it
+// enforces. MinPanelWidth stops a transient squeeze from sticking; this stops
+// the opposite, which is worse: the panel is a sidebar, and past half the window
+// the pane you actually work in is the one being squeezed.
+//
+// Half rather than a fixed column count because the only thing that matters is
+// what is left over, and that scales with the window.
+func MaxPanelWidth(winWidth int) int { return winWidth / 2 }
+
 // panelStateFile locates the file the panel's width is remembered in.
 //
 // A variable so tests can point it somewhere disposable — the same seam

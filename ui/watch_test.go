@@ -853,9 +853,11 @@ func TestAdoptSavedWidthClampsWithoutWritingBack(t *testing.T) {
 		t.Fatalf("SavePanelWidth: %v", err)
 	}
 
-	// 창이 90칸이면 천장은 45.
+	// 창이 90칸이면 천장은 45. 순수 쪽을 부르는 것이 중요하다 — adoptSavedWidth 는
+	// 천장이 물 때 창 폭을 다시 읽으므로, 여기서 부르면 개발자의 실제 tmux 서버를
+	// 때리고 그 서버의 창 폭으로 답이 바뀐다.
 	m := watchModel{winWidth: 90, winPanes: 2, targetWidth: 36}
-	clamped, cmd := m.adoptSavedWidth()
+	clamped, cmd := m.adoptSavedWidthWith(tmux.SavedPanelWidth(), m.winWidth)
 	if clamped.targetWidth != 45 {
 		t.Errorf("target = %d, want the ceiling 45", clamped.targetWidth)
 	}
@@ -940,5 +942,57 @@ func TestOpenHistoryAddsNoCursorStops(t *testing.T) {
 	// folding has to hold for all of them.
 	if got, want := len(m.sessionOrder()), len(m.sessions); got != want {
 		t.Errorf("cursor stops = %d for %d sessions — event rows became stops", got, want)
+	}
+}
+
+// 첫 프레임이 천장에 걸려 폭을 깎는 것은 옳다. 그 값을 전역 저장본에 되쓰는 것은
+// 아니다 — "adoption clamps and never writes back" 이 좁은 창 하나가 나머지 패널을
+// 전부 자기 크기로 끌어내리는 것을 막는 규칙인데, 이 분기가 그걸 깨고 있었다.
+// 실제로 관측됐다: 172칸짜리 일회용 창 하나가 저장폭을 52에서 43으로 내렸다.
+func TestFirstSizeClampDoesNotWriteBack(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := tmux.SavePanelWidth(100); err != nil {
+		t.Fatalf("SavePanelWidth: %v", err)
+	}
+
+	// 149칸 창에 100칸으로 열렸다 — 천장은 74.
+	m := watchModel{}
+	clamped, cmd := m.applyResizeWith(100, 149, 2)
+	if clamped.targetWidth != 74 {
+		t.Errorf("target = %d, want the ceiling 74", clamped.targetWidth)
+	}
+	if cmd == nil {
+		t.Fatal("an oversize first size scheduled no correction")
+	}
+	// cmd 를 실행해도 디스크가 바뀌면 안 된다. restorePanelWidth 만 들어 있어야 한다.
+	cmd()
+	if w := tmux.SavedPanelWidth(); w != 100 {
+		t.Errorf("saved width is now %d — the first frame wrote its clamp to the shared file", w)
+	}
+}
+
+// 천장은 "지금" 창 폭으로 계산해야 한다. m.winWidth 는 갱신되지 않는 경로가 넷이라
+// 낡을 수 있고, 낡은 값으로 깎으면 다음 틱이 올바른 천장으로 다시 조정하면서 2초
+// 간격의 흔들림이 된다 — 정확히 watchInterval 만큼 떨어진 두 번의 리사이즈.
+func TestAdoptSavedWidthUsesTheWindowItIsGiven(t *testing.T) {
+	m := watchModel{targetWidth: 36}
+
+	// 넓은 창 기준이면 저장폭이 그대로 통과한다.
+	wide, cmd := m.adoptSavedWidthWith(100, 269)
+	if wide.targetWidth != 100 || cmd == nil {
+		t.Errorf("target = %d (cmd nil: %v), want the saved 100", wide.targetWidth, cmd == nil)
+	}
+
+	// 같은 저장폭이라도 좁은 창에서는 천장에 걸린다. 두 답이 다르다는 것이,
+	// 어느 창 폭을 넘기느냐가 실제로 결과를 바꾼다는 뜻이다.
+	narrow, cmd := m.adoptSavedWidthWith(100, 149)
+	if narrow.targetWidth != 74 || cmd == nil {
+		t.Errorf("target = %d (cmd nil: %v), want the ceiling 74", narrow.targetWidth, cmd == nil)
+	}
+
+	// 창 폭을 모르면 천장도 없다 — 모르는 것을 근거로 깎지 않는다.
+	unknown, _ := m.adoptSavedWidthWith(100, 0)
+	if unknown.targetWidth != 100 {
+		t.Errorf("target = %d, want the saved 100 when the window is unknown", unknown.targetWidth)
 	}
 }

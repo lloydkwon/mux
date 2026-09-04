@@ -572,11 +572,15 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth, winPanes int) (watchMod
 			// window, or one saved before the ceiling existed. Correct it now
 			// rather than leaving the work pane squeezed until something else
 			// happens to trigger a re-layout.
+			// Corrected, but *not* remembered. "Adoption clamps and never writes
+			// back" is the rule that keeps one narrow window from dragging every
+			// other panel down to its size, and this branch used to break it:
+			// a panel opening in a 149-column window wrote its 74 to the shared
+			// panel.json, and every other panel adopted 74 within two ticks.
+			// Observed in the field while reproducing an unrelated bug — a
+			// throwaway 172-column window took the saved width from 52 to 43.
 			m.targetWidth = maxPanelWidth(winWidth)
-			return m, tea.Batch(
-				restorePanelWidth(m.targetWidth),
-				rememberPanelWidth(m.targetWidth),
-			)
+			return m, restorePanelWidth(m.targetWidth)
 		case paneWidth >= notifyMinWidth:
 			m.targetWidth = paneWidth
 		}
@@ -674,12 +678,39 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth, winPanes int) (watchMod
 // already wanted is not a drag and remembers nothing.
 func (m watchModel) adoptSavedWidth() (watchModel, tea.Cmd) {
 	saved := tmux.SavedPanelWidth()
+	winWidth := m.winWidth
+
+	// m.winWidth is the window size the last resize *event* reported, and there
+	// are four ways it goes stale: a window that changes size without changing
+	// this pane's (no WindowSizeMsg at all), a mid-relayout reading of zero, a
+	// narrow reading, and a border drag — none of them update it. Clamping
+	// against a stale number is what turns one re-layout into two visible
+	// corrections two seconds apart, which is exactly the wobble this is meant
+	// to prevent.
+	//
+	// So re-read, but only when the ceiling would actually bite. In the ordinary
+	// case — a saved width comfortably under half the window — this costs no
+	// tmux call at all, which is what keeps a two-second tick cheap.
+	if saved > 0 && winWidth > 0 && saved > maxPanelWidth(winWidth) {
+		if w, _, err := tmux.WindowShape(selfPane()); err == nil && w > 0 {
+			winWidth = w
+			m.winWidth = w
+		}
+	}
+	return m.adoptSavedWidthWith(saved, winWidth)
+}
+
+// adoptSavedWidthWith is the decision itself, split out so it can be tested
+// without a tmux server — the same shape as applyResize/applyResizeWith, and for
+// the same reason: `ui` has no mock runner, so a pure function is the only way
+// to test this without resizing the developer's own panel.
+func (m watchModel) adoptSavedWidthWith(saved, winWidth int) (watchModel, tea.Cmd) {
 	if saved <= 0 {
 		return m, nil
 	}
 	want := saved
-	if m.winWidth > 0 && want > maxPanelWidth(m.winWidth) {
-		want = maxPanelWidth(m.winWidth)
+	if winWidth > 0 && want > maxPanelWidth(winWidth) {
+		want = maxPanelWidth(winWidth)
 	}
 	if want < notifyMinWidth || want == m.targetWidth {
 		return m, nil
@@ -688,17 +719,12 @@ func (m watchModel) adoptSavedWidth() (watchModel, tea.Cmd) {
 	return m, restorePanelWidth(want)
 }
 
-// maxPanelWidth is the widest the panel may be held at: half its window.
-//
-// The ceiling is the counterpart to notifyMinWidth, and it exists for the same
-// reason — a width the panel arrives at by accident must not become the width it
-// enforces. The lower clamp stops a transient squeeze from sticking; this one
-// stops the opposite, which is worse: the panel is a sidebar, and past half the
-// window the pane you actually work in is the one being squeezed.
-//
-// Half rather than a fixed number of columns because the only thing that matters
-// is what is left over, and that scales with the window.
-func maxPanelWidth(winWidth int) int { return winWidth / 2 }
+// maxPanelWidth is an alias of tmux.MaxPanelWidth, the way notifyMinWidth is one
+// of tmux.MinPanelWidth. The number has to be the same on both ends of the round
+// trip: TogglePanel clamps the width it opens a panel at, and this clamps what
+// the panel will hold. Two copies would let a panel open at a width it rejects
+// on its first frame.
+func maxPanelWidth(winWidth int) int { return tmux.MaxPanelWidth(winWidth) }
 
 // rememberPanelWidth records the pane's width, so every panel — this one after
 // a reopen, and the others on their next tick — comes back at the size the user

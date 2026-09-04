@@ -8,15 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- A session's AI badge no longer picks up a state file belonging to a pane on a
-  different tmux server. Claude Code records the pane it runs in as
-  `<session>:@<window>.%<pane>`, and pane ids restart from `%0` on every new
-  server — so a state file left by a session on a server that has since died
-  matched whichever pane happens to hold `%0` now, and its badge and age were
-  drawn on an unrelated session. Observed as `my-mux` reporting `1d` minutes
-  after it was started. The pane's own pid is now required to be an ancestor of
-  the process the file names, and a file whose pane cannot be found is dropped
-  rather than falling back to the session name in the reference.
+- A panel no longer opens wider than half its window. The saved width is one
+  number shared by every panel on the machine, and `split-window` took it
+  unclamped — so a window narrower than the one it was dragged in got a panel
+  wider than the work pane, which `mux watch` then shrank on its first frame.
+  That was a flash of the wrong size on every window the panel appeared in, and
+  it was guaranteed rather than occasional. The ceiling now applies before the
+  pane is created, and it is the same `MaxPanelWidth` the panel holds itself to
+  — it moved into the `tmux` package for that reason, the way `MinPanelWidth`
+  already had.
+- A panel that has to clamp its width no longer writes the clamped value to the
+  shared `panel.json`. "Adoption clamps and never writes back" is what stops one
+  narrow window from dragging every other panel down to its size, and the
+  first-frame branch broke it: a panel opening in a 149-column window wrote its
+  74 to the shared file, and every other panel adopted 74 within two ticks.
+  Observed by accident while reproducing an unrelated bug — a throwaway
+  172-column window took the saved width from 52 to 43 and five live panels
+  followed it down.
+- The panel's tick no longer measures the ceiling against a stale window width.
+  `m.winWidth` is whatever the last resize *event* reported, and four paths
+  leave it behind: a window that changes size without changing this pane's, a
+  mid-relayout reading of zero, a narrow reading, and a border drag. Clamping
+  against a stale number turned one re-layout into two visible corrections
+  exactly `watchInterval` apart. The window is now re-read, but only when the
+  ceiling would actually bite, so the ordinary tick still costs no tmux call.
 
 ### Added
 - Right-clicking a session in the panel opens its project folder in VS Code.
