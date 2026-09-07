@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A session coming back after a tmux server restart no longer floods the panel's
+  recent-events list with its own history. It gets its last event back — the one
+  line the panel draws under it — instead of everything the archive held. With a
+  single session back on a fresh server, the whole fifty-entry log had been
+  filling with entries from before the restart, so the panel showed six-hour-old
+  work on a one-minute-old server.
+
 ### Added
 - The panel disconnects clients that were forgotten. A terminal left attached at
   a different size is what makes tmux re-lay out a window on every visit — its

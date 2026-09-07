@@ -114,12 +114,25 @@ func MergeEvents(fresh []PanelEvent, live []string) []PanelEvent {
 	archiveLoaded := false
 	if missing := missingSessions(events, live); len(missing) > 0 {
 		archive, archiveLoaded = loadArchive(), true
+		// 세션당 **한 건**만 가져온다. archive 는 최신순이라 첫 매치가 그 세션의
+		// 마지막 소식이고, 그게 정확히 패널이 세션마다 그리는 한 줄이다.
+		//
+		// 전부 가져오면 어떻게 되는지는 실측했다. 2026-09-07 WSL 이 재부팅되고
+		// 세션이 my-mux 하나만 돌아온 순간, 그 세션의 아카이브 이력 전체가 실려
+		// trimLog 의 50칸을 재부팅 *이전* 항목으로 가득 채웠다 — "최근 이벤트"가
+		// 여섯 시간 전 내용이 됐다. 옵션은 지금 이 서버에서 무슨 일이 있었는지를
+		// 말하는 자리이고, 사라진 서버의 이력이 그 자리를 두고 경쟁하면 안 된다.
+		// 더 오래된 것이 필요하면 아카이브에 그대로 있다.
 		for _, e := range archive {
 			if !missing[e.Session] || duplicateAt(events, e) >= 0 {
 				continue
 			}
 			events = append(events, e)
+			delete(missing, e.Session)
 			added = true
+			if len(missing) == 0 {
+				break
+			}
 		}
 	}
 

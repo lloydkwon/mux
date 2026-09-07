@@ -85,6 +85,39 @@ func TestArchiveKeepsWhatTrimLogDropped(t *testing.T) {
 	})
 }
 
+// 돌아온 세션은 마지막 한 건만 받는다.
+//
+// 2026-09-07 WSL 재부팅 직후 my-mux 하나만 살아 돌아왔고, 그 세션의 아카이브
+// 이력 전체가 실려 옵션 50칸이 재부팅 이전 항목으로 가득 찼다 — 패널의
+// "최근 이벤트"가 여섯 시간 전 내용이 됐다. 옵션은 지금 이 서버의 소식을 담는
+// 자리다.
+func TestBackfillTakesOnlyTheLatestPerSession(t *testing.T) {
+	freezeNow(t, 1000)
+	withMock(t, func(m *mockRunner) {
+		seedArchive(t, []PanelEvent{
+			ev("b", AIStateReady, 500, 500),
+			ev("b", AIStateWorking, 400, 400),
+			ev("b", AIStateReady, 300, 300),
+		})
+		mockEventLog(m, []PanelEvent{ev("a", AIStateWorking, 600, 600)})
+
+		got := MergeEvents(nil, []string{"a", "b"})
+
+		var bs []PanelEvent
+		for _, e := range got {
+			if e.Session == "b" {
+				bs = append(bs, e)
+			}
+		}
+		if len(bs) != 1 {
+			t.Fatalf("b 를 %d건 채웠다, 1건이어야 한다: %+v", len(bs), bs)
+		}
+		if bs[0].At != 500 {
+			t.Fatalf("가장 최근 것이 아니다: %+v", bs[0])
+		}
+	})
+}
+
 // 보관본에만 있는 세션은 옵션으로 새어 나가지 않는다 — 패널이 없는 세션을 그리면 안 된다.
 func TestMergeEventsDoesNotResurrectDeadSessions(t *testing.T) {
 	freezeNow(t, 1000)
