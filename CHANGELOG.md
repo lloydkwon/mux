@@ -5,15 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Fixed
-- A session coming back after a tmux server restart no longer floods the panel's
-  recent-events list with its own history. It gets its last event back — the one
-  line the panel draws under it — instead of everything the archive held. With a
-  single session back on a fresh server, the whole fifty-entry log had been
-  filling with entries from before the restart, so the panel showed six-hour-old
-  work on a one-minute-old server.
+## [0.3.9] - 2026-09-07
 
 ### Added
 - The panel disconnects clients that were forgotten. A terminal left attached at
@@ -28,34 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   differing from the newest client's, idle past the threshold, and not the
   newest client itself. `@mux_ghost_client_idle` sets that threshold in minutes
   and `0` turns the whole thing off.
-
-### Fixed
-- A panel no longer opens wider than half its window. The saved width is one
-  number shared by every panel on the machine, and `split-window` took it
-  unclamped — so a window narrower than the one it was dragged in got a panel
-  wider than the work pane, which `mux watch` then shrank on its first frame.
-  That was a flash of the wrong size on every window the panel appeared in, and
-  it was guaranteed rather than occasional. The ceiling now applies before the
-  pane is created, and it is the same `MaxPanelWidth` the panel holds itself to
-  — it moved into the `tmux` package for that reason, the way `MinPanelWidth`
-  already had.
-- A panel that has to clamp its width no longer writes the clamped value to the
-  shared `panel.json`. "Adoption clamps and never writes back" is what stops one
-  narrow window from dragging every other panel down to its size, and the
-  first-frame branch broke it: a panel opening in a 149-column window wrote its
-  74 to the shared file, and every other panel adopted 74 within two ticks.
-  Observed by accident while reproducing an unrelated bug — a throwaway
-  172-column window took the saved width from 52 to 43 and five live panels
-  followed it down.
-- The panel's tick no longer measures the ceiling against a stale window width.
-  `m.winWidth` is whatever the last resize *event* reported, and four paths
-  leave it behind: a window that changes size without changing this pane's, a
-  mid-relayout reading of zero, a narrow reading, and a border drag. Clamping
-  against a stale number turned one re-layout into two visible corrections
-  exactly `watchInterval` apart. The window is now re-read, but only when the
-  ceiling would actually bite, so the ordinary tick still costs no tmux call.
-
-### Added
 - Right-clicking a session in the panel opens its project folder in VS Code.
   A left click still switches to the session and nothing else; the right button
   is the other half of the move, and it deliberately does *not* switch — opening
@@ -84,6 +48,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under WSL a tmux server outliving its WSL session carries a dead
   `WSL_INTEROP`, after which every launch fails — fire-and-forget would make
   that look exactly like the click doing nothing.
+
+### Fixed
+- A session coming back after a tmux server restart no longer floods the panel's
+  recent-events list with its own history. It gets its last event back — the one
+  line the panel draws under it — instead of everything the archive held. With a
+  single session back on a fresh server, the whole fifty-entry log had been
+  filling with entries from before the restart, so the panel showed six-hour-old
+  work on a one-minute-old server.
+- A panel no longer opens wider than half its window. The saved width is one
+  number shared by every panel on the machine, and `split-window` took it
+  unclamped — so a window narrower than the one it was dragged in got a panel
+  wider than the work pane, which `mux watch` then shrank on its first frame.
+  That was a flash of the wrong size on every window the panel appeared in, and
+  it was guaranteed rather than occasional. The ceiling now applies before the
+  pane is created, and it is the same `MaxPanelWidth` the panel holds itself to
+  — it moved into the `tmux` package for that reason, the way `MinPanelWidth`
+  already had.
+- A panel that has to clamp its width no longer writes the clamped value to the
+  shared `panel.json`. "Adoption clamps and never writes back" is what stops one
+  narrow window from dragging every other panel down to its size, and the
+  first-frame branch broke it: a panel opening in a 149-column window wrote its
+  74 to the shared file, and every other panel adopted 74 within two ticks.
+  Observed by accident while reproducing an unrelated bug — a throwaway
+  172-column window took the saved width from 52 to 43 and five live panels
+  followed it down.
+- The panel's tick no longer measures the ceiling against a stale window width.
+  `m.winWidth` is whatever the last resize *event* reported, and four paths
+  leave it behind: a window that changes size without changing this pane's, a
+  mid-relayout reading of zero, a narrow reading, and a border drag. Clamping
+  against a stale number turned one re-layout into two visible corrections
+  exactly `watchInterval` apart. The window is now re-read, but only when the
+  ceiling would actually bite, so the ordinary tick still costs no tmux call.
 
 ## [0.3.8] - 2026-09-02
 
