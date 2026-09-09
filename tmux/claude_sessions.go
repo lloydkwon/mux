@@ -76,6 +76,14 @@ func ClaudeRuns() []ClaudeRun {
 	return runs
 }
 
+// ResetClaudeRunCache drops the scan.
+//
+// The TTL is a second, and adoption creates sessions inside one: without this
+// the TUI's first load would answer from the scan taken *before* the sessions
+// existed, see the same conversations as homeless, and be one enter away from
+// making a second session for each of them.
+func ResetClaudeRunCache() { resetClaudeRunCache() }
+
 // resetClaudeRunCache drops the scan. Tests use it.
 func resetClaudeRunCache() {
 	claudeRunCacheMu.Lock()
@@ -271,17 +279,57 @@ func ClaudeSessions() []ClaudeRun {
 // ClaudeResumeArgs builds the command that continues a conversation in a new
 // terminal.
 //
-// --fork-session is added when something is still holding the conversation,
-// which is the whole safety of this feature: two Claude processes appending to
-// one transcript is not a state either of them expects, and forking gives the
-// new one its own id while keeping every message that came before. Where the
-// original is gone, a plain --resume is the true continuation and keeps the id.
-func ClaudeResumeArgs(sessionID string, stillRunning bool) []string {
+// **A plain --resume keeps the conversation's id, and that is load-bearing.**
+// The new process writes its own state file under the same sessionId, so the
+// next scan folds the two into one row and preferRun picks the tmux one — which
+// is what stops mux offering to bring the same conversation over again, every
+// time it starts, for ever. Nothing has to be remembered on disk for that to
+// hold; it falls out of the id.
+//
+// --fork-session is the exception, for a conversation something is actively
+// working in. There the two copies would genuinely append to one transcript, so
+// the new one takes its own id and every message that came before. It costs the
+// self-limiting property above, which is exactly why it is not the default:
+// a forked child is a *different* conversation, and nothing links it back to
+// the one it came from (measured — the state file records no fork parent).
+func ClaudeResumeArgs(sessionID string, fork bool) []string {
 	args := []string{"--resume", sessionID}
-	if stillRunning {
+	if fork {
 		args = append(args, "--fork-session")
 	}
 	return args
+}
+
+// ClaudeBusyElsewhere reports that something outside tmux is *working* in this
+// conversation right now — the one case where continuing it here has to fork.
+//
+// Being merely alive is not enough. Measured on this machine: two conversations
+// were held by a herdr pane and a tmux pane at once for hours, and their
+// transcripts came back with zero parse errors, because the abandoned copy sat
+// idle and wrote nothing.
+func ClaudeBusyElsewhere(r ClaudeRun) bool {
+	return r.Elsewhere && r.Session.AIState == AIStateWorking
+}
+
+// SafeSessionName turns a conversation's label into something tmux will accept
+// as a session name.
+//
+// tmux gives "." and ":" meaning inside a target, so a name carrying either
+// cannot be addressed once created — which would strand the session mux just
+// made. Everything else, Korean included, tmux takes verbatim.
+//
+// It lives here rather than beside the TUI because both paths that create a
+// session from a conversation need it — enter, and the adoption that runs at
+// startup — and a name that differed between them would be a difference nobody
+// asked for.
+func SafeSessionName(label string) string {
+	rep := strings.NewReplacer(".", "-", ":", "-")
+	name := strings.TrimSpace(rep.Replace(label))
+	name = strings.Join(strings.Fields(name), "-")
+	if len(name) > 40 {
+		name = strings.TrimRight(name[:40], "-")
+	}
+	return name
 }
 
 // claudePaneTarget renders a run's tmux location as a capture-pane target, or
@@ -299,3 +347,106 @@ func claudePaneTarget(r ClaudeRun) string {
 
 // ClaudePaneTarget is claudePaneTarget for callers outside the package.
 func ClaudePaneTarget(r ClaudeRun) string { return claudePaneTarget(r) }
+
+// AdoptedRun is one conversation adoption attempted at startup.
+type AdoptedRun struct {
+	Run ClaudeRun
+	// SessionName is the tmux session actually created, which may carry a
+	// suffix the asked-for name did not. Empty when Err is set.
+	SessionName string
+	Err         error
+}
+
+// AdoptableRuns picks the conversations that should be given a tmux session.
+//
+// Two rules, and both are safety rather than taste.
+//
+// **Already in tmux → nothing to do.** That is also what makes adoption
+// self-limiting: a conversation resumed under its own id shows up here with a
+// tmux session on the next scan and is never a candidate again.
+//
+// **Only a finished turn.** AIStateReady is Claude's "idle" — the turn ended
+// and it is waiting for input. Working is a turn in progress somewhere else and
+// taking it over mid-sentence is not ours to do; Approval means that process
+// asked the user something and is holding the answer; Shell means a background
+// command it started is still alive. The whole reason a plain --resume is safe
+// is that the copy left behind writes nothing, and only a finished turn
+// guarantees that — so this is the premise the rest of the design rests on, not
+// a preference.
+func AdoptableRuns(runs []ClaudeRun) []ClaudeRun {
+	var out []ClaudeRun
+	for _, r := range runs {
+		if r.TmuxSession != "" {
+			continue
+		}
+		if r.Session.AIState != AIStateReady {
+			continue
+		}
+		if r.CWD == "" || r.SessionID == "" || SafeSessionName(r.Session.Name) == "" {
+			continue // nothing to address it by
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// waitForNextSecond blocks until the wall clock reads a different second.
+//
+// It is a var so tests do not spend real seconds; nothing else replaces it.
+var waitForNextSecond = func() {
+	start := time.Now().Unix()
+	for time.Now().Unix() == start {
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// AdoptClaudeSessions gives a tmux session to every conversation that has none,
+// and reports what it made. progress may be nil.
+//
+// **Sequential, and spaced a second apart.** Both are forced.
+//
+// Sequential because freeSessionName re-reads list-sessions on every call and
+// holds no reservation: two creations racing would read the same snapshot,
+// choose the same name, and the second would come back "duplicate session".
+//
+// A second apart because of what runs *after* a session is created. tmux fires
+// `session-created`, and on this machine that hook saves a tmux-resurrect
+// snapshot whose filename has one-second resolution and whose write is not
+// atomic — a truncate followed by two appends. Several saves landing in one
+// second interleave into a single file, which the user's own tmux.conf records
+// having measured: half the pane lines doubled, and restoring from it doubles
+// the panes. Waiting out the second gives each save its own filename, and needs
+// mux to know nothing about the plugin.
+//
+// The cost is one second per conversation, once — the next run adopts nothing.
+//
+// A failure does not stop the batch. Six conversations are being moved and one
+// bad name is no reason to abandon the other five; the caller reports them.
+func AdoptClaudeSessions(progress func(done, total int, name string)) []AdoptedRun {
+	todo := AdoptableRuns(ClaudeSessions())
+	if len(todo) == 0 {
+		return nil
+	}
+
+	adopted := make([]AdoptedRun, 0, len(todo))
+	for i, r := range todo {
+		if i > 0 {
+			waitForNextSecond()
+		}
+		// Never forked: AdoptableRuns admits only finished turns, so the copy
+		// left behind writes nothing and the shared id is what makes this
+		// conversation stop being a candidate.
+		name, err := CreateSessionWithCommand(
+			SafeSessionName(r.Session.Name), r.CWD,
+			append([]string{"claude"}, ClaudeResumeArgs(r.SessionID, false)...))
+		adopted = append(adopted, AdoptedRun{Run: r, SessionName: name, Err: err})
+		if progress != nil {
+			progress(i+1, len(todo), name)
+		}
+	}
+
+	// The sessions were made inside the scan's one-second TTL, so without this
+	// the next read would still describe them as homeless.
+	ResetClaudeRunCache()
+	return adopted
+}

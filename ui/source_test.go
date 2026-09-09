@@ -298,11 +298,12 @@ func TestClaudeEnterGoesToTheSessionHoldingIt(t *testing.T) {
 	}
 }
 
-// Held elsewhere → start it here, forked so two processes never share one
-// transcript.
-func TestClaudeEnterResumesAConversationHeldElsewhere(t *testing.T) {
+// Held elsewhere and idle → start it here under the *same* id. That is what
+// lets the two copies fold back into one row afterwards, so mux stops offering
+// to bring the same conversation over on every launch.
+func TestClaudeEnterResumesAnIdleConversationUnderTheSameID(t *testing.T) {
 	m, _ := claudeModelWith([]tmux.ClaudeRun{{
-		Session:   tmux.Session{Name: "govgen-plan"},
+		Session:   tmux.Session{Name: "govgen-plan", AIState: tmux.AIStateReady},
 		SessionID: "sid-2",
 		CWD:       "/w/govgen",
 		Elsewhere: true,
@@ -323,34 +324,30 @@ func TestClaudeEnterResumesAConversationHeldElsewhere(t *testing.T) {
 	if r.Dir != "/w/govgen" {
 		t.Errorf("dir = %q, want the conversation's own directory", r.Dir)
 	}
-	if !r.Forked {
-		t.Error("a conversation something else still holds was resumed unforked")
+	if r.Forked {
+		t.Error("an idle conversation was forked; the shared id is what makes this self-limiting")
 	}
-	joined := strings.Join(r.Args, " ")
-	if !strings.Contains(joined, "--resume sid-2") || !strings.Contains(joined, "--fork-session") {
-		t.Errorf("args = %v, want a forked resume of this conversation", r.Args)
+	if joined := strings.Join(r.Args, " "); joined != "claude --resume sid-2" {
+		t.Errorf("args = %q, want a plain resume", joined)
 	}
 }
 
-// tmux gives "." and ":" meaning inside a target, so a session named with
-// either cannot be addressed once created — which would strand the session mux
-// just made.
-func TestSafeSessionNameKeepsTheSessionAddressable(t *testing.T) {
-	cases := map[string]string{
-		"plain":            "plain",
-		"has.dot":          "has-dot",
-		"has:colon":        "has-colon",
-		"  spaced  name  ": "spaced-name",
-		"실행_거브젠":           "실행_거브젠",
+// The exception: something is working in it right now, so the two would append
+// to one transcript. That one forks.
+func TestClaudeEnterForksAConversationBeingWorkedInElsewhere(t *testing.T) {
+	m, _ := claudeModelWith([]tmux.ClaudeRun{{
+		Session:   tmux.Session{Name: "busy-one", AIState: tmux.AIStateWorking},
+		SessionID: "sid-3",
+		CWD:       "/w/busy",
+		Elsewhere: true,
+	}})
+	updated, _ := m.updateList(tea.KeyMsg{Type: tea.KeyEnter})
+	r := updated.(Model).ResumeRequest()
+	if r == nil {
+		t.Fatal("no resume was requested")
 	}
-	for in, want := range cases {
-		if got := safeSessionName(in); got != want {
-			t.Errorf("safeSessionName(%q) = %q, want %q", in, got, want)
-		}
-	}
-	long := safeSessionName(strings.Repeat("x", 80))
-	if len(long) > 40 {
-		t.Errorf("length = %d, want it capped", len(long))
+	if !r.Forked || !strings.Contains(strings.Join(r.Args, " "), "--fork-session") {
+		t.Errorf("args = %v, want a forked resume", r.Args)
 	}
 }
 

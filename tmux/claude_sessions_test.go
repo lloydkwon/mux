@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -211,6 +212,156 @@ func TestCreateSessionWithCommandRefusesAnEmptyName(t *testing.T) {
 		m.OnOutput([]byte(""), nil, "tmux", "list-sessions", "-F", "#{session_name}")
 		if _, err := CreateSessionWithCommand("", "/w", []string{"claude"}); err == nil {
 			t.Error("an empty session name was accepted")
+		}
+	})
+}
+
+// tmux gives "." and ":" meaning inside a target, so a session named with
+// either cannot be addressed once created — which would strand the session mux
+// just made.
+func TestSafeSessionNameKeepsTheSessionAddressable(t *testing.T) {
+	cases := map[string]string{
+		"plain":            "plain",
+		"has.dot":          "has-dot",
+		"has:colon":        "has-colon",
+		"  spaced  name  ": "spaced-name",
+		"실행_거브젠":           "실행_거브젠",
+	}
+	for in, want := range cases {
+		if got := SafeSessionName(in); got != want {
+			t.Errorf("SafeSessionName(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := SafeSessionName(strings.Repeat("x", 80)); len(got) > 40 {
+		t.Errorf("length = %d, want it capped", len(got))
+	}
+}
+
+// This table is the safety specification, not a convenience.
+//
+// A plain --resume is safe only because the copy left behind writes nothing,
+// and only a finished turn guarantees that. Loosening any row here loosens the
+// premise the whole adoption rests on.
+func TestAdoptableRuns(t *testing.T) {
+	run := func(name string, st AIState, tmuxSession string) ClaudeRun {
+		return ClaudeRun{
+			Session:     Session{Name: name, AIState: st},
+			SessionID:   "id-" + name,
+			CWD:         "/w/" + name,
+			TmuxSession: tmuxSession,
+			Elsewhere:   tmuxSession == "",
+		}
+	}
+	runs := []ClaudeRun{
+		run("idle", AIStateReady, ""),
+		run("already-in-tmux", AIStateReady, "sess"),
+		run("working", AIStateWorking, ""),
+		run("blocked", AIStateApproval, ""),
+		run("shell", AIStateShell, ""),
+		run("nostate", AIStateNone, ""),
+	}
+	got := AdoptableRuns(runs)
+	if len(got) != 1 || got[0].Session.Name != "idle" {
+		var names []string
+		for _, r := range got {
+			names = append(names, r.Session.Name)
+		}
+		t.Fatalf("adoptable = %v, want only the finished turn", names)
+	}
+}
+
+// A row with nothing to address it by cannot be created and must not be
+// attempted — the error would be reported once per launch, for ever.
+func TestAdoptableRunsSkipsUnaddressableRows(t *testing.T) {
+	runs := []ClaudeRun{
+		{Session: Session{Name: "no-cwd", AIState: AIStateReady}, SessionID: "a"},
+		{Session: Session{Name: "no-id", AIState: AIStateReady}, CWD: "/w"},
+		{Session: Session{Name: "  ", AIState: AIStateReady}, SessionID: "c", CWD: "/w"},
+	}
+	if got := AdoptableRuns(runs); len(got) != 0 {
+		t.Errorf("adoptable = %d, want none", len(got))
+	}
+}
+
+// withoutSecondWait makes the batch's one-second spacing free in tests. The
+// spacing exists to keep tmux-resurrect's per-second save files apart, which no
+// test needs to reproduce.
+func withoutSecondWait(t *testing.T) {
+	t.Helper()
+	old := waitForNextSecond
+	waitForNextSecond = func() {}
+	t.Cleanup(func() { waitForNextSecond = old })
+}
+
+func TestAdoptClaudeSessionsResumesUnderTheSameID(t *testing.T) {
+	withoutSecondWait(t)
+	files := map[string]string{
+		"a.json": runFile(1, "sid-aaa", "/w/one", "idle", "one", "", 1000, 2000),
+		"b.json": runFile(2, "sid-bbb", "/w/two", "idle", "two", "", 1000, 3000),
+		// Already in tmux, and a busy one: neither may be touched.
+		"c.json": runFile(3, "sid-ccc", "/w/three", "idle", "three", "sess:@0.%0", 1000, 4000),
+		"d.json": runFile(4, "sid-ddd", "/w/four", "busy", "four", "", 1000, 5000),
+	}
+	withClaudePanes(t, files, "%0 3 sess\n", func() {
+		adopted := AdoptClaudeSessions(nil)
+		if len(adopted) != 2 {
+			var got []string
+			for _, a := range adopted {
+				got = append(got, a.Run.Session.Name)
+			}
+			t.Fatalf("adopted = %v, want the two homeless idle ones", got)
+		}
+		for _, a := range adopted {
+			if a.Err != nil {
+				t.Errorf("%s: %v", a.Run.Session.Name, a.Err)
+			}
+		}
+	})
+}
+
+// The whole self-limiting property rests on the id being kept, so the batch
+// must never pass --fork-session.
+func TestAdoptClaudeSessionsNeverForks(t *testing.T) {
+	withoutSecondWait(t)
+	files := map[string]string{
+		"a.json": runFile(1, "sid-aaa", "/w/one", "idle", "one", "", 1000, 2000),
+	}
+	withClaudeSessions(t, files, nil, func() {
+		m, ok := runner.(*mockRunner)
+		if !ok {
+			t.Fatalf("runner = %T, want the helper's mock", runner)
+		}
+		AdoptClaudeSessions(nil)
+
+		var created string
+		for _, r := range m.runs {
+			if strings.Contains(r, "new-session") {
+				created = r
+			}
+		}
+		if created == "" {
+			t.Fatalf("no session was created; runs = %v", m.runs)
+		}
+		if strings.Contains(created, "--fork-session") {
+			t.Errorf("created %q; forking breaks the shared id that stops re-adoption", created)
+		}
+		if !strings.Contains(created, "--resume sid-aaa") {
+			t.Errorf("created %q, want a resume of the conversation's own id", created)
+		}
+		if !strings.Contains(created, "-c /w/one") {
+			t.Errorf("created %q, want it started in the conversation's directory", created)
+		}
+	})
+}
+
+func TestAdoptClaudeSessionsDoesNothingWhenEverythingHasAHome(t *testing.T) {
+	withoutSecondWait(t)
+	files := map[string]string{
+		"c.json": runFile(3, "sid-ccc", "/w/three", "idle", "three", "sess:@0.%0", 1000, 4000),
+	}
+	withClaudePanes(t, files, "%0 3 sess\n", func() {
+		if adopted := AdoptClaudeSessions(nil); adopted != nil {
+			t.Errorf("adopted = %v, want nothing on a settled machine", adopted)
 		}
 	})
 }

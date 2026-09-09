@@ -53,8 +53,10 @@ Running Claude in one session, Codex in another, and a dev server in a third? Sw
   session running on the machine, whether it sits in tmux, in another
   multiplexer, or in a bare terminal. Enter goes to the one holding it when
   that is a tmux session, and otherwise starts it here with
-  `claude --resume` — forked, so the copy you left behind keeps its own
-  transcript. It is how work started somewhere else gets picked up in mux.
+  `claude --resume`. And it does that for **every** conversation with no tmux
+  session the moment it starts, so the list — and the ordinary `mux` list too —
+  is complete without pressing anything. It is how work started somewhere else
+  gets picked up in mux.
 - **`mux --herdr` lists [herdr](https://herdr.dev) workspaces instead** — if
   your sessions have moved to herdr, the same screen still works: workspaces
   become rows, the agents inside them become the rows underneath, and the

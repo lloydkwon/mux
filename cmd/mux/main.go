@@ -296,6 +296,7 @@ func runRoot(herdrMode, claudeMode bool) error {
 		// conversation may well be held by a tmux pane, and going to it needs
 		// the server the socket wipe can orphan.
 		reviveAndRemember()
+		adoptClaudeSessions()
 		return runTUI(ui.NewClaudeModel())
 	}
 	if herdrMode {
@@ -331,6 +332,39 @@ func shouldBootstrap() bool {
 	}
 	sessions, err := tmux.ListSessions()
 	return err == nil && len(sessions) > 0
+}
+
+// adoptClaudeSessions gives a tmux session to every Claude conversation that
+// has none, before the list is drawn.
+//
+// It runs here rather than inside the TUI for three separate reasons, and any
+// one of them would be enough. The creations must be sequential (tmux/session.go
+// explains why), which a plain loop is and tea.Batch is not. The `ui` package
+// has no mock runner, so anything that reaches tmux from Update puts sessions on
+// the developer's own server when the tests run. And Model carries exactly one
+// resume slot, which cannot describe a batch.
+//
+// Being before the TUI also means there is a screen to narrate on. That matters:
+// AdoptClaudeSessions waits out a second between creations, so without a line
+// per conversation a first run looks like mux having hung.
+//
+// **Failures are printed, never returned.** The list must still open — a
+// conversation that could not be adopted is one the user can still commit with
+// enter, and refusing to draw the list would take that away too.
+func adoptClaudeSessions() {
+	first := true
+	adopted := tmux.AdoptClaudeSessions(func(done, total int, name string) {
+		if first {
+			fmt.Fprintf(os.Stderr, "Bringing %d conversation(s) into tmux…\n", total)
+			first = false
+		}
+		fmt.Fprintf(os.Stderr, "  [%d/%d] %s\n", done, total, name)
+	})
+	for _, a := range adopted {
+		if a.Err != nil {
+			fmt.Fprintf(os.Stderr, "  ! %s: %v\n", a.Run.Session.Name, a.Err)
+		}
+	}
 }
 
 func runStatus() error {

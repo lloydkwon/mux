@@ -75,11 +75,13 @@ func (c *claudeSource) Capture(key previewKey) (string, error) {
 // elsewhereNotice explains a conversation mux cannot show, and what enter will
 // do about it.
 //
-// It names the fork explicitly. Resuming a conversation something else is still
-// holding is the one action here that starts a process, and the reason it forks
-// — two Claude processes appending to one transcript — is not something a user
-// can be expected to infer from a row.
+// It spells out the exact command, because the two cases differ in a way a row
+// cannot carry: an idle conversation is resumed under its own id, which is what
+// lets the two copies collapse back into one row afterwards, while one that is
+// actively working is forked so the two never interleave.
 func elsewhereNotice(r tmux.ClaudeRun) string {
+	fork := tmux.ClaudeBusyElsewhere(r)
+
 	var b strings.Builder
 	b.WriteString("This conversation is not running in tmux.\n\n")
 	if r.CWD != "" {
@@ -90,11 +92,15 @@ func elsewhereNotice(r tmux.ClaudeRun) string {
 		b.WriteString("  process    pid " + strconv.Itoa(r.Session.AIPID) + ", still running\n")
 	}
 	b.WriteString("\nEnter starts it here with:\n\n")
-	b.WriteString("  claude " + strings.Join(tmux.ClaudeResumeArgs(r.SessionID, r.Elsewhere), " ") + "\n")
-	if r.Elsewhere {
-		b.WriteString("\n--fork-session is what stops the process that already holds this\n")
-		b.WriteString("conversation from sharing one transcript with the new one. Every\n")
-		b.WriteString("message so far comes along; the copy you leave behind is untouched.\n")
+	b.WriteString("  claude " + strings.Join(tmux.ClaudeResumeArgs(r.SessionID, fork), " ") + "\n")
+	if fork {
+		b.WriteString("\nSomething is working in this conversation right now, so the resume\n")
+		b.WriteString("is forked: the new one gets its own id and every message so far,\n")
+		b.WriteString("and the two never append to one transcript. The copy you leave\n")
+		b.WriteString("behind is untouched.\n")
+	} else {
+		b.WriteString("\nSame id, not a fork — so once this is running the two copies show\n")
+		b.WriteString("as one row again, and mux stops offering to bring it over.\n")
 	}
 	return b.String()
 }
@@ -105,10 +111,13 @@ func elsewhereNotice(r tmux.ClaudeRun) string {
 // Held in tmux → go there. Nothing is started, and the conversation the user is
 // looking at is the one they land in.
 //
-// Held anywhere else, or nowhere → start it here. That is a resume, and where
-// the original process is still alive it is a *forked* resume: two Claude
-// processes appending to one transcript is not a state either of them expects,
-// so the new one gets its own id and every message that came before.
+// Held anywhere else, or nowhere → start it here. That is a resume, and it
+// keeps the conversation's own id — which is what makes the two processes
+// collapse back into one row on the next scan, and what stops mux offering to
+// bring the same conversation over again for ever.
+//
+// The exception is a conversation something else is *actively working in*.
+// There the two would genuinely interleave, so that one forks instead.
 func (c *claudeSource) Activate(session string) (previewKey, *resumeRequest, bool) {
 	r, ok := c.find(session)
 	if !ok {
@@ -122,32 +131,17 @@ func (c *claudeSource) Activate(session string) (previewKey, *resumeRequest, boo
 		// translation.
 		return previewKey{session: r.TmuxSession, window: -1, pane: -1}, nil, true
 	}
-	name := safeSessionName(r.Session.Name)
+	name := tmux.SafeSessionName(r.Session.Name)
 	if name == "" || r.CWD == "" || r.SessionID == "" {
 		return previewKey{}, nil, false
 	}
+	fork := tmux.ClaudeBusyElsewhere(r)
 	return previewKey{}, &resumeRequest{
 		Name:   name,
 		Dir:    r.CWD,
-		Args:   append([]string{"claude"}, tmux.ClaudeResumeArgs(r.SessionID, r.Elsewhere)...),
-		Forked: r.Elsewhere,
+		Args:   append([]string{"claude"}, tmux.ClaudeResumeArgs(r.SessionID, fork)...),
+		Forked: fork,
 	}, true
-}
-
-// safeSessionName turns a conversation's label into something tmux will accept
-// as a session name.
-//
-// tmux gives "." and ":" meaning inside a target, so a name carrying either
-// cannot be addressed once created — which would strand the session mux just
-// made. Everything else, Korean included, tmux takes verbatim.
-func safeSessionName(label string) string {
-	r := strings.NewReplacer(".", "-", ":", "-")
-	name := strings.TrimSpace(r.Replace(label))
-	name = strings.Join(strings.Fields(name), "-")
-	if len(name) > 40 {
-		name = strings.TrimRight(name[:40], "-")
-	}
-	return name
 }
 
 func (*claudeSource) Title(rows int) string {
