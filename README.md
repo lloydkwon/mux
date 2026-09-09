@@ -49,6 +49,12 @@ Running Claude in one session, Codex in another, and a dev server in a third? Sw
   the window stays your terminal. Click a session to switch to it, or drive the
   cursor with `mux nav` from a tmux binding, which moves it without taking the
   keyboard away from the pane you are typing in.
+- **`mux --claude` lists Claude conversations, not terminals** — every Claude
+  session running on the machine, whether it sits in tmux, in another
+  multiplexer, or in a bare terminal. Enter goes to the one holding it when
+  that is a tmux session, and otherwise starts it here with
+  `claude --resume` — forked, so the copy you left behind keeps its own
+  transcript. It is how work started somewhere else gets picked up in mux.
 - **`mux --herdr` lists [herdr](https://herdr.dev) workspaces instead** — if
   your sessions have moved to herdr, the same screen still works: workspaces
   become rows, the agents inside them become the rows underneath, and the
