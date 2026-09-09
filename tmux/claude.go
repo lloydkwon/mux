@@ -57,6 +57,11 @@ type claudeSessionFile struct {
 	NameSource string `json:"nameSource"`
 	// StatusUpdatedAt is when the current status began, in epoch milliseconds.
 	StatusUpdatedAt int64 `json:"statusUpdatedAt"`
+	// StartedAt is when the session itself began, in epoch milliseconds. Unlike
+	// a tmux session's creation time this survives nothing — it is written once
+	// per process — but it is a real clock, which is what the elapsed column
+	// needs for a session with no live state to report.
+	StartedAt int64 `json:"startedAt"`
 }
 
 // homeDir resolves the user's home directory. Replaceable in tests.

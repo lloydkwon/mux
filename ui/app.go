@@ -79,9 +79,13 @@ type Model struct {
 	// projectDir는 시작할 때 한 번 읽는 @project_dir. filterText의 초기값이자,
 	// "이건 사용자가 친 필터가 아니다"를 구분하는 표식 — 액션 행을 계속 보여주는
 	// 판단에 쓴다.
-	projectDir      string
-	prefs           preferences
-	attachTarget    previewKey       // set when we want to attach after quitting (zero value = no attach)
+	projectDir   string
+	prefs        preferences
+	attachTarget previewKey // set when we want to attach after quitting (zero value = no attach)
+	// resumeTarget is the other way a row can be committed: nothing in tmux
+	// holds it, so cmd/mux has to make somewhere for it to go before attaching.
+	// nil is the ordinary case.
+	resumeTarget    *resumeRequest
 	detachRequested bool             // set when New shell is selected from inside tmux
 	lastClick       clickMark        // for telling a double click from two clicks
 	focusSession    string           // session name to focus cursor on after next load
@@ -463,7 +467,7 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.activateCurrent()
 
 		case "n":
-			if m.readOnly {
+			if m.writesBlocked() {
 				break
 			}
 			m.mode = modeCreate
@@ -481,7 +485,7 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.refreshCurrentPreview()
 
 		case "x":
-			if m.readOnly {
+			if m.writesBlocked() {
 				break
 			}
 			if it := m.currentItem(); it != nil && it.kind == itemSession {
@@ -490,7 +494,7 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "r":
-			if m.readOnly {
+			if m.writesBlocked() {
 				break
 			}
 			if it := m.currentItem(); it != nil && it.kind == itemSession {
@@ -500,7 +504,7 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "m":
-			if m.readOnly {
+			if m.writesBlocked() {
 				break
 			}
 			if it := m.currentItem(); it != nil && it.kind == itemSession {
@@ -560,6 +564,21 @@ func (m Model) activateCurrent() (tea.Model, tea.Cmd) {
 	it := m.currentItem()
 	if it == nil {
 		return m, nil
+	}
+	// A source that knows what committing a row means answers for its own rows.
+	// The two action rows are not its rows — they belong to the tmux list and
+	// are not drawn when a source is set — so this sits above the switch rather
+	// than inside its default branch.
+	if a, ok := m.src.(sourceActivator); ok {
+		if it.session == nil {
+			return m, nil
+		}
+		attach, resume, ok := a.Activate(it.session.Name)
+		if !ok {
+			return m, nil
+		}
+		m.attachTarget, m.resumeTarget = attach, resume
+		return m, tea.Quit
 	}
 	switch it.kind {
 	case itemNewShell:
@@ -828,7 +847,7 @@ func (m *Model) currentSessionName() string {
 func (m *Model) rebuildItems() {
 	// Action rows are "New shell" (detach) and "New tmux session" (create) —
 	// both writes, and both meaningless for a source that only reads.
-	actions := !m.readOnly && (m.filterText == "" || m.filterText == m.projectDir)
+	actions := !m.writesBlocked() && (m.filterText == "" || m.filterText == m.projectDir)
 	m.items = flattenMenu(m.filtered, &m.tree, m.prefs.Orders, actions)
 	if m.cursor >= len(m.items) {
 		m.cursor = max(0, len(m.items)-1)
@@ -904,17 +923,12 @@ func (m Model) extraBar() string {
 		return helpStyle.Render(fmt.Sprintf("filter: %s (esc clear)", m.filterText))
 	case m.err != nil:
 		return errorStyle.Render(m.err.Error())
-	case m.readOnly:
-		// Below the error on purpose: a source that is down has something the
-		// user can act on, and this line never changes.
-		//
-		// Permanent rather than a message per refused key, for two reasons. A
-		// key that silently does nothing reads as a broken program, and saying
-		// why once at the bottom answers all of them at once. And a bar that
-		// appears and disappears moves chromeTop between 1 and 2, which shifts
-		// every click target by a row — the select-mode bar is permanent while
-		// it is on for the same reason.
-		return helpStyle.Render(readOnlyBar)
+	}
+	// Below every case above on purpose: a source that is down has something the
+	// user can act on, and a filter they typed is something they are in the
+	// middle of. This line never changes, so it yields to both.
+	if c, ok := m.chrome(); ok {
+		return helpStyle.Render(c.Bar())
 	}
 	return ""
 }
@@ -964,8 +978,8 @@ func (m Model) titleBar() string {
 	// TestGlyphWidthsAreStable, and ui/layout.go cannot compensate for a glyph
 	// that measures differently from what it draws.
 	left := fmt.Sprintf("⚡ tmux sessions %d", len(m.filtered))
-	if m.readOnly {
-		left = fmt.Sprintf("⚡ herdr workspaces %d", len(m.filtered))
+	if c, ok := m.chrome(); ok {
+		left = c.Title(len(m.filtered))
 	}
 	right := fmt.Sprintf("sort: %s", m.prefs.Sort)
 
@@ -980,7 +994,8 @@ func (m Model) viewMain() string {
 	title := m.titleBar()
 
 	// Help bar
-	help := renderHelp(m.readOnly)
+	_, canCommit := m.src.(sourceActivator)
+	help := renderHelp(m.writesBlocked(), canCommit)
 
 	extraBar := m.extraBar()
 
@@ -1033,13 +1048,11 @@ func (m Model) viewWithOverlay(overlay string) string {
 		box)
 }
 
-// readOnlyBar is what extraBar says for the whole time a read-only source is
-// in use. It names the source and what is off, because a key that does nothing
-// with no explanation is indistinguishable from a broken program.
-const readOnlyBar = "herdr (read-only) — attach, new, kill, rename and memo are off"
+// helpKey is one entry of the bar along the bottom.
+type helpKey struct{ key, desc string }
 
-func renderHelp(readOnly bool) string {
-	keys := []struct{ key, desc string }{
+func renderHelp(writesBlocked, canCommit bool) string {
+	keys := []helpKey{
 		{"↑↓/jk", "navigate"},
 		{"tab", "expand"},
 		{"⇧tab", "collapse"},
@@ -1055,21 +1068,19 @@ func renderHelp(readOnly bool) string {
 		{"?", "help"},
 		{"q", "quit"},
 	}
-	if readOnly {
+	if writesBlocked {
 		// Listing keys that are guarded would be worse than listing none: the
 		// bar is the only place a user looks to learn what the program does.
-		// What is left is everything that still works.
-		keys = []struct{ key, desc string }{
-			{"↑↓/jk", "navigate"},
-			{"tab", "expand"},
-			{"⇧tab", "collapse"},
-			{"v", "copy"},
-			{"0-9", "order"},
-			{"o", "sort"},
-			{"/", "filter"},
-			{"?", "help"},
-			{"q", "quit"},
+		// What is left is everything that still works — enter among it when the
+		// source can commit a row, which is the one thing that separates a list
+		// you can only read from a list you can act on.
+		keys = []helpKey{{"↑↓/jk", "navigate"}, {"tab", "expand"}, {"⇧tab", "collapse"}}
+		if canCommit {
+			keys = append(keys, helpKey{"enter/2click", "go / resume"})
 		}
+		keys = append(keys,
+			helpKey{"v", "copy"}, helpKey{"0-9", "order"}, helpKey{"o", "sort"},
+			helpKey{"/", "filter"}, helpKey{"?", "help"}, helpKey{"q", "quit"})
 	}
 
 	var parts []string
@@ -1108,6 +1119,18 @@ func (m Model) AttachPaneIndex() int {
 // ReadOnly reports whether this Model may only look. cmd/mux uses it to skip
 // the tmux housekeeping that has no meaning for another source.
 func (m Model) ReadOnly() bool { return m.readOnly }
+
+// writesBlocked reports whether the tmux-changing keys apply.
+//
+// The gate is "a source is set", not "read-only": create, kill, rename and a
+// note are all operations on a *tmux session*, and once the rows stand for
+// something else — a herdr workspace, a Claude conversation — there is nothing
+// for them to act on. Which is a different question from whether enter works,
+// and that is why it is a different check.
+func (m Model) writesBlocked() bool { return m.src != nil }
+
+// ResumeRequest reports the conversation to start after the TUI exits, or nil.
+func (m Model) ResumeRequest() *resumeRequest { return m.resumeTarget }
 
 func (m Model) DetachRequested() bool {
 	return m.detachRequested

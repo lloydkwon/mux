@@ -36,6 +36,11 @@ func (f *fakeSource) Windows(session string) ([]tmux.Window, error) {
 
 func (f *fakeSource) Panes(string, int) ([]tmux.Pane, error) { return nil, nil }
 
+// fakeSource carries chrome so the title/bar mechanism can be tested without
+// standing up a real source.
+func (f *fakeSource) Title(rows int) string { return "FAKE TITLE" }
+func (f *fakeSource) Bar() string           { return "FAKE BAR" }
+
 func (f *fakeSource) Capture(key previewKey) (string, error) {
 	f.asked = append(f.asked, key)
 	return f.captured, nil
@@ -225,20 +230,147 @@ func TestReadOnlyDropsTheActionRows(t *testing.T) {
 // chromeTop and shifts every click target by a row.
 func TestReadOnlySaysSoOnScreen(t *testing.T) {
 	m := readOnlyModel(t)
-	if got := m.extraBar(); got == "" {
-		t.Fatal("nothing on screen explains why the write keys do nothing")
+	if got := ansi.Strip(m.extraBar()); !strings.Contains(got, "FAKE BAR") {
+		t.Fatalf("extraBar = %q; nothing on screen explains why the write keys do nothing", got)
 	}
-	if !strings.Contains(m.titleBar(), "herdr") {
-		t.Error("the title still claims to be listing tmux sessions")
+	if got := ansi.Strip(m.titleBar()); !strings.Contains(got, "FAKE TITLE") {
+		t.Errorf("title = %q, want the source's own", got)
 	}
 	// The help bar must not advertise keys the guards refuse.
-	help := ansi.Strip(renderHelp(true))
+	help := ansi.Strip(renderHelp(true, false))
 	for _, gone := range []string{"attach", "new", "kill", "rename", "memo"} {
 		if strings.Contains(help, gone) {
-			t.Errorf("help still offers %q in read-only mode", gone)
+			t.Errorf("help still offers %q with writes blocked", gone)
 		}
 	}
 	if !strings.Contains(help, "filter") {
 		t.Error("help dropped a key that still works")
+	}
+	// A source that can commit a row keeps enter, and that is the one thing
+	// separating a list you can read from a list you can act on.
+	if got := ansi.Strip(renderHelp(true, true)); !strings.Contains(got, "resume") {
+		t.Errorf("help = %q, want enter offered when the source can commit", got)
+	}
+}
+
+// The herdr strings themselves, checked where they are written.
+func TestHerdrChromeNamesItself(t *testing.T) {
+	if got := (herdrSource{}).Title(6); !strings.Contains(got, "herdr") {
+		t.Errorf("title = %q, want it to say herdr rather than tmux sessions", got)
+	}
+	if got := (herdrSource{}).Bar(); !strings.Contains(got, "read-only") {
+		t.Errorf("bar = %q, want it to say the list is read-only", got)
+	}
+}
+
+// --- Claude source -------------------------------------------------------
+
+func claudeModelWith(runs []tmux.ClaudeRun) (Model, *claudeSource) {
+	src := &claudeSource{runs: runs}
+	m := Model{tree: newTreeState(), src: src}
+	sessions := make([]tmux.Session, 0, len(runs))
+	for _, r := range runs {
+		sessions = append(sessions, r.Session)
+	}
+	updated, _ := m.Update(sessionsLoadedMsg{sessions: sessions})
+	return updated.(Model), src
+}
+
+// Held in tmux → go there, starting nothing.
+func TestClaudeEnterGoesToTheSessionHoldingIt(t *testing.T) {
+	m, _ := claudeModelWith([]tmux.ClaudeRun{{
+		Session:     tmux.Session{Name: "alpha", Attached: true},
+		SessionID:   "sid-1",
+		CWD:         "/w/alpha",
+		TmuxSession: "work",
+	}})
+	updated, cmd := m.updateList(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("enter did nothing")
+	}
+	if got.AttachName() != "work" {
+		t.Errorf("attach = %q, want the tmux session holding the conversation", got.AttachName())
+	}
+	if got.ResumeRequest() != nil {
+		t.Error("a conversation already in tmux asked to be started again")
+	}
+}
+
+// Held elsewhere → start it here, forked so two processes never share one
+// transcript.
+func TestClaudeEnterResumesAConversationHeldElsewhere(t *testing.T) {
+	m, _ := claudeModelWith([]tmux.ClaudeRun{{
+		Session:   tmux.Session{Name: "govgen-plan"},
+		SessionID: "sid-2",
+		CWD:       "/w/govgen",
+		Elsewhere: true,
+	}})
+	updated, cmd := m.updateList(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("enter did nothing")
+	}
+	if got.AttachName() != "" {
+		t.Errorf("attach = %q, want none — there is nothing to attach to yet", got.AttachName())
+	}
+	r := got.ResumeRequest()
+	if r == nil {
+		t.Fatal("no resume was requested")
+	}
+	if r.Dir != "/w/govgen" {
+		t.Errorf("dir = %q, want the conversation's own directory", r.Dir)
+	}
+	if !r.Forked {
+		t.Error("a conversation something else still holds was resumed unforked")
+	}
+	joined := strings.Join(r.Args, " ")
+	if !strings.Contains(joined, "--resume sid-2") || !strings.Contains(joined, "--fork-session") {
+		t.Errorf("args = %v, want a forked resume of this conversation", r.Args)
+	}
+}
+
+// tmux gives "." and ":" meaning inside a target, so a session named with
+// either cannot be addressed once created — which would strand the session mux
+// just made.
+func TestSafeSessionNameKeepsTheSessionAddressable(t *testing.T) {
+	cases := map[string]string{
+		"plain":            "plain",
+		"has.dot":          "has-dot",
+		"has:colon":        "has-colon",
+		"  spaced  name  ": "spaced-name",
+		"실행_거브젠":           "실행_거브젠",
+	}
+	for in, want := range cases {
+		if got := safeSessionName(in); got != want {
+			t.Errorf("safeSessionName(%q) = %q, want %q", in, got, want)
+		}
+	}
+	long := safeSessionName(strings.Repeat("x", 80))
+	if len(long) > 40 {
+		t.Errorf("length = %d, want it capped", len(long))
+	}
+}
+
+// The write keys are gated on a source being set rather than on read-only:
+// create, kill, rename and a note are operations on a tmux session, and a row
+// here is a conversation.
+func TestClaudeListStillRefusesTheTmuxWriteKeys(t *testing.T) {
+	for _, key := range []rune{'n', 'x', 'r', 'm'} {
+		m, _ := claudeModelWith([]tmux.ClaudeRun{{
+			Session: tmux.Session{Name: "alpha"}, SessionID: "s", CWD: "/w",
+		}})
+		updated, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		if got := updated.(Model); got.mode != modeList {
+			t.Errorf("%q opened mode %v on a conversation list", key, got.mode)
+		}
+	}
+	m, _ := claudeModelWith([]tmux.ClaudeRun{{Session: tmux.Session{Name: "alpha"}}})
+	for _, it := range m.items {
+		if it.kind == itemNewShell || it.kind == itemNewSession {
+			t.Fatal("an action row survived into the conversation list")
+		}
 	}
 }

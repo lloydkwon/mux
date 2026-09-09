@@ -77,12 +77,12 @@ func rawVersion(injected string, info *debug.BuildInfo, ok bool) string {
 func main() {
 	info, ok := debug.ReadBuildInfo()
 
-	var herdrMode bool
+	var herdrMode, claudeMode bool
 	rootCmd := &cobra.Command{
 		Use:     "mux",
 		Short:   "TUI tmux session manager",
 		Version: resolveVersion(version, info, ok),
-		RunE:    func(cmd *cobra.Command, args []string) error { return runRoot(herdrMode) },
+		RunE:    func(cmd *cobra.Command, args []string) error { return runRoot(herdrMode, claudeMode) },
 		// Suppress cobra's default completion and help subcommands
 		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	}
@@ -92,6 +92,9 @@ func main() {
 	// so `mux panel --herdr` would parse and then quietly do the tmux thing.
 	rootCmd.Flags().BoolVar(&herdrMode, "herdr", false,
 		"Read the list from herdr instead of tmux (read-only)")
+	rootCmd.Flags().BoolVar(&claudeMode, "claude", false,
+		"List running Claude sessions; enter goes to one or resumes it here")
+	rootCmd.MarkFlagsMutuallyExclusive("herdr", "claude")
 
 	newCmd := &cobra.Command{
 		Use:   "new",
@@ -283,7 +286,18 @@ func reviveAndRemember() {
 	tmux.RememberServer()
 }
 
-func runRoot(herdrMode bool) error {
+func runRoot(herdrMode, claudeMode bool) error {
+	if claudeMode {
+		// Same reasoning as the herdr branch: nothing below this reads the list
+		// mux is about to draw, and the setup offer asks to install tmux
+		// keybindings, which is not what this flag was typed for.
+		//
+		// reviveAndRemember *is* kept, unlike herdr's branch. A Claude
+		// conversation may well be held by a tmux pane, and going to it needs
+		// the server the socket wipe can orphan.
+		reviveAndRemember()
+		return runTUI(ui.NewClaudeModel())
+	}
 	if herdrMode {
 		// Every step below this is tmux housekeeping: reviving a server we are
 		// not reading, and handing this process to a tmux popup. The setup offer
@@ -556,6 +570,19 @@ func runTUI(model ui.Model) error {
 	case m.DetachRequested():
 		if err := ui.DetachClient(); err != nil {
 			return fmt.Errorf("failed to detach tmux client: %w", err)
+		}
+	case m.ResumeRequest() != nil:
+		// Nothing in tmux is holding this conversation, so there is nowhere to
+		// attach to until we make one. Both halves happen here rather than in
+		// Update for the reason attaching always has: new-session and the
+		// attach that follows must not run inside the Bubble Tea loop.
+		r := m.ResumeRequest()
+		name, err := tmux.CreateSessionWithCommand(r.Name, r.Dir, r.Args)
+		if err != nil {
+			return fmt.Errorf("failed to resume: %w", err)
+		}
+		if err := ui.AttachToSession(name, -1, -1); err != nil {
+			return fmt.Errorf("failed to attach: %w", err)
 		}
 	case m.AttachName() != "":
 		if err := ui.AttachToSession(m.AttachName(), m.AttachWindowIndex(), m.AttachPaneIndex()); err != nil {

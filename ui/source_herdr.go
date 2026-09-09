@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"fmt"
+
 	"github.com/lloydkwon/mux/herdr"
 	"github.com/lloydkwon/mux/tmux"
 )
@@ -30,6 +32,18 @@ func (herdrSource) Capture(key previewKey) (string, error) {
 		return "", nil
 	}
 	return herdr.CapturePane(id)
+}
+
+func (herdrSource) Title(rows int) string {
+	return fmt.Sprintf("⚡ herdr workspaces %d", rows)
+}
+
+// Bar stands for the whole time herdr mode is on. A key that silently does
+// nothing is indistinguishable from a broken program, and saying why once at
+// the bottom answers all of them; a bar that came and went would move
+// chromeTop between 1 and 2 and shift every click target by a row.
+func (herdrSource) Bar() string {
+	return "herdr (read-only) — attach, new, kill, rename and memo are off"
 }
 
 // NewHerdrModel returns a Model that reads herdr and changes nothing.

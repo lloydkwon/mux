@@ -50,10 +50,12 @@ func withClaudeSessions(t *testing.T, files map[string]string, aliveFn func(int,
 	// 실제로 존재해 답이 기계마다 달라진다 — 한 번 그렇게 깨졌다.
 	pidInPane = func(int, int) (bool, bool) { return false, false }
 	resetClaudeStatusCache()
+	resetClaudeRunCache()
 	defer func() {
 		runner = oldRunner
 		homeDir, isAlive, pidInPane = oldHome, oldAlive, oldUnder
 		resetClaudeStatusCache()
+		resetClaudeRunCache()
 	}()
 
 	fn()
@@ -311,9 +313,11 @@ func withClaudePanes(t *testing.T, files map[string]string, panes string, fn fun
 		old := runner
 		SetRunner(m)
 		resetClaudeStatusCache()
+		resetClaudeRunCache()
 		defer func() {
 			runner = old
 			resetClaudeStatusCache()
+			resetClaudeRunCache()
 		}()
 		fn()
 	})

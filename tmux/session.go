@@ -247,6 +247,69 @@ func CreateSessionWithDir(name, dir string) error {
 	return runner.Run("tmux", "new-session", "-d", "-s", name, "-c", dir)
 }
 
+// CreateSessionWithCommand makes a detached session running argv, and returns
+// the name it actually got.
+//
+// The name may not be the one asked for. A conversation's own label is what the
+// row is called, so resuming the same one twice would collide — and tmux
+// refuses a duplicate rather than picking for you, which from the TUI reads as
+// enter simply failing. Suffixing is the smaller surprise, and the returned
+// name is what the caller must attach to.
+//
+// The command is passed as separate argv words rather than a string: tmux runs
+// a bare shell-command through /bin/sh, and a conversation label carrying a
+// quote or a space would be re-split by it.
+func CreateSessionWithCommand(name, dir string, argv []string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("create session: empty name")
+	}
+	name = freeSessionName(name)
+	args := []string{"new-session", "-d", "-s", name}
+	if dir != "" {
+		args = append(args, "-c", dir)
+	}
+	args = append(args, argv...)
+	if err := runner.Run("tmux", args...); err != nil {
+		return "", fmt.Errorf("create session %q: %w", name, err)
+	}
+	return name, nil
+}
+
+// freeSessionName finds a name tmux will accept, starting from the one asked
+// for.
+//
+// One list-sessions rather than a has-session per candidate. Asking tmux once
+// and searching the answer is both cheaper and honest about what it can know:
+// has-session reports existence through its exit status, so every candidate
+// would cost a round trip whose failure mode — a tmux that cannot answer at all
+// — is indistinguishable from "this name is free". Reading the list makes "no
+// server" mean "no sessions", which is the right answer here.
+//
+// The bound is a guard against a pathological list, not a normal path; the last
+// candidate is returned either way, and a duplicate error the caller reports is
+// better than a loop.
+func freeSessionName(name string) string {
+	taken := make(map[string]bool)
+	if out, err := runner.Output("tmux", "list-sessions", "-F", "#{session_name}"); err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			if s := strings.TrimSpace(line); s != "" {
+				taken[s] = true
+			}
+		}
+	}
+	if !taken[name] {
+		return name
+	}
+	candidate := name
+	for i := 2; i < 100; i++ {
+		candidate = fmt.Sprintf("%s-%d", name, i)
+		if !taken[candidate] {
+			return candidate
+		}
+	}
+	return candidate
+}
+
 // KillSession destroys the tmux session with the given name.
 func KillSession(name string) error {
 	return runner.Run("tmux", "kill-session", "-t", name)

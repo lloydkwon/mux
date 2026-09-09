@@ -48,6 +48,14 @@ type Session struct {
 	AITask  string
 	AISince time.Time // when the current state began; zero if unknown
 	AIPID   int       // pid of the process publishing the state; 0 if none
+	// AISessionID is the tool's own identifier for the conversation — Claude's
+	// session UUID. Empty on the tmux path, where the badge never needed it.
+	//
+	// It is what makes a session addressable outside the terminal it happens to
+	// be sitting in: with it and Directory, LoadTokenUsage finds the transcript
+	// without the pgrep chain, and `claude --resume` can pick the conversation
+	// up somewhere else.
+	AISessionID string
 
 	// WindowIndex and PaneIndex locate a pane inside the session. They are
 	// strings because nothing does arithmetic on them and tmux may render either
