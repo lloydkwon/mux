@@ -389,3 +389,47 @@ func TestUnknownAgeDrawsBlankAtTheColumnWidth(t *testing.T) {
 		t.Errorf("width = %d, want %d", got, elapsedWidth)
 	}
 }
+
+// The tmux path must draw exactly what it drew before window rows learned about
+// AI state. ListWindows fills none of those fields, so every tmux window takes
+// the guard's early exit — turning the badge into an unconditional column is
+// the tempting change this catches.
+func TestWindowRowWithoutAIStateIsUnchanged(t *testing.T) {
+	w := tmux.Window{Index: 2, Name: "editor", Active: true}
+	got := formatWindowRow(&w, false, false, false, 20, 40)
+
+	if want := "  ▶ 2:editor"; !strings.HasPrefix(ansi.Strip(got), want) {
+		t.Errorf("row = %q, want it to start with %q", ansi.Strip(got), want)
+	}
+	// Nothing after the label: no elapsed column, no badge, just padding.
+	if rest := strings.TrimSpace(ansi.Strip(got)[len("  ▶ 2:editor"):]); rest != "" {
+		t.Errorf("row grew a trailing column %q on the tmux path", rest)
+	}
+}
+
+// A badge that sits wherever the label happened to end has to be hunted for on
+// every row. The list is a table; agent rows share the session rows' columns.
+func TestWindowRowBadgeSharesTheSessionColumns(t *testing.T) {
+	const nameWidth, width = 20, 44
+	s := tmux.Session{Name: "workspace", AIState: tmux.AIStateWorking, AITool: "claude"}
+	w := tmux.Window{Index: 1, Name: "agent", AIState: tmux.AIStateWorking, AITool: "claude"}
+
+	sessionRow := formatSessionRow(s, 0, true, false, false, nameWidth, width)
+	windowRow := formatWindowRow(&w, false, false, false, nameWidth, width)
+
+	if a, b := strings.Index(sessionRow, "⏳"), strings.Index(windowRow, "⏳"); a != b {
+		t.Errorf("badge at %d on the session row and %d on the agent row; they must share a column\n%s\n%s",
+			a, b, sessionRow, windowRow)
+	}
+}
+
+// A name column narrow enough to make the label width negative would draw the
+// two columns on top of each other.
+func TestWindowLabelWidthNeverGoesBelowOne(t *testing.T) {
+	if got := windowLabelWidth(false, 0); got < 1 {
+		t.Errorf("width = %d, want at least 1", got)
+	}
+	if got := windowLabelWidth(true, 20); got != 20-indentWindow+orderWidth {
+		t.Errorf("width = %d, want room for the order column too", got)
+	}
+}

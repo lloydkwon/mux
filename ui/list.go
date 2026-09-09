@@ -192,7 +192,7 @@ func formatItemRow(it listItem, selected, showOrder bool, nameWidth, width int, 
 		return formatActionRow("+", actionNewSessionLabel, "create and attach", selected, nameWidth, width)
 	case itemWindow:
 		expanded := t.isWindowExpanded(it.session.Name, it.window.Index)
-		return formatWindowRow(it.window, expanded, selected, width)
+		return formatWindowRow(it.window, expanded, selected, showOrder, nameWidth, width)
 	case itemPane:
 		return formatPaneRow(it.pane, selected, width)
 	default:
@@ -317,7 +317,7 @@ func nameColor(s tmux.Session) lipgloss.TerminalColor {
 //
 // The active one is marked by colour like an attached session, for the same
 // reason — a marker column costs every row a cell to say something about one.
-func formatWindowRow(w *tmux.Window, expanded, selected bool, width int) string {
+func formatWindowRow(w *tmux.Window, expanded, selected, showOrder bool, nameWidth, width int) string {
 	chevron := "▶"
 	if expanded {
 		chevron = "▼"
@@ -328,7 +328,67 @@ func formatWindowRow(w *tmux.Window, expanded, selected bool, width int) string 
 		{text: strings.Repeat(" ", indentWindow) + chevron + " ", color: colorMuted},
 		{text: label, color: activeColor(w.Active, nil)},
 	}
+
+	// A window carrying live AI state gets the same badge and elapsed pair the
+	// session row draws, because a source that reports per-agent state has this
+	// row to say it on and nowhere else.
+	//
+	// The guard is what keeps the tmux path byte-for-byte what it was:
+	// ListWindows fills none of these fields, so every tmux window takes the
+	// early return above this. Do not turn it into an unconditional column.
+	if st := windowState(w); st != nil {
+		// Padded to land the age and the badge in the *session* row's columns,
+		// not merely after the label. The list is a table and its columns are
+		// decided once per render for exactly this reason: a badge that sits
+		// wherever the label happened to end has to be hunted for on every row,
+		// which is the opposite of what a badge is for.
+		labelWidth := windowLabelWidth(showOrder, nameWidth)
+		segs[len(segs)-1].text = padOrTruncate(label, labelWidth)
+		glyph, _ := aiGlyph(*st)
+		segs = append(segs,
+			rowSeg{text: "  " + timeAgo(sessionAge(*st)), color: aiStateColor(st.AIState)},
+			rowSeg{text: "  " + padOrTruncate(glyph, badgeWidth), color: aiBadgeColor(*st)},
+		)
+	}
 	return renderRow(segs, width, selected)
+}
+
+// windowLabelWidth is what a window's label must fill for its age and badge to
+// land in the same columns the session rows use.
+//
+// A session row spends rowGutter + the order label + nameWidth before its age;
+// a window row spends indentWindow + rowGutter first, so its label gets what is
+// left. Never below one cell — a name column narrow enough to make this
+// negative would draw the two columns on top of each other.
+func windowLabelWidth(showOrder bool, nameWidth int) int {
+	w := nameWidth - indentWindow
+	if showOrder {
+		w += orderWidth
+	}
+	if w < 1 {
+		return 1
+	}
+	return w
+}
+
+// windowState lends a window's AI fields to the Session-shaped helpers.
+//
+// aiGlyph is documented as the one place that decides whether a state glyph or
+// a tool icon is drawn, and aiStateColor and aiBadgeColor go with it. Passing a
+// borrowed Session is what keeps that true for agent rows too, instead of
+// growing a second, quietly divergent copy of the rule.
+//
+// nil for a window with nothing to say, which on the tmux path is all of them.
+func windowState(w *tmux.Window) *tmux.Session {
+	if w.AIState == tmux.AIStateNone && w.AITool == "" {
+		return nil
+	}
+	return &tmux.Session{
+		AIState:       w.AIState,
+		AITool:        w.AITool,
+		ActiveCommand: w.AITool,
+		AISince:       w.AISince,
+	}
 }
 
 func formatPaneRow(p *tmux.Pane, selected bool, width int) string {

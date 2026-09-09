@@ -103,3 +103,63 @@ func TestSourcePreviewGoesThroughTheSource(t *testing.T) {
 		t.Errorf("asked = %v, want the key it was handed", fake.asked)
 	}
 }
+
+// A read-only list opens showing its agents: those rows are the reason to look
+// at it, and six collapsed chevrons ask the user to press tab six times for
+// what they came for.
+func TestReadOnlyListOpensExpanded(t *testing.T) {
+	fake := &fakeSource{sessions: []tmux.Session{
+		{Name: "alpha", Windows: []tmux.Window{{Index: 1, Name: "exec"}}},
+	}}
+	m := NewHerdrModel()
+	m.src = fake
+
+	updated, _ := m.Update(m.loadSessionsCmd()())
+	m = updated.(Model)
+
+	if !m.tree.isSessionExpanded("alpha") {
+		t.Fatal("the list opened collapsed")
+	}
+	// The windows arrived with the session list, so the subtree has content on
+	// the very first frame rather than a tick later.
+	var windows int
+	for _, it := range m.items {
+		if it.kind == itemWindow {
+			windows++
+		}
+	}
+	if windows != 1 {
+		t.Errorf("window rows = %d, want the seeded one on the first frame", windows)
+	}
+}
+
+// Seen-once, not always: a subtree the user collapsed must stay collapsed.
+func TestAutoExpandDoesNotUndoACollapse(t *testing.T) {
+	fake := &fakeSource{sessions: []tmux.Session{{Name: "alpha"}}}
+	m := NewHerdrModel()
+	m.src = fake
+
+	updated, _ := m.Update(m.loadSessionsCmd()())
+	m = updated.(Model)
+	m.tree.setSessionExpanded("alpha", false)
+
+	updated, _ = m.Update(m.loadSessionsCmd()())
+	m = updated.(Model)
+
+	if m.tree.isSessionExpanded("alpha") {
+		t.Error("the next tick re-opened a subtree the user had collapsed")
+	}
+}
+
+// A tmux Model must not start expanding things on its own.
+func TestTmuxListStillOpensCollapsed(t *testing.T) {
+	fake := &fakeSource{sessions: []tmux.Session{{Name: "alpha"}}}
+	m := Model{tree: newTreeState(), src: fake} // no readOnly
+
+	updated, _ := m.Update(m.loadSessionsCmd()())
+	m = updated.(Model)
+
+	if m.tree.isSessionExpanded("alpha") {
+		t.Error("a writable list expanded itself")
+	}
+}

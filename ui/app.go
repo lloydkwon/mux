@@ -284,6 +284,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil {
 			m.sessions = msg.sessions
 			m.tree.pruneCaches(m.sessions)
+			m.tree.seedWindows(m.sessions)
+			if m.readOnly {
+				// A read-only list is one to read, and its agent rows are the
+				// reason to open it. Nothing here can be attached to, so there
+				// is no cost to showing everything at once.
+				m.tree.expandNew(m.sessions)
+			}
 			m.applyFilter()
 			if m.focusSession != "" {
 				for i, it := range m.items {

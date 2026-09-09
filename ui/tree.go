@@ -40,6 +40,11 @@ type treeState struct {
 	expandedWindow  map[string]map[int]bool
 	windowsCache    map[string][]tmux.Window
 	panesCache      map[paneCacheKey][]tmux.Pane
+	// everSeen remembers which sessions have already been offered an automatic
+	// expansion, so expandNew opens each one once and never again. Without it a
+	// list that opens expanded would re-open every subtree the user collapsed,
+	// two ticks later, forever.
+	everSeen map[string]struct{}
 }
 
 func newTreeState() treeState {
@@ -48,6 +53,41 @@ func newTreeState() treeState {
 		expandedWindow:  make(map[string]map[int]bool),
 		windowsCache:    make(map[string][]tmux.Window),
 		panesCache:      make(map[paneCacheKey][]tmux.Pane),
+		everSeen:        make(map[string]struct{}),
+	}
+}
+
+// expandNew opens the subtree of every session being seen for the first time.
+//
+// It is what makes the herdr list open showing its agents: the rows under a
+// workspace are the reason to look at it, and a list that opens with six
+// collapsed chevrons asks the user to press tab six times to see what they came
+// for. Seen-once rather than always, so a collapse sticks; keyed on the session
+// name, so a workspace that goes away and comes back opens again — which is
+// right, it is new to the screen either way.
+func (t *treeState) expandNew(sessions []tmux.Session) {
+	for _, s := range sessions {
+		if _, seen := t.everSeen[s.Name]; seen {
+			continue
+		}
+		t.everSeen[s.Name] = struct{}{}
+		t.expandedSession[s.Name] = true
+	}
+}
+
+// seedWindows takes the windows a source delivered with the session list.
+//
+// tmux fills Session.Windows for nobody — ListWindows is a separate call, which
+// is why the field is documented as nil until enumerated — so on that path this
+// does nothing. A source that already knows a session's children (herdr sends
+// them in the same snapshot) skips both the round trip and the one-tick delay
+// before an expanded subtree has anything in it. With expandNew above, that
+// delay would be the whole first frame.
+func (t *treeState) seedWindows(sessions []tmux.Session) {
+	for _, s := range sessions {
+		if len(s.Windows) > 0 {
+			t.windowsCache[s.Name] = s.Windows
+		}
 	}
 }
 
@@ -106,6 +146,11 @@ func (t *treeState) pruneCaches(sessions []tmux.Session) {
 			delete(t.expandedSession, name)
 			delete(t.expandedWindow, name)
 			delete(t.windowsCache, name)
+		}
+	}
+	for name := range t.everSeen {
+		if _, ok := live[name]; !ok {
+			delete(t.everSeen, name)
 		}
 	}
 	for key := range t.panesCache {
