@@ -14,6 +14,16 @@ func TestEncodePath(t *testing.T) {
 		{"/Users/foo/bar", "-Users-foo-bar"},
 		{"/home/user/project", "-home-user-project"},
 		{"", ""},
+		// Measured against this machine's own ~/.claude/projects. An underscore
+		// folds like a separator does — replacing only "/" left mux looking for
+		// a directory that does not exist, and the symptom was a row that
+		// showed no token cost rather than an error.
+		{"/home/u/dev/si/water_ai", "-home-u-dev-si-water-ai"},
+		// The doubled dash is the evidence that the substitution is per
+		// character rather than a collapse: "/." becomes "--".
+		{"/home/u/.claude-mem/observer-sessions", "-home-u--claude-mem-observer-sessions"},
+		// Case survives.
+		{"/home/u/dev/matchingByLocal", "-home-u-dev-matchingByLocal"},
 	}
 	for _, tt := range tests {
 		got := encodePath(tt.input)

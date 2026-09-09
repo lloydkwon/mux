@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -211,11 +212,30 @@ func estimateCost(u *TokenUsage) float64 {
 	return cost
 }
 
-// encodePath converts a filesystem path to the Claude projects directory encoding.
-// "/Users/foo/bar" → "-Users-foo-bar"
+// encodePath converts a filesystem path to the Claude projects directory
+// encoding: "/Users/foo/bar" → "-Users-foo-bar".
+//
+// **Every character that is not a letter or a digit becomes a dash, not just
+// the separator.** Replacing only "/" was the rule here for a long time and it
+// was wrong in a way that reported nothing rather than failing: a project whose
+// path holds an underscore resolved to a directory that does not exist, so
+// LoadTokenUsage found no transcript and the row simply showed no cost.
+// Measured against this machine's own ~/.claude/projects — 10 directories
+// matched to the sessions that wrote them:
+//
+//	/home/lloydkwon/dev/projects/si/water_ai
+//	  → -home-lloydkwon-dev-projects-si-water-ai        (underscore folded)
+//	/home/lloydkwon/.claude-mem/observer-sessions
+//	  → -home-lloydkwon--claude-mem-observer-sessions   (dot folded, and the
+//	    doubled dash is what proves the substitution is per character rather
+//	    than a collapse)
+//
+// Case is preserved: "matchingByLocal" stays as it is.
 func encodePath(path string) string {
-	return strings.ReplaceAll(path, string(os.PathSeparator), "-")
+	return nonAlphanumeric.ReplaceAllString(path, "-")
 }
+
+var nonAlphanumeric = regexp.MustCompile(`[^A-Za-z0-9]`)
 
 // FormatTokens formats a token count into a short human-readable string.
 func FormatTokens(n int) string {
