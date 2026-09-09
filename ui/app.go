@@ -89,6 +89,15 @@ type Model struct {
 	previewKey      previewKey       // (session, window, pane) the cache belongs to
 	tokenUsage      *tmux.TokenUsage // cached token usage for current AI session
 	tokenSession    string           // session name the token cache belongs to
+	// src is where the list comes from; nil means tmux. See ui/source.go —
+	// the zero value being the old behaviour is what lets every existing test
+	// build a Model{...} without naming a source.
+	src sessionSource
+	// readOnly blocks everything that would change what it is looking at.
+	// A source that only reads (herdr) has no answer for attach, create, kill,
+	// rename or a note, and a key that silently does nothing reads as a broken
+	// program — so extraBar says so, permanently, while this is set.
+	readOnly bool
 	// selectMode suspends mouse reporting *and* the refresh tick so the
 	// terminal can select and copy what is on screen. Both halves are needed:
 	// with the tick still running the redraw two ticks later wipes the
@@ -109,6 +118,9 @@ type sessionsLoadedMsg struct {
 	err      error
 }
 
+// loadSessions is the tmux read, kept as a package-level tea.Cmd because
+// ui/watch.go passes it by value. The TUI reaches it through
+// Model.loadSessionsCmd, which is where the source seam lives.
 func loadSessions() tea.Msg {
 	sessions, err := tmux.ListSessions()
 	return sessionsLoadedMsg{sessions: sessions, err: err}
@@ -135,23 +147,41 @@ type panesLoadedMsg struct {
 	panes       []tmux.Pane
 }
 
-func loadWindows(sessionName string) tea.Cmd {
+// The four loaders below route through m.source(). The package-level functions
+// they wrap are deliberately left in place: ui/watch.go passes loadSessions by
+// value, and the panel is a tmux pane with no herdr mode to have.
+
+func (m Model) loadSessionsCmd() tea.Cmd {
+	if m.src == nil {
+		return loadSessions
+	}
+	src := m.src
 	return func() tea.Msg {
-		windows, _ := tmux.ListWindows(sessionName)
+		sessions, err := src.Sessions()
+		return sessionsLoadedMsg{sessions: sessions, err: err}
+	}
+}
+
+func (m Model) loadWindowsCmd(sessionName string) tea.Cmd {
+	src := m.source()
+	return func() tea.Msg {
+		windows, _ := src.Windows(sessionName)
 		return windowsLoadedMsg{sessionName: sessionName, windows: windows}
 	}
 }
 
-func loadPanes(sessionName string, windowIndex int) tea.Cmd {
+func (m Model) loadPanesCmd(sessionName string, windowIndex int) tea.Cmd {
+	src := m.source()
 	return func() tea.Msg {
-		panes, _ := tmux.ListPanes(sessionName, windowIndex)
+		panes, _ := src.Panes(sessionName, windowIndex)
 		return panesLoadedMsg{sessionName: sessionName, windowIndex: windowIndex, panes: panes}
 	}
 }
 
-func refreshPreview(key previewKey) tea.Cmd {
+func (m Model) refreshPreviewCmd(key previewKey) tea.Cmd {
+	src := m.source()
 	return func() tea.Msg {
-		content, err := tmux.CapturePaneTarget(key.target())
+		content, err := src.Capture(key)
 		if err != nil {
 			content = "Error: " + err.Error()
 		}
@@ -212,7 +242,7 @@ func NewSessionModel() Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(loadSessions, tick())
+	return tea.Batch(m.loadSessionsCmd(), tick())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -229,9 +259,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.selectMode {
 			return m, nil
 		}
-		cmds := []tea.Cmd{loadSessions, tick()}
+		cmds := []tea.Cmd{m.loadSessionsCmd(), tick()}
 		if it := m.currentItem(); it != nil && it.session != nil {
-			cmds = append(cmds, refreshPreview(previewKeyForItem(*it)))
+			cmds = append(cmds, m.refreshPreviewCmd(previewKeyForItem(*it)))
 			// Cost tracking reads Claude's own JSONL logs, so it only pays off
 			// for Claude — any other tool would scan for a file that is not there.
 			if tool, ok := tmux.SessionAITool(*it.session); ok && tool.Name == "claude" {
@@ -240,11 +270,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Refresh windows/panes for expanded subtrees
 		for name := range m.tree.expandedSession {
-			cmds = append(cmds, loadWindows(name))
+			cmds = append(cmds, m.loadWindowsCmd(name))
 		}
 		for sessionName, windows := range m.tree.expandedWindow {
 			for windowIdx := range windows {
-				cmds = append(cmds, loadPanes(sessionName, windowIdx))
+				cmds = append(cmds, m.loadPanesCmd(sessionName, windowIdx))
 			}
 		}
 		return m, tea.Batch(cmds...)
@@ -299,7 +329,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.focusSession = msg.name
-		return m, loadSessions
+		return m, m.loadSessionsCmd()
 
 	case sessionRenamedMsg:
 		m.mode = modeList
@@ -311,7 +341,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.focusSession = msg.newName
-		return m, loadSessions
+		return m, m.loadSessionsCmd()
 
 	case filterAppliedMsg:
 		m.mode = modeList
@@ -331,7 +361,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.err = err
 				}
 			}
-			return m, loadSessions
+			return m, m.loadSessionsCmd()
 		}
 		return m, nil
 
@@ -355,7 +385,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// loadSessions is what brings it back.
 		m.mode = modeList
 		m.focusSession = msg.sessionName
-		return m, loadSessions
+		return m, m.loadSessionsCmd()
 
 	case setupInstalledMsg:
 		// Success needs no announcement — the keys simply work from here. What
@@ -590,14 +620,14 @@ func (m Model) expandCurrent() (tea.Model, tea.Cmd) {
 		}
 		m.tree.setSessionExpanded(it.session.Name, true)
 		m.rebuildItems()
-		return m, loadWindows(it.session.Name)
+		return m, m.loadWindowsCmd(it.session.Name)
 	case itemWindow:
 		if m.tree.isWindowExpanded(it.session.Name, it.window.Index) {
 			return m, nil
 		}
 		m.tree.setWindowExpanded(it.session.Name, it.window.Index, true)
 		m.rebuildItems()
-		return m, loadPanes(it.session.Name, it.window.Index)
+		return m, m.loadPanesCmd(it.session.Name, it.window.Index)
 	}
 	return m, nil
 }
@@ -639,7 +669,7 @@ func (m Model) collapseCurrent() (tea.Model, tea.Cmd) {
 // current cursor position. Returns nil when there is no current item.
 func (m *Model) refreshCurrentPreview() tea.Cmd {
 	if it := m.currentItem(); it != nil && it.session != nil {
-		return refreshPreview(previewKeyForItem(*it))
+		return m.refreshPreviewCmd(previewKeyForItem(*it))
 	}
 	return nil
 }
@@ -730,7 +760,7 @@ func (m Model) toggleSelectMode() (tea.Model, tea.Cmd) {
 	}
 	// The tick is restarted here and nowhere else: nothing else is scheduling
 	// one while select mode holds, so a missed restart freezes the list for good.
-	return m, tea.Batch(tea.EnableMouseCellMotion, tick(), loadSessions)
+	return m, tea.Batch(tea.EnableMouseCellMotion, tick(), m.loadSessionsCmd())
 }
 
 func (m Model) updateNote(msg tea.Msg) (tea.Model, tea.Cmd) {

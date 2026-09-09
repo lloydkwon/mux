@@ -265,3 +265,21 @@ func TestLeadPanePrefersTheRowWorthActingOn(t *testing.T) {
 		t.Error("an empty workspace produced a lead pane")
 	}
 }
+
+// `herdr pane read` prints the pane text raw rather than the JSON envelope
+// every other command returns — measured against a live server. Decoding it as
+// JSON would fail on whatever the user happens to be running.
+func TestCapturePaneTakesStdoutVerbatim(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		m.OnOutput([]byte("line one\nline two\n\n"), nil, mockBin,
+			"pane", "read", "wE:p2", "--source", "visible", "--format", "ansi")
+
+		got, err := CapturePane("wE:p2")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "line one\nline two" {
+			t.Errorf("capture = %q, want the raw text with trailing blanks trimmed", got)
+		}
+	})
+}
