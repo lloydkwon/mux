@@ -463,6 +463,9 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.activateCurrent()
 
 		case "n":
+			if m.readOnly {
+				break
+			}
 			m.mode = modeCreate
 			m.createModel = newCreateModel(false)
 			return m, m.createModel.nameInput.Focus()
@@ -478,12 +481,18 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.refreshCurrentPreview()
 
 		case "x":
+			if m.readOnly {
+				break
+			}
 			if it := m.currentItem(); it != nil && it.kind == itemSession {
 				m.mode = modeConfirmKill
 				m.confirmKillMod = newConfirmKillModel(it.session.Name)
 			}
 
 		case "r":
+			if m.readOnly {
+				break
+			}
 			if it := m.currentItem(); it != nil && it.kind == itemSession {
 				m.mode = modeRename
 				m.renameModel = newRenameModel(it.session.Name)
@@ -491,6 +500,9 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "m":
+			if m.readOnly {
+				break
+			}
 			if it := m.currentItem(); it != nil && it.kind == itemSession {
 				m.mode = modeNote
 				m.noteModel = newNoteModel(it.session.Name, it.session.Note)
@@ -814,7 +826,10 @@ func (m *Model) currentSessionName() string {
 // list and current expansion state. Call after sessions, filter, or expansion
 // state changes.
 func (m *Model) rebuildItems() {
-	m.items = flattenMenu(m.filtered, &m.tree, m.prefs.Orders, m.filterText == "" || m.filterText == m.projectDir)
+	// Action rows are "New shell" (detach) and "New tmux session" (create) —
+	// both writes, and both meaningless for a source that only reads.
+	actions := !m.readOnly && (m.filterText == "" || m.filterText == m.projectDir)
+	m.items = flattenMenu(m.filtered, &m.tree, m.prefs.Orders, actions)
 	if m.cursor >= len(m.items) {
 		m.cursor = max(0, len(m.items)-1)
 	}
@@ -889,6 +904,17 @@ func (m Model) extraBar() string {
 		return helpStyle.Render(fmt.Sprintf("filter: %s (esc clear)", m.filterText))
 	case m.err != nil:
 		return errorStyle.Render(m.err.Error())
+	case m.readOnly:
+		// Below the error on purpose: a source that is down has something the
+		// user can act on, and this line never changes.
+		//
+		// Permanent rather than a message per refused key, for two reasons. A
+		// key that silently does nothing reads as a broken program, and saying
+		// why once at the bottom answers all of them at once. And a bar that
+		// appears and disappears moves chromeTop between 1 and 2, which shifts
+		// every click target by a row — the select-mode bar is permanent while
+		// it is on for the same reason.
+		return helpStyle.Render(readOnlyBar)
 	}
 	return ""
 }
@@ -934,7 +960,13 @@ func (m Model) listInnerWidth() int {
 // of the way when not.
 func (m Model) titleBar() string {
 	// Sessions only — windows and panes are not what the number is about.
+	// The glyph stays whatever the mode: it is pinned by
+	// TestGlyphWidthsAreStable, and ui/layout.go cannot compensate for a glyph
+	// that measures differently from what it draws.
 	left := fmt.Sprintf("⚡ tmux sessions %d", len(m.filtered))
+	if m.readOnly {
+		left = fmt.Sprintf("⚡ herdr workspaces %d", len(m.filtered))
+	}
 	right := fmt.Sprintf("sort: %s", m.prefs.Sort)
 
 	gap := m.width - ansi.StringWidth(left) - ansi.StringWidth(right) - 1
@@ -948,7 +980,7 @@ func (m Model) viewMain() string {
 	title := m.titleBar()
 
 	// Help bar
-	help := renderHelp()
+	help := renderHelp(m.readOnly)
 
 	extraBar := m.extraBar()
 
@@ -1001,7 +1033,12 @@ func (m Model) viewWithOverlay(overlay string) string {
 		box)
 }
 
-func renderHelp() string {
+// readOnlyBar is what extraBar says for the whole time a read-only source is
+// in use. It names the source and what is off, because a key that does nothing
+// with no explanation is indistinguishable from a broken program.
+const readOnlyBar = "herdr (read-only) — attach, new, kill, rename and memo are off"
+
+func renderHelp(readOnly bool) string {
 	keys := []struct{ key, desc string }{
 		{"↑↓/jk", "navigate"},
 		{"tab", "expand"},
@@ -1017,6 +1054,22 @@ func renderHelp() string {
 		{"/", "filter"},
 		{"?", "help"},
 		{"q", "quit"},
+	}
+	if readOnly {
+		// Listing keys that are guarded would be worse than listing none: the
+		// bar is the only place a user looks to learn what the program does.
+		// What is left is everything that still works.
+		keys = []struct{ key, desc string }{
+			{"↑↓/jk", "navigate"},
+			{"tab", "expand"},
+			{"⇧tab", "collapse"},
+			{"v", "copy"},
+			{"0-9", "order"},
+			{"o", "sort"},
+			{"/", "filter"},
+			{"?", "help"},
+			{"q", "quit"},
+		}
 	}
 
 	var parts []string

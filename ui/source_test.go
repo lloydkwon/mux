@@ -2,7 +2,11 @@ package ui
 
 import (
 	"errors"
+	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lloydkwon/mux/tmux"
 )
@@ -161,5 +165,80 @@ func TestTmuxListStillOpensCollapsed(t *testing.T) {
 
 	if m.tree.isSessionExpanded("alpha") {
 		t.Error("a writable list expanded itself")
+	}
+}
+
+// readOnlyModel is a herdr-shaped Model with one session under the cursor.
+func readOnlyModel(t *testing.T) Model {
+	t.Helper()
+	fake := &fakeSource{sessions: []tmux.Session{
+		{Name: "alpha", Windows: []tmux.Window{{Index: 1, Name: "exec"}}},
+	}}
+	m := NewHerdrModel()
+	m.src = fake
+	m.width, m.height = 100, 24
+	updated, _ := m.Update(m.loadSessionsCmd()())
+	return updated.(Model)
+}
+
+// The guard lives in activateCurrent alone, which enter and the double click
+// share. A second guard in cmd/mux is exactly the drift that sharing prevents.
+func TestReadOnlyEnterDoesNotAttach(t *testing.T) {
+	m := readOnlyModel(t)
+	updated, cmd := m.updateList(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(Model)
+
+	if got.AttachName() != "" {
+		t.Errorf("attach target = %q, want none", got.AttachName())
+	}
+	if cmd != nil {
+		t.Error("enter returned a command; read-only enter must do nothing")
+	}
+}
+
+// Each of these opens a mode that would change tmux. The mode must not open at
+// all — refusing later, inside the sub-model, would let the user type a name
+// first and be told no afterwards.
+func TestReadOnlyRefusesTheWriteKeys(t *testing.T) {
+	for _, key := range []rune{'n', 'x', 'r', 'm'} {
+		m := readOnlyModel(t)
+		updated, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		if got := updated.(Model); got.mode != modeList {
+			t.Errorf("%q opened mode %v, want the list to stay put", key, got.mode)
+		}
+	}
+}
+
+// "New shell" detaches and "New tmux session" creates. Both are writes, and in
+// herdr mode neither has anything to act on.
+func TestReadOnlyDropsTheActionRows(t *testing.T) {
+	m := readOnlyModel(t)
+	for _, it := range m.items {
+		if it.kind == itemNewShell || it.kind == itemNewSession {
+			t.Fatalf("an action row survived into the read-only list: %v", it.kind)
+		}
+	}
+}
+
+// A key that silently does nothing is indistinguishable from a broken program,
+// so the bar says why — permanently, because a bar that comes and goes moves
+// chromeTop and shifts every click target by a row.
+func TestReadOnlySaysSoOnScreen(t *testing.T) {
+	m := readOnlyModel(t)
+	if got := m.extraBar(); got == "" {
+		t.Fatal("nothing on screen explains why the write keys do nothing")
+	}
+	if !strings.Contains(m.titleBar(), "herdr") {
+		t.Error("the title still claims to be listing tmux sessions")
+	}
+	// The help bar must not advertise keys the guards refuse.
+	help := ansi.Strip(renderHelp(true))
+	for _, gone := range []string{"attach", "new", "kill", "rename", "memo"} {
+		if strings.Contains(help, gone) {
+			t.Errorf("help still offers %q in read-only mode", gone)
+		}
+	}
+	if !strings.Contains(help, "filter") {
+		t.Error("help dropped a key that still works")
 	}
 }
