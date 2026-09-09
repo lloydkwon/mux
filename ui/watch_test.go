@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -994,5 +995,129 @@ func TestAdoptSavedWidthUsesTheWindowItIsGiven(t *testing.T) {
 	unknown, _ := m.adoptSavedWidthWith(100, 0)
 	if unknown.targetWidth != 100 {
 		t.Errorf("target = %d, want the saved 100 when the window is unknown", unknown.targetWidth)
+	}
+}
+
+// --- a renamed session -----------------------------------------------------
+
+// loadCmd is load, keeping the command so a test can see what the tick asked
+// for as well as what it decided.
+func loadCmd(m watchModel, sessions []tmux.Session) (watchModel, tea.Cmd) {
+	updated, cmd := m.Update(sessionsLoadedMsg{sessions: sessions})
+	return updated.(watchModel), cmd
+}
+
+// findOwnResolved runs cmd and reports the ownResolvedMsg in it, if any.
+// tea.Batch returns a BatchMsg carrying the commands, so this unwraps one level.
+func findOwnResolved(t *testing.T, cmd tea.Cmd) (ownResolvedMsg, bool) {
+	t.Helper()
+	if cmd == nil {
+		return ownResolvedMsg{}, false
+	}
+	switch msg := cmd().(type) {
+	case ownResolvedMsg:
+		return msg, true
+	case tea.BatchMsg:
+		for _, c := range msg {
+			if c == nil {
+				continue
+			}
+			if got, ok := c().(ownResolvedMsg); ok {
+				return got, true
+			}
+		}
+	}
+	return ownResolvedMsg{}, false
+}
+
+// Renaming a session leaves the panel holding a name nothing answers to. It
+// used to keep it for ever: no ◀ anywhere, and the cursor on someone else's row.
+func TestWatchReResolvesOwnSessionAfterARename(t *testing.T) {
+	m := watchTestModel(48, 20)
+	m.ownSession = "old-name"
+	m.resolveOwn = func() (string, error) { return "new-name", nil }
+
+	m, cmd := loadCmd(m, []tmux.Session{
+		attachedSess("new-name", tmux.AIStateWorking, true),
+		attachedSess("other", tmux.AIStateReady, false),
+	})
+	msg, asked := findOwnResolved(t, cmd)
+	if !asked {
+		t.Fatal("the panel kept a name no session answers to")
+	}
+	if msg.name != "new-name" {
+		t.Fatalf("resolved %q, want the pane's session now", msg.name)
+	}
+
+	m = m.adoptOwnSession(msg)
+	if m.ownSession != "new-name" {
+		t.Errorf("ownSession = %q, want the fresh name", m.ownSession)
+	}
+	// The cursor is not moved here: clearing the edge hands that to the next
+	// tick's reanchorOnArrival, so one mechanism owns "put the cursor where
+	// you are".
+	if m.ownAttached {
+		t.Error("the arrival edge was left armed; it can never fire again")
+	}
+
+	// Which is the user's own scenario: they switch in, and the cursor follows.
+	m = load(m, []tmux.Session{
+		attachedSess("new-name", tmux.AIStateWorking, true),
+		attachedSess("other", tmux.AIStateReady, false),
+	})
+	if m.selected != "new-name" {
+		t.Errorf("selected = %q, want the session the panel is actually in", m.selected)
+	}
+}
+
+// The check reads a list already in hand, so a settled panel must spend nothing.
+func TestWatchDoesNotReResolveAKnownOwnSession(t *testing.T) {
+	m := watchTestModel(48, 20)
+	m.ownSession = "mux"
+	m.resolveOwn = func() (string, error) {
+		t.Fatal("asked tmux about a session that is right there in the list")
+		return "", nil
+	}
+	_, cmd := loadCmd(m, []tmux.Session{attachedSess("mux", tmux.AIStateWorking, true)})
+	if _, asked := findOwnResolved(t, cmd); asked {
+		t.Error("a settled panel asked anyway")
+	}
+}
+
+// The zero-value gate is what keeps `go test ./ui` off the developer's own tmux
+// server: a watchModel built by hand has no resolver and asks nothing, however
+// stale its ownSession looks.
+func TestWatchWithoutAResolverNeverAsksTmux(t *testing.T) {
+	m := watchTestModel(48, 20)
+	m.ownSession = "gone"
+	if m.resolveOwn != nil {
+		t.Fatal("a hand-built watchModel came with a resolver")
+	}
+	_, cmd := loadCmd(m, []tmux.Session{attachedSess("mux", tmux.AIStateWorking, true)})
+	if _, asked := findOwnResolved(t, cmd); asked {
+		t.Error("a model with no resolver still reached for tmux")
+	}
+}
+
+// A pane that cannot answer must not be asked every two seconds.
+func TestWatchStopsAskingAfterAFailedResolve(t *testing.T) {
+	m := watchTestModel(48, 20)
+	m.ownSession = "old-name"
+	m.resolveOwn = func() (string, error) { return "", errors.New("no such pane") }
+
+	live := []tmux.Session{attachedSess("mux", tmux.AIStateWorking, true)}
+	m, cmd := loadCmd(m, live)
+	msg, asked := findOwnResolved(t, cmd)
+	if !asked {
+		t.Fatal("the stale name was not questioned at all")
+	}
+
+	m = m.adoptOwnSession(msg)
+	if m.ownSession != "" {
+		t.Errorf("ownSession = %q, want the documented \"could not tell\"", m.ownSession)
+	}
+	_, next := loadCmd(m, live)
+	if _, askedAgain := findOwnResolved(t, next); askedAgain {
+		t.Error("kept asking a question it cannot answer")
 	}
 }

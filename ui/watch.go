@@ -73,9 +73,22 @@ type watchModel struct {
 	// so the panel says where you are before it says anything else.
 	//
 	// Empty means "could not tell", and the panel then falls back to the top row.
-	// Resolved once at startup — a pane can be moved between sessions, but being
-	// wrong costs a stale marker, not correctness.
+	//
+	// Resolved at startup and **re-resolved when it stops naming a live session**
+	// — a rename does exactly that, and the cost of being wrong is not the stale
+	// marker this comment used to claim. A name nothing answers to takes the
+	// cursor with it: ownSessionAttached never matches, so ownAttached sticks at
+	// false and reanchorOnArrival can never fire again, and the moment the
+	// selected session goes away autoSelect falls to the top row. Measured — a
+	// session renamed after its panel started drew no ◀ at all and sat on someone
+	// else's row until the process was restarted.
 	ownSession string
+
+	// resolveOwn asks tmux which session this pane is in now. nil disables the
+	// re-resolve entirely, which is what every hand-built watchModel in the tests
+	// gets — the same zero-value gate exePath, editorBin and ghostIdle use, and
+	// what keeps `go test ./ui` off the developer's own server.
+	resolveOwn func() (string, error)
 
 	// Held so a re-layout can be told from a drag. winWidth is the window size
 	// this pane was last seen in; targetWidth is the width to hold it at.
@@ -211,7 +224,10 @@ func RunWatch() error {
 	for {
 		final, err := tea.NewProgram(
 			watchModel{
-				ownSession:     own,
+				ownSession: own,
+				// Only the real panel gets a resolver; a watchModel built by
+				// hand has none and never asks tmux anything.
+				resolveOwn:     resolveOwnSession,
 				minWindowWidth: minWidth,
 				showHeader:     header,
 				editorBin:      editorBin,
@@ -377,7 +393,17 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// developer's own server. It runs even with nothing fresh — reading is
 		// how this panel learns what the others have seen.
 		m = m.reanchorOnArrival()
-		return m.reselect(), mergeEventsCmd(fresh, sessionNames(m.sessions))
+		cmds := []tea.Cmd{mergeEventsCmd(fresh, sessionNames(m.sessions))}
+		// A name nothing answers to is not "could not tell" — it is a question
+		// worth asking again. Costs one display-message, and only after a
+		// rename; the check itself reads the list already in hand.
+		if m.ownSessionLost() {
+			cmds = append(cmds, resolveOwnCmd(m.resolveOwn))
+		}
+		return m.reselect(), tea.Batch(cmds...)
+
+	case ownResolvedMsg:
+		return m.adoptOwnSession(msg), nil
 	}
 	return m, nil
 }
