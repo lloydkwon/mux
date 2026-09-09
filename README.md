@@ -49,6 +49,12 @@ Running Claude in one session, Codex in another, and a dev server in a third? Sw
   the window stays your terminal. Click a session to switch to it, or drive the
   cursor with `mux nav` from a tmux binding, which moves it without taking the
   keyboard away from the pane you are typing in.
+- **`mux --herdr` lists [herdr](https://herdr.dev) workspaces instead** — if
+  your sessions have moved to herdr, the same screen still works: workspaces
+  become rows, the agents inside them become the rows underneath, and the
+  branch, the AI badge and the live preview all come from herdr. **Read-only**
+  — nothing here attaches, creates, renames or kills, and the bar at the top of
+  the list says so. Without the flag mux is exactly the tmux manager it was.
 
 If you want the original release and Homebrew package without these personal
 changes, use [lunemis/mux](https://github.com/lunemis/mux).
