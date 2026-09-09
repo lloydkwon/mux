@@ -76,24 +76,46 @@ func TestSessionsFromFixtures(t *testing.T) {
 	})
 }
 
-// A zero Created reaches compactAgo as time.Since(year 1) and renders
-// "740049d" — seven cells in a four-cell column, and timeAgo's %4s pads without
-// truncating, so every column after it shifts. herdr publishes no creation
-// time, so the mapping has to supply one for every session, every time.
-func TestNoSessionHasAZeroCreated(t *testing.T) {
+// Every workspace that has ever run something gets an age, because that is what
+// the elapsed column and the recent sort both key on.
+func TestWorkspacesWithAgentsGetAnAge(t *testing.T) {
 	withFixtures(t, func(ss []tmux.Session) {
 		for _, s := range ss {
+			if s.AITool == "" {
+				continue // a workspace running nothing has no age to report
+			}
 			if s.Created.IsZero() {
-				t.Errorf("%s has a zero Created — the elapsed column would render ~740000d", s.Name)
+				t.Errorf("%s has no age despite running %s", s.Name, s.AITool)
 			}
 		}
 	})
 }
 
-func TestCreatedFallsBackToTheSnapshotClockWithNoPanes(t *testing.T) {
+// The workspace with nothing running gets a zero rather than the clock.
+//
+// The snapshot's own time was the first answer and it was worse than no answer:
+// it made the one workspace with nothing to say read "0s" and sort to the top
+// of a list ordered by recency. Zero is what both consumers already handle —
+// compactAgo draws a blank, the recent sort puts it last.
+func TestAWorkspaceRunningNothingHasNoAge(t *testing.T) {
+	withFixtures(t, func(ss []tmux.Session) {
+		dyfa, ok := find(ss, "dyfa-front")
+		if !ok {
+			t.Fatal("dyfa-front is missing")
+		}
+		if !dyfa.Created.IsZero() {
+			t.Errorf("Created = %v, want zero for a workspace with no agent", dyfa.Created)
+		}
+		if ss[len(ss)-1].Name != "dyfa-front" {
+			t.Errorf("last session = %q, want the ageless one sorted last", ss[len(ss)-1].Name)
+		}
+	})
+}
+
+func TestCreatedTakesTheNewestStateChange(t *testing.T) {
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	if got := createdFor(nil, now); !got.Equal(now) {
-		t.Errorf("createdFor(no panes) = %v, want the snapshot clock %v", got, now)
+	if got := createdFor(nil, now); !got.IsZero() {
+		t.Errorf("createdFor(no panes) = %v, want zero", got)
 	}
 	ps := []paneInfo{
 		{StateChangedAtUnixMs: 1000},
@@ -102,6 +124,24 @@ func TestCreatedFallsBackToTheSnapshotClockWithNoPanes(t *testing.T) {
 	}
 	if got := createdFor(ps, now); !got.Equal(time.UnixMilli(5000)) {
 		t.Errorf("createdFor = %v, want the newest state change", got)
+	}
+}
+
+// A shell writes its own terminal title, and reading that as the tool's name
+// for the turn put "lloydkwon@DESKTOP:~/dev/..." in the field every other row
+// uses for what Claude called the work.
+func TestAShellsTitleIsNotATaskName(t *testing.T) {
+	shell := paneInfo{PaneID: "wC:p1", TerminalTitleStripped: "user@host:~/dev/x"}
+	if got := taskOf(shell); got != "" {
+		t.Errorf("task = %q, want empty for a pane with no agent", got)
+	}
+	if got := windowName(shell, ""); got != "p1" {
+		t.Errorf("name = %q, want the pane number rather than the shell prompt", got)
+	}
+
+	agent := paneInfo{PaneID: "w1:p1", Agent: "claude", TerminalTitleStripped: "실행_거브젠"}
+	if got := taskOf(agent); got != "실행_거브젠" {
+		t.Errorf("task = %q, want the tool's own name for the turn", got)
 	}
 }
 

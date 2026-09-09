@@ -177,7 +177,9 @@ func sessionsFrom(snap *snapshot, now time.Time) []tmux.Session {
 			s.Directory = lead.CWD
 			s.ActiveCommand = lead.Agent
 			s.AITool = lead.Agent
-			s.AITask = lead.TerminalTitleStripped
+			if lead.Agent != "" {
+				s.AITask = lead.TerminalTitleStripped
+			}
 			s.AISince = msToTime(lead.StateChangedAtUnixMs)
 		}
 
@@ -213,18 +215,23 @@ func sessionsFrom(snap *snapshot, now time.Time) []tmux.Session {
 	return sessions
 }
 
-// createdFor is what the elapsed column counts from, and it must never be zero.
+// createdFor is what the elapsed column counts from.
 //
-// herdr has no workspace creation time — not in the response and not in the
-// schema. A zero Created reaches ui/list.go's compactAgo as time.Since(year 1),
-// which renders "740049d": seven cells in a column budgeted for four, and
-// because timeAgo's %4s pads without truncating, every column after it shifts.
+// herdr publishes no workspace creation time — not in the response and not in
+// the schema — so the newest state change among its panes stands in. That reads
+// better than a creation time would anyway: it answers "how long since anything
+// happened here", which is the question the column is next to a state badge to
+// answer.
 //
-// The newest state change in the workspace is the honest substitute and reads
-// better than a creation time would: it answers "how long since anything
-// happened here". With no panes at all there is nothing to measure and the
-// snapshot's own clock stands in, which renders a stable "0s".
-func createdFor(ps []paneInfo, now time.Time) time.Time {
+// **A workspace whose panes have never reported a state gets a zero, and that
+// is the answer rather than a gap in it.** A plain shell carries no timestamp
+// at all, and the snapshot's own clock was the first substitute — which made
+// the one workspace with nothing running in it read "0s" and sort to the top of
+// a list ordered by recency, claiming to be the freshest thing on screen
+// because it was the only one with nothing to say. Zero is what both consumers
+// already handle correctly: compactAgo draws a blank, and the recent sort puts
+// it last.
+func createdFor(ps []paneInfo, _ time.Time) time.Time {
 	var newest int64
 	for _, p := range ps {
 		if p.StateChangedAtUnixMs > newest {
@@ -234,7 +241,7 @@ func createdFor(ps []paneInfo, now time.Time) time.Time {
 	if newest > 0 {
 		return time.UnixMilli(newest)
 	}
-	return now
+	return time.Time{}
 }
 
 // windowsFrom turns a workspace's panes into the rows nested under it.
@@ -256,24 +263,40 @@ func windowsFrom(ps []paneInfo, agentNames map[string]string) []tmux.Window {
 			Active:  p.Focused,
 			AIState: mapState(p.AgentStatus),
 			AITool:  p.Agent,
-			AITask:  p.TerminalTitleStripped,
+			AITask:  taskOf(p),
 			AISince: msToTime(p.StateChangedAtUnixMs),
 		})
 	}
 	return ws
 }
 
+// taskOf is the tool's own name for the work in hand, and only a tool has one.
+// A pane running a shell still has a terminal title — its prompt writes one —
+// and taking that as a task name put "lloydkwon@DESKTOP:~/dev/..." in the field
+// every other row uses for what Claude called the turn.
+func taskOf(p paneInfo) string {
+	if p.Agent == "" {
+		return ""
+	}
+	return p.TerminalTitleStripped
+}
+
 // windowName names an agent row. The fallback chain is not defensive padding:
 // measured, this repository's own pane had no herdr name, and a pane hosting no
-// agent has neither name nor title.
+// agent has neither.
+//
+// The terminal title is consulted only for a pane that hosts an agent, for the
+// reason taskOf gives: a shell's title is its prompt, and a row reading
+// "1:lloydkwon@DESKTOP-IM053LD:~/dev/projects/dyfa/front" says less than "1:p1"
+// while costing the whole column.
 func windowName(p paneInfo, agentName string) string {
 	if agentName != "" {
 		return agentName
 	}
-	if p.TerminalTitleStripped != "" {
-		return p.TerminalTitleStripped
-	}
 	if p.Agent != "" {
+		if p.TerminalTitleStripped != "" {
+			return p.TerminalTitleStripped
+		}
 		return p.Agent
 	}
 	return "p" + strconv.Itoa(paneNumber(p.PaneID))

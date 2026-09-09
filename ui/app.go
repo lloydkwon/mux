@@ -531,6 +531,13 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 // attached to a different target than the key would be a bug nobody would think
 // to look for.
 func (m Model) activateCurrent() (tea.Model, tea.Cmd) {
+	// A read-only source has nothing to attach to and no session to create.
+	// Guarding here rather than in cmd/mux is the dividend of enter and the
+	// double click sharing this function: one guard covers both, and a second
+	// one downstream is exactly the drift this function exists to prevent.
+	if m.readOnly {
+		return m, nil
+	}
 	it := m.currentItem()
 	if it == nil {
 		return m, nil
@@ -1038,6 +1045,10 @@ func (m Model) AttachPaneIndex() int {
 // running inside tmux. The caller should detach the current tmux client after
 // the TUI restores the terminal; outside tmux, quitting mux already reveals
 // the login shell and this remains false.
+// ReadOnly reports whether this Model may only look. cmd/mux uses it to skip
+// the tmux housekeeping that has no meaning for another source.
+func (m Model) ReadOnly() bool { return m.readOnly }
+
 func (m Model) DetachRequested() bool {
 	return m.detachRequested
 }

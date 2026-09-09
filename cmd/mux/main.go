@@ -77,15 +77,21 @@ func rawVersion(injected string, info *debug.BuildInfo, ok bool) string {
 func main() {
 	info, ok := debug.ReadBuildInfo()
 
+	var herdrMode bool
 	rootCmd := &cobra.Command{
 		Use:     "mux",
 		Short:   "TUI tmux session manager",
 		Version: resolveVersion(version, info, ok),
-		RunE:    func(cmd *cobra.Command, args []string) error { return runRoot() },
+		RunE:    func(cmd *cobra.Command, args []string) error { return runRoot(herdrMode) },
 		// Suppress cobra's default completion and help subcommands
 		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	}
 	rootCmd.SetVersionTemplate("mux {{.Version}}\n")
+	// Flags(), not PersistentFlags(): a persistent flag would be inherited by
+	// watch, panel, border and nav, none of which have a herdr implementation —
+	// so `mux panel --herdr` would parse and then quietly do the tmux thing.
+	rootCmd.Flags().BoolVar(&herdrMode, "herdr", false,
+		"Read the list from herdr instead of tmux (read-only)")
 
 	newCmd := &cobra.Command{
 		Use:   "new",
@@ -277,7 +283,14 @@ func reviveAndRemember() {
 	tmux.RememberServer()
 }
 
-func runRoot() error {
+func runRoot(herdrMode bool) error {
+	if herdrMode {
+		// Every step below this is tmux housekeeping: reviving a server we are
+		// not reading, and handing this process to a tmux popup. The setup offer
+		// goes too — it asks to install tmux keybindings, which is not what
+		// someone who just typed --herdr came for.
+		return runTUI(ui.NewHerdrModel())
+	}
 	reviveAndRemember()
 	if shouldBootstrap() {
 		// Returns only on failure — attach-session replaces this process.
@@ -513,7 +526,9 @@ func repairOwnedConfig() {
 }
 
 func runTUI(model ui.Model) error {
-	repairOwnedConfig()
+	if !model.ReadOnly() {
+		repairOwnedConfig()
+	}
 
 	// Mouse reporting is on so list rows can be clicked. The cost is that the
 	// terminal hands mux every mouse event instead of handling it itself, so

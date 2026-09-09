@@ -373,3 +373,19 @@ func TestSessionNameWidthReservesRoomForNotes(t *testing.T) {
 		t.Errorf("name column %d with notes, %d without — the reserve did nothing", withNote, without)
 	}
 }
+
+// A zero time is "not known" and must draw nothing. tmux always has a creation
+// time so this never fires there, but a source that does not would reach
+// time.Since(year 1) and render "740049d" — seven cells in a column budgeted
+// for four, which %4s pads without truncating, shifting every column after it.
+func TestUnknownAgeDrawsBlankAtTheColumnWidth(t *testing.T) {
+	if got := compactAgo(time.Time{}); got != "" {
+		t.Errorf("compactAgo(zero) = %q, want empty", got)
+	}
+	if got := timeAgo(time.Time{}); got != "    " {
+		t.Errorf("timeAgo(zero) = %q, want four blanks so the column holds", got)
+	}
+	if got := len(timeAgo(time.Time{})); got != elapsedWidth {
+		t.Errorf("width = %d, want %d", got, elapsedWidth)
+	}
+}

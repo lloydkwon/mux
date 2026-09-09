@@ -372,7 +372,17 @@ func timeAgo(t time.Time) string {
 
 // compactAgo formats the age of t as "5s"/"12m"/"3h"/"2d", unpadded. Times in
 // the future clamp to zero rather than rendering as a countdown.
+//
+// A zero time means "not known" and draws nothing. tmux always has a creation
+// time so this never fires there, but a source that does not — herdr publishes
+// none, and a workspace running nothing has no state change to stand in for one
+// — would otherwise reach time.Since(year 1) and render "740049d": seven cells
+// in a column budgeted for four, which timeAgo's %4s pads without truncating,
+// shifting every column after it.
 func compactAgo(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
 	d := time.Since(t)
 	if d < 0 {
 		d = 0
