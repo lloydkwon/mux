@@ -322,6 +322,39 @@ tmux»와 «비어 있는 이름»이 구분되지 않는 것이 문제다. 목�
 만든 이름을 돌려준다** — tmux 는 중복을 거부만 하고 골라 주지 않으므로, 그대로 두면
 enter 가 그냥 실패하는 것으로 보인다.
 
+### 실행/검토 짝은 한 창에 나란히 선다
+
+`<base>-exec` 와 `<base>-plan` 이 둘 다 있으면 mux 는 시작할 때 **검토 세션의 작업 pane 을
+실행 세션의 창으로 옮긴다**(`tmux/pair.go`). 창이 `[exec | plan | panel]` 이 되고, 실측한
+200칸 창에서 `81 | 80 | 37` 이 나온다.
+
+**두 세션으로 나뉘어 있던 것은 사고가 아니다.** `session-loop/bin/spawn-plan.sh` 의 주석이
+*"독립 tmux 세션인 이유: mux 세션 목록과 AI 상태 추적에 잡히게 하기 위해서다"* 라고 적어
+뒀다. 합치면 그 값을 일부 치른다 — Claude 상태 파일은 세션 이름으로 색인되므로 한 세션에
+claude 가 둘이면 배지는 하나만 이긴다. 대신 `mux --claude` 는 **대화** 단위라 둘 다 그대로
+남는다. 그게 이 기능을 지금 만들 수 있게 된 이유다.
+
+**검토 세션은 패널만 남기고 살려 둔다.** tmux 는 마지막 pane 을 닫으면 세션을 없애므로,
+남은 패널 pane 이 그 세션의 이름·옵션·`@mux_note` 를 붙잡아 두는 유일한 것이다. `JoinPair`
+가 pane 이 하나뿐인 검토 세션을 **거부**하는 이유가 그것이다 — 옮기는 순간 세션이 죽는데,
+그건 부르는 쪽이 피하려던 바로 그 결과다.
+
+**한 짝은 한 번만 합친다.** 떼어 놓는 것은 사람이 일부러 하는 일이고, 다음 실행마다 다시
+합치는 mux 는 사용자와 말싸움을 하는 것이다. 전역 옵션 `@mux_paired` 가 합쳐 본 base 를
+기억하고 `PairablePairs` 가 그걸 거른다. 서버와 함께 죽는 수명이 맞다 — 복원된 서버는
+어차피 배치를 처음부터 다시 만든다.
+
+`join-pane` 은 **`-d`** 로 부른다. 사람이 보고 있는 것은 실행 pane 이고, 묻지도 않고 한
+동작이 커서까지 가져가면 «건드리지 말았어야 할 것을 건드렸다»로 읽힌다. `-h` 는 검토 pane 을
+실행 pane **오른쪽**에 놓아 작업과 패널 사이에 앉힌다.
+
+되돌리는 것은 tmux 로 한다: `join-pane -s <plan pane> -t <plan session>:0`. **`break-pane`
+은 쓰지 말 것** — 실측, 원래 창으로 돌아가지 않고 검토 세션에 창을 하나 더 만든다.
+
+접미사는 이 포크 저자의 규약(`session-loop` 의 `EXEC_NAME`/`PLAN_NAME`)이지 tmux 의 것이
+아니므로 `@mux_pair_suffixes`(`"-exec,-plan"`)로 바꿀 수 있다. 파싱이 안 되는 값은 기능을
+끄지 않고 기본값으로 떨어진다 — 오타 하나가 pane 을 옮기는 동작을 조용히 바꾸면 안 된다.
+
 ### Flattened tree list model
 
 There is no nested view. `ui/tree.go`'s `flattenMenu` produces a flat `[]listItem` — action rows, then each session, then (if expanded) its windows, then (if expanded) their panes — and `Model.cursor` is an index into that slice. `treeState` holds the expansion sets plus the window/pane caches; expansion survives session refreshes, and `pruneCaches` drops entries for sessions that vanished.

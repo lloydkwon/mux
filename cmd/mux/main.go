@@ -297,6 +297,7 @@ func runRoot(herdrMode, claudeMode bool) error {
 		// the server the socket wipe can orphan.
 		reviveAndRemember()
 		adoptClaudeSessions()
+		pairSessions()
 		return runTUI(ui.NewClaudeModel())
 	}
 	if herdrMode {
@@ -307,6 +308,7 @@ func runRoot(herdrMode, claudeMode bool) error {
 		return runTUI(ui.NewHerdrModel())
 	}
 	reviveAndRemember()
+	pairSessions()
 	if shouldBootstrap() {
 		// Returns only on failure — attach-session replaces this process.
 		_ = tmux.AttachAndPopup()
@@ -364,6 +366,38 @@ func adoptClaudeSessions() {
 		if a.Err != nil {
 			fmt.Fprintf(os.Stderr, "  ! %s: %v\n", a.Run.Session.Name, a.Err)
 		}
+	}
+}
+
+// pairSessions puts an exec/review pair's two work panes in one window.
+//
+// Here rather than in the TUI for the reasons adoptClaudeSessions is: the joins
+// have to be sequential, `ui` has no mock runner, and this is the one place with
+// a screen to narrate on before the list takes it.
+//
+// **Once per pair, ever** (per tmux server). Pulling the two apart is something
+// a person does on purpose, and a mux that re-joined them every launch would be
+// arguing with them. tmux.PairablePairs is what remembers.
+//
+// Failures are printed, never returned: a pair that could not be joined is not
+// a reason to refuse to draw the list, and the two sessions are still both there
+// to work in.
+func pairSessions() {
+	sessions, err := tmux.ListSessions()
+	if err != nil || len(sessions) == 0 {
+		return
+	}
+	pairs := tmux.PairablePairs(sessions)
+	if len(pairs) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Putting %d pair(s) in one window…\n", len(pairs))
+	for _, p := range pairs {
+		if err := tmux.JoinPair(p); err != nil {
+			fmt.Fprintf(os.Stderr, "  ! %s: %v\n", p.Base, err)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "  %s  ⇢  %s | %s | panel\n", p.Base, p.Exec, p.Plan)
 	}
 }
 
