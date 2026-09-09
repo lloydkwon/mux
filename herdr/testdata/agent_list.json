@@ -1,0 +1,222 @@
+{
+    "id": "cli:agent:list",
+    "result": {
+        "agents": [
+            {
+                "agent": "claude",
+                "agent_session": {
+                    "agent": "claude",
+                    "kind": "id",
+                    "source": "herdr:claude",
+                    "value": "cb979a8e-6d4b-4238-9c31-e4a8ac5e6dad"
+                },
+                "agent_status": "done",
+                "cwd": "/home/lloydkwon/dev/projects/ebbt/matching/matching",
+                "focused": false,
+                "foreground_cwd": "/home/lloydkwon/dev/projects/ebbt/matching/matching",
+                "interactive_ready": true,
+                "name": "matching-exec",
+                "pane_id": "w8:p1",
+                "revision": 3,
+                "state_change_seq": 107,
+                "state_changed_at_unix_ms": 1788928858119,
+                "tab_id": "w8:t1",
+                "terminal_id": "term_65b03769427881",
+                "terminal_title": "\u2733 \uc2e4\ud589_\ud06c\ub9bc\uc5c5\uccb4\uc0c1\ud488\ub9e4\uce6d",
+                "terminal_title_stripped": "\uc2e4\ud589_\ud06c\ub9bc\uc5c5\uccb4\uc0c1\ud488\ub9e4\uce6d",
+                "workspace_id": "w8"
+            },
+            {
+                "agent": "claude",
+                "agent_session": {
+                    "agent": "claude",
+                    "kind": "id",
+                    "source": "herdr:claude",
+                    "value": "c3d17eb2-7633-473f-afac-1a8ec4d91031"
+                },
+                "agent_status": "idle",
+                "cwd": "/home/lloydkwon/dev/projects/ebbt/matching/matching",
+                "focused": false,
+                "foreground_cwd": "/home/lloydkwon/dev/projects/ebbt/matching/matching",
+                "interactive_ready": true,
+                "name": "matching-plan",
+                "pane_id": "w8:p2",
+                "revision": 3,
+                "state_change_seq": 13,
+                "state_changed_at_unix_ms": 1788920297973,
+                "tab_id": "w8:t1",
+                "terminal_id": "term_65b037694279f2",
+                "terminal_title": "\u2733 matching-plan",
+                "terminal_title_stripped": "matching-plan",
+                "workspace_id": "w8"
+            },
+            {
+                "agent": "claude",
+                "agent_session": {
+                    "agent": "claude",
+                    "kind": "id",
+                    "source": "herdr:claude",
+                    "value": "c20cd52f-c488-47fe-85ee-b1ef1c85cca3"
+                },
+                "agent_status": "idle",
+                "cwd": "/home/lloydkwon/dev/projects/ebbt/matchingByLocal",
+                "focused": false,
+                "foreground_cwd": "/home/lloydkwon/dev/projects/ebbt/matchingByLocal",
+                "interactive_ready": true,
+                "name": "mbl-exec",
+                "pane_id": "w9:p1",
+                "revision": 3,
+                "state_change_seq": 14,
+                "state_changed_at_unix_ms": 1788920297974,
+                "tab_id": "w9:t1",
+                "terminal_id": "term_65b03769428073",
+                "terminal_title": "\u2733 \uc2e4\ud589_LOCAL_\uc0c1\ud488\ub9e4\uce6d",
+                "terminal_title_stripped": "\uc2e4\ud589_LOCAL_\uc0c1\ud488\ub9e4\uce6d",
+                "workspace_id": "w9"
+            },
+            {
+                "agent": "claude",
+                "agent_session": {
+                    "agent": "claude",
+                    "kind": "id",
+                    "source": "herdr:claude",
+                    "value": "5db6e7a4-c6d8-4d39-ad2f-5a5b1a4fa48c"
+                },
+                "agent_status": "idle",
+                "cwd": "/home/lloydkwon/dev/projects/ebbt/matchingByLocal",
+                "focused": false,
+                "foreground_cwd": "/home/lloydkwon/dev/projects/ebbt/matchingByLocal",
+                "interactive_ready": true,
+                "name": "mbl-plan",
+                "pane_id": "w9:p2",
+                "revision": 3,
+                "state_change_seq": 16,
+                "state_changed_at_unix_ms": 1788920297974,
+                "tab_id": "w9:t1",
+                "terminal_id": "term_65b037694280c4",
+                "terminal_title": "\u2733 mbl-plan",
+                "terminal_title_stripped": "mbl-plan",
+                "workspace_id": "w9"
+            },
+            {
+                "agent": "claude",
+                "agent_session": {
+                    "agent": "claude",
+                    "kind": "id",
+                    "source": "herdr:claude",
+                    "value": "0063bedb-5d53-4509-bbd4-072ee47df4f6"
+                },
+                "agent_status": "working",
+                "cwd": "/home/lloydkwon/dev/projects/my/mux",
+                "focused": true,
+                "foreground_cwd": "/home/lloydkwon/dev/projects/my/mux",
+                "pane_id": "wA:p1",
+                "revision": 6,
+                "state_change_seq": 109,
+                "state_changed_at_unix_ms": 1788931751414,
+                "tab_id": "wA:t1",
+                "terminal_id": "term_65b03769428765",
+                "terminal_title": "\u25d1 mux-herdr-readonly-integration",
+                "terminal_title_stripped": "mux-herdr-readonly-integration",
+                "workspace_id": "wA"
+            },
+            {
+                "agent": "claude",
+                "agent_session": {
+                    "agent": "claude",
+                    "kind": "id",
+                    "source": "herdr:claude",
+                    "value": "2869bc4f-97a0-4f29-92b8-6ff0b8ac39b9"
+                },
+                "agent_status": "idle",
+                "cwd": "/home/lloydkwon/dev/projects/si/water_ai",
+                "focused": false,
+                "foreground_cwd": "/home/lloydkwon/dev/projects/si/water_ai",
+                "interactive_ready": true,
+                "name": "wai-exec",
+                "pane_id": "wB:p1",
+                "revision": 3,
+                "state_change_seq": 82,
+                "state_changed_at_unix_ms": 1788925803138,
+                "tab_id": "wB:t1",
+                "terminal_id": "term_65b037694294e6",
+                "terminal_title": "\u2733 \uc2e4\ud589_\uc218\uc9c8AI",
+                "terminal_title_stripped": "\uc2e4\ud589_\uc218\uc9c8AI",
+                "workspace_id": "wB"
+            },
+            {
+                "agent": "claude",
+                "agent_session": {
+                    "agent": "claude",
+                    "kind": "id",
+                    "source": "herdr:claude",
+                    "value": "14c0d84f-3aef-4b55-a5eb-ff70a0801cae"
+                },
+                "agent_status": "idle",
+                "cwd": "/home/lloydkwon/dev/projects/si/water_ai",
+                "focused": false,
+                "foreground_cwd": "/home/lloydkwon/dev/projects/si/water_ai",
+                "interactive_ready": true,
+                "name": "wai-plan",
+                "pane_id": "wB:p2",
+                "revision": 3,
+                "state_change_seq": 80,
+                "state_changed_at_unix_ms": 1788925766502,
+                "tab_id": "wB:t1",
+                "terminal_id": "term_65b03769429557",
+                "terminal_title": "\u2733 wai-plan",
+                "terminal_title_stripped": "wai-plan",
+                "workspace_id": "wB"
+            },
+            {
+                "agent": "claude",
+                "agent_session": {
+                    "agent": "claude",
+                    "kind": "id",
+                    "source": "herdr:claude",
+                    "value": "2a3b4d87-fbbf-46c3-bc63-2164c87fea7e"
+                },
+                "agent_status": "done",
+                "cwd": "/home/lloydkwon/dev/projects/si/govgen",
+                "focused": false,
+                "foreground_cwd": "/home/lloydkwon/dev/projects/si/govgen",
+                "interactive_ready": true,
+                "name": "govgen-exec",
+                "pane_id": "wE:p1",
+                "revision": 3,
+                "state_change_seq": 97,
+                "state_changed_at_unix_ms": 1788927554250,
+                "tab_id": "wE:t1",
+                "terminal_id": "term_65b03769436d6a",
+                "terminal_title": "\u2733 \uc2e4\ud589_\uac70\ube0c\uc820",
+                "terminal_title_stripped": "\uc2e4\ud589_\uac70\ube0c\uc820",
+                "workspace_id": "wE"
+            },
+            {
+                "agent": "claude",
+                "agent_session": {
+                    "agent": "claude",
+                    "kind": "id",
+                    "source": "herdr:claude",
+                    "value": "32b8ffe5-be3a-4020-8ca0-c6ae240bb575"
+                },
+                "agent_status": "done",
+                "cwd": "/home/lloydkwon/dev/projects/si/govgen",
+                "focused": false,
+                "foreground_cwd": "/home/lloydkwon/dev/projects/si/govgen",
+                "interactive_ready": true,
+                "name": "govgen-plan",
+                "pane_id": "wE:p2",
+                "revision": 16,
+                "state_change_seq": 95,
+                "state_changed_at_unix_ms": 1788927507018,
+                "tab_id": "wE:t1",
+                "terminal_id": "term_65b03769436dab",
+                "terminal_title": "\u2733 govgen-plan",
+                "terminal_title_stripped": "govgen-plan",
+                "workspace_id": "wE"
+            }
+        ],
+        "type": "agent_list"
+    }
+}
