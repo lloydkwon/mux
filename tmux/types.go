@@ -62,6 +62,22 @@ type Window struct {
 	Name   string
 	Active bool
 	Panes  []Pane // nil until enumerated via ListPanes
+
+	// Live AI state for the tool running in this window, mirroring the same
+	// four fields on Session. Every one is the zero value on the tmux path —
+	// ListWindows does not fill them, and formatWindowRow draws exactly what it
+	// always drew when they are all zero.
+	//
+	// They exist because a provider that reports per-pane state has nowhere
+	// else to put it: Session carries one state for the whole session, which is
+	// the right answer for a row that stands for a session and the wrong one
+	// for a row that stands for a single agent. Claude's state file already
+	// carries "<session>:@<win>.%<pane>", so the tmux path could fill these
+	// later; it does not today.
+	AIState AIState
+	AITool  string
+	AITask  string
+	AISince time.Time
 }
 
 // Pane represents a single tmux pane inside a window.
