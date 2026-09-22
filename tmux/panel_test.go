@@ -21,8 +21,13 @@ func ran(m *mockRunner, sub string) bool {
 	return false
 }
 
-func mockPanelWindow(m *mockRunner) {
-	m.OnOutput([]byte("@7 /work/dir\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_id} #{pane_current_path}")
+func mockPanelWindow(m *mockRunner) { mockPanelWindowWidth(m, "200") }
+
+// mockPanelWindowWidth is the same reading with a chosen window width — the one
+// value the width gate and the panel's ceiling are decided from.
+func mockPanelWindowWidth(m *mockRunner, width string) {
+	m.OnOutput([]byte("@7 work "+width+" 50 /work/dir\n"), nil, "tmux", "display-message", "-p", "-t", "%3",
+		"#{window_id} #{session_name} #{window_width} #{window_height} #{pane_current_path}")
 }
 
 // A window with no panel gets one, detached so the focus stays where the user
@@ -79,8 +84,8 @@ func TestTogglePanelOpensInWindowDirectory(t *testing.T) {
 	for _, dir := range []string{"/work/dir", "/work/my dir/deep"} {
 		t.Run(dir, func(t *testing.T) {
 			withMock(t, func(m *mockRunner) {
-				m.OnOutput([]byte("@7 "+dir+"\n"), nil, "tmux", "display-message", "-p",
-					"-t", "%3", "#{window_id} #{pane_current_path}")
+				m.OnOutput([]byte("@7 work 200 50 "+dir+"\n"), nil, "tmux", "display-message", "-p",
+					"-t", "%3", "#{window_id} #{session_name} #{window_width} #{window_height} #{pane_current_path}")
 				m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
 					"-F", "#{pane_id} #{pane_start_command}")
 				m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
@@ -100,8 +105,8 @@ func TestTogglePanelOpensInWindowDirectory(t *testing.T) {
 // An unreadable path must not stop the panel from opening.
 func TestTogglePanelWithoutDirectory(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
-		m.OnOutput([]byte("@7\n"), nil, "tmux", "display-message", "-p",
-			"-t", "%3", "#{window_id} #{pane_current_path}")
+		m.OnOutput([]byte("@7 work 200 50\n"), nil, "tmux", "display-message", "-p",
+			"-t", "%3", "#{window_id} #{session_name} #{window_width} #{window_height} #{pane_current_path}")
 		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
 			"-F", "#{pane_id} #{pane_start_command}")
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
@@ -210,7 +215,7 @@ func TestTogglePanelIgnoresTheTUI(t *testing.T) {
 // rather than passed empty.
 func TestTogglePanelDefaultsToCurrentPane(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
-		m.OnOutput([]byte("@7 /work/dir\n"), nil, "tmux", "display-message", "-p", "#{window_id} #{pane_current_path}")
+		m.OnOutput([]byte("@7 work 200 50 /work/dir\n"), nil, "tmux", "display-message", "-p", "#{window_id} #{session_name} #{window_width} #{window_height} #{pane_current_path}")
 		m.OnOutput([]byte("%1 \n"), nil, "tmux", "list-panes", "-t", "@7",
 			"-F", "#{pane_id} #{pane_start_command}")
 
@@ -636,7 +641,7 @@ func TestTogglePanelAutoOpensInUntaggedSession(t *testing.T) {
 // and a 48-column panel leaves the work pane almost nothing.
 func TestTogglePanelAutoSkipsNarrowWindow(t *testing.T) {
 	setup := func(m *mockRunner, width string) {
-		mockPanelWindow(m)
+		mockPanelWindowWidth(m, width)
 		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
 			"-F", "#{pane_id} #{pane_start_command}")
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
@@ -846,7 +851,7 @@ func TestTogglePanelLeavesOtherTitlesAlone(t *testing.T) {
 func TestTogglePanelClosesTheGhostEvenWhenItWillNotOpen(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
 		mockGhostWindow(m, "%3 a-hostname\n%9 "+panelTitle+"\n")
-		m.OnOutput([]byte("54\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
+		mockPanelWindowWidth(m, "54") // 좁은 창 — 유령은 치우되 패널은 열지 않는다
 		old := clientEnvHas
 		clientEnvHas = func(int, string) bool { return false }
 		defer func() { clientEnvHas = old }()
@@ -1108,7 +1113,7 @@ func TestWindowShapeRefusesAPartialAnswer(t *testing.T) {
 // 그 상한은 아무도 보기 전에 여기서 적용돼야 한다.
 func TestTogglePanelClampsTheSavedWidthToHalfTheWindow(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
-		mockPanelWindow(m)
+		mockPanelWindowWidth(m, "149")
 		m.OnOutput([]byte("%3 \n"), nil, "tmux", "list-panes", "-t", "@7",
 			"-F", "#{pane_id} #{pane_start_command}")
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")

@@ -238,6 +238,11 @@ func TestWatchOnlyLeftPressActs(t *testing.T) {
 // The panel shows no output to read first, so a click is the decision — it does
 // not move a cursor and wait for a second one. The keyboard keeps the two steps
 // it needs, because `mux nav` has no way to point at a row and commit at once.
+//
+// Nor does the click move the cursor. This is the panel being left; the one
+// that matters next belongs to the target session and re-anchors itself on
+// arrival. Moving this cursor was tried and only left it pointing at the session
+// the user went to, for when they came back.
 func TestWatchClickSwitchesImmediately(t *testing.T) {
 	m := watchTestModel(48, 20)
 	m.sessions = []tmux.Session{sess("mux", tmux.AIStateWorking), sess("api", tmux.AIStateApproval)}
@@ -663,6 +668,19 @@ func TestWatchIgnoresANonWidth(t *testing.T) {
 func attachedSess(name string, st tmux.AIState, attached bool) tmux.Session {
 	s := sess(name, st)
 	s.Attached = attached
+	if attached {
+		s.AttachedClients = 1
+	}
+	return s
+}
+
+// withClients is attachedSess with an explicit client count, for the case the
+// count exists to tell apart: a second client landing in a session that was
+// already attached.
+func withClients(name string, st tmux.AIState, n int) tmux.Session {
+	s := sess(name, st)
+	s.Attached = n > 0
+	s.AttachedClients = n
 	return s
 }
 
@@ -1056,7 +1074,7 @@ func TestWatchReResolvesOwnSessionAfterARename(t *testing.T) {
 	// The cursor is not moved here: clearing the edge hands that to the next
 	// tick's reanchorOnArrival, so one mechanism owns "put the cursor where
 	// you are".
-	if m.ownAttached {
+	if m.ownClients != 0 {
 		t.Error("the arrival edge was left armed; it can never fire again")
 	}
 
@@ -1119,5 +1137,55 @@ func TestWatchStopsAskingAfterAFailedResolve(t *testing.T) {
 	_, next := loadCmd(m, live)
 	if _, askedAgain := findOwnResolved(t, next); askedAgain {
 		t.Error("kept asking a question it cannot answer")
+	}
+}
+
+// A VS Code terminal parked on a session keeps it attached the whole time, so
+// "unattached → attached" never fires again there. Windows Terminal landing
+// beside it is still an arrival, and the cursor has to come home for it —
+// otherwise the panel greets the user pointing at wherever it was last left.
+// Seen in the field: clicking my-mux from another panel switched fine, and
+// my-mux's own panel sat highlighting si-water_ai.
+func TestWatchReanchorsWhenASecondClientArrives(t *testing.T) {
+	m := watchTestModel(48, 20)
+	m.ownSession = "mine"
+
+	// One client (VS Code) has been here all along.
+	m = load(m, []tmux.Session{
+		withClients("mine", tmux.AIStateWorking, 1),
+		withClients("other", tmux.AIStateReady, 0),
+	})
+	if m.selected != "mine" {
+		t.Fatalf("first arrival: cursor on %q, want own session", m.selected)
+	}
+
+	// The user moves the cursor away and nothing changes: a level must not drag
+	// it back on the next tick.
+	m = m.selectSession("other")
+	m = load(m, []tmux.Session{
+		withClients("mine", tmux.AIStateWorking, 1),
+		withClients("other", tmux.AIStateReady, 0),
+	})
+	if m.selected != "other" {
+		t.Fatalf("steady state: cursor moved to %q on its own", m.selected)
+	}
+
+	// Windows Terminal lands beside the VS Code client: 1 → 2 is an arrival.
+	m = load(m, []tmux.Session{
+		withClients("mine", tmux.AIStateWorking, 2),
+		withClients("other", tmux.AIStateReady, 0),
+	})
+	if m.selected != "mine" {
+		t.Errorf("second client arrived and the cursor stayed on %q, want own session", m.selected)
+	}
+
+	// It leaves again: a drop is not an arrival, the cursor is left alone.
+	m = m.selectSession("other")
+	m = load(m, []tmux.Session{
+		withClients("mine", tmux.AIStateWorking, 1),
+		withClients("other", tmux.AIStateReady, 0),
+	})
+	if m.selected != "other" {
+		t.Errorf("a client leaving moved the cursor to %q", m.selected)
 	}
 }

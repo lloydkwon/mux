@@ -3,6 +3,7 @@ package tmux
 import (
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -187,20 +188,21 @@ func parseLine(line string, statuses map[string]ClaudeStatus, screens map[string
 	gitInfo := LookupGitInfo(parts[4])
 
 	s := Session{
-		Name:          parts[0],
-		WindowCount:   windows,
-		Created:       time.Unix(createdUnix, 0),
-		Activity:      time.Unix(activityUnix, 0),
-		Attached:      attached > 0,
-		Directory:     parts[4],
-		ActiveCommand: activeCommand,
-		PanePID:       panePID,
-		GitBranch:     gitInfo.Branch,
-		IsWorktree:    gitInfo.IsWorktree,
-		WindowIndex:   parts[8],
-		PaneIndex:     parts[9],
-		ProjectDir:    parts[10],
-		Note:          note,
+		Name:            parts[0],
+		WindowCount:     windows,
+		Created:         time.Unix(createdUnix, 0),
+		Activity:        time.Unix(activityUnix, 0),
+		Attached:        attached > 0,
+		AttachedClients: attached,
+		Directory:       parts[4],
+		ActiveCommand:   activeCommand,
+		PanePID:         panePID,
+		GitBranch:       gitInfo.Branch,
+		IsWorktree:      gitInfo.IsWorktree,
+		WindowIndex:     parts[8],
+		PaneIndex:       parts[9],
+		ProjectDir:      parts[10],
+		Note:            note,
 	}
 
 	// Screen detection first, then the state file over the top of it. A tool
@@ -333,9 +335,21 @@ func SwitchClient(name string) error {
 	return runner.Run("tmux", "switch-client", "-t", "="+name)
 }
 
+// isVSCodeClient reports whether a tmux client process is a VS Code integrated
+// terminal. Replaceable in tests.
+var isVSCodeClient = func(pid int) bool { return procEnvHas(pid, "TERM_PROGRAM=vscode") }
+
+// hasWTEnv reports whether a process carries Windows Terminal's own marker.
+// Replaceable in tests.
+var hasWTEnv = func(pid int) bool { return procEnvHasPrefix(pid, "WT_SESSION=") }
+
 // isWTClient reports whether a tmux client process was launched from Windows
-// Terminal. Replaceable in tests.
-var isWTClient = func(pid int) bool { return procEnvHasPrefix(pid, "WT_SESSION=") }
+// Terminal *and is not* a VS Code terminal. Replaceable in tests.
+//
+// Both halves are needed. A VS Code window opened from Windows Terminal
+// inherits WT_SESSION, so the marker alone names VS Code clients too — and
+// those are exactly the ones SwitchWTClient must never move.
+var isWTClient = func(pid int) bool { return hasWTEnv(pid) && !isVSCodeClient(pid) }
 
 // SwitchWTClient points the most recently active Windows Terminal client at
 // the named session (exact match, see SwitchClient for the "=" rationale).
@@ -355,6 +369,43 @@ func SwitchWTClient(name string) error {
 		return errors.New("no tmux client attached from Windows Terminal")
 	}
 	return runner.Run("tmux", "switch-client", "-c", client, "-t", "="+name)
+}
+
+// SessionHasVSCodeClient reports whether any VS Code integrated terminal is
+// attached to the named session.
+//
+// It is the guard on an unqualified switch-client: that command moves "the
+// current client", which for a command run from a pane is whichever client is
+// watching that pane's session. Where that is VS Code, the switch drags a
+// window that is supposed to watch one project only.
+//
+// Unknown reads as false — a failed list-clients or a process whose environment
+// cannot be read must not turn into "this is VS Code".
+func SessionHasVSCodeClient(session string) bool {
+	if session == "" {
+		return false
+	}
+	out, err := runner.Output("tmux", "list-clients", "-t", "="+session, "-F",
+		"#{client_pid}")
+	if err != nil {
+		return false
+	}
+	return anyVSCodeClient(string(out), isVSCodeClient)
+}
+
+// anyVSCodeClient reports whether any pid in list-clients output is a VS Code
+// client. Pure for testing.
+func anyVSCodeClient(out string, isVS func(pid int) bool) bool {
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		pid, err := strconv.Atoi(strings.TrimSpace(line))
+		if err != nil {
+			continue
+		}
+		if isVS(pid) {
+			return true
+		}
+	}
+	return false
 }
 
 // VSCodeClientDirs maps each session name to the workspace folders of every
@@ -377,7 +428,7 @@ func VSCodeClientDirs() map[string][]string {
 			continue
 		}
 		pid, err := strconv.Atoi(fields[0])
-		if err != nil || !procEnvHas(pid, "TERM_PROGRAM=vscode") {
+		if err != nil || !isVSCodeClient(pid) {
 			continue
 		}
 		if dir := procEnvValue(pid, "PWD"); dir != "" {
@@ -385,6 +436,40 @@ func VSCodeClientDirs() map[string][]string {
 		}
 	}
 	return dirs
+}
+
+// VSCodeDirFor picks the VS Code window that owns a session from the folders of
+// every VS Code client attached to it, or "" when none of them do.
+//
+// A session collects candidates two ways: its own project window, and windows
+// whose terminal merely attached to peek. Only a window whose workspace folder
+// contains the session's directory is the owner — the rest are visitors, and
+// focusing one of those would pull the user into an unrelated project.
+//
+// Pure, so the rule lives in one place: the widget's JSON and the panel's click
+// both decide "which VS Code window is this session's" with these lines.
+func VSCodeDirFor(sessionDir string, candidates []string) string {
+	if sessionDir == "" {
+		return ""
+	}
+	home, _ := os.UserHomeDir()
+	for _, dir := range candidates {
+		if sessionDir == dir {
+			return dir
+		}
+		// A window opened on the home directory contains every project, so by
+		// the containment rule it would claim every session — click any row and
+		// that one window comes forward. Measured: a client with PWD=$HOME was
+		// attached while sessions lived under ~/dev/projects. Only an exact
+		// match counts for it.
+		if home != "" && dir == home {
+			continue
+		}
+		if strings.HasPrefix(sessionDir, dir+"/") {
+			return dir
+		}
+	}
+	return ""
 }
 
 // mostRecentWTClient picks the client to switch from list-clients output:

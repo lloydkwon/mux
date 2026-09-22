@@ -55,7 +55,13 @@ const (
 // flap. On after-new-window it behaves as before, since a fresh window cannot
 // already hold a panel.
 //
-// The hook path also stands down in four cases, none of them an error: the
+// Every call first fixes the window's size when a single VS Code terminal is
+// watching the session (see viewport.go): the window is grown to that client's
+// size plus the panel, so the panel sits off its screen while a bigger Windows
+// Terminal on the same session still sees it. Where that succeeds the panel
+// costs the VS Code window nothing and the stand-downs below do not apply.
+//
+// Otherwise the hook path stands down in four cases, none of them an error: the
 // session carries a @project_dir tag (tmux-project opened it for a VS Code
 // window), the window is too narrow to spare the width, its session is only
 // being viewed from VS Code, or the user closed the panel here by hand.
@@ -63,10 +69,17 @@ const (
 // decision, not a default, and refusing it would leave no way to see the
 // panel at all.
 func TogglePanel(target string, auto bool) error {
-	window, dir, err := panelWindow(target)
+	ctx, err := panelWindow(target)
 	if err != nil {
 		return err
 	}
+	window, session, dir := ctx.window, ctx.session, ctx.dir
+
+	// Before anything else: if a single VS Code terminal is watching this
+	// session, fix the window wider than that client so the panel sits off its
+	// screen. fitted then means "the panel costs this VS Code window nothing",
+	// which is what lets the stand-downs below be skipped.
+	fitted := syncVSCodeViewport(ctx, DesiredPanelWidth())
 
 	pane, err := findPanelPane(window)
 	if err != nil {
@@ -104,21 +117,16 @@ func TogglePanel(target string, auto bool) error {
 		return nil
 	}
 
-	// The window width is wanted twice — by the auto gate below and by the width
-	// clamp further down — but only sometimes, and the gate's earlier checks
-	// short-circuit more often than not. Read at most once, and only if asked.
-	winWidth, winWidthRead := 0, false
-	windowWidth := func() (int, bool) {
-		if !winWidthRead {
-			winWidthRead = true
-			if w, err := WindowWidth(target); err == nil {
-				winWidth = w
-			}
-		}
-		return winWidth, winWidth > 0
+	// The width came with the window, read once above.
+	windowWidth := func() (int, bool) { return ctx.width, ctx.width > 0 }
+
+	if auto && fitted {
+		// The window was grown to make room, so none of the stand-downs apply:
+		// nothing is taken from the work pane and the VS Code client cannot see
+		// the panel anyway.
+		return openPanel(window, dir, DesiredPanelWidth())
 	}
 
-	session, sessionErr := SessionForPane(target)
 	if auto {
 		// A session the tmux-project profile opened belongs to one VS Code
 		// window, and its integrated terminal is not where 48 columns are
@@ -126,10 +134,10 @@ func TogglePanel(target string, auto bool) error {
 		// one has to inspect an attached client, but after-new-session fires
 		// before any client attaches, so it read "not VS Code" and the panel
 		// went in — and ensure semantics mean it never came back out.
-		if sessionErr == nil && SessionProjectDir(session) != "" {
+		if SessionProjectDir(session) != "" {
 			return nil
 		}
-		if sessionErr == nil && SessionOnlyInVSCode(session) {
+		if SessionOnlyInVSCode(session) {
 			return nil
 		}
 		if w, ok := windowWidth(); ok && w < MinWindowWidth() {
@@ -140,11 +148,6 @@ func TogglePanel(target string, auto bool) error {
 		_ = SetPanelDisabled(window, false)
 	}
 
-	self, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("locate mux binary: %w", err)
-	}
-
 	// Open at the width the user last dragged to. Doing it here rather than
 	// resizing after the fact means the pane never appears at the wrong size
 	// first, and `mux watch` has no startup race with its own resize.
@@ -153,10 +156,7 @@ func TogglePanel(target string, auto bool) error {
 	// to be per session as well (@mux_panel_width), and that option won — so
 	// dragging in one session left the others where they were, which is not what
 	// "the panel is this wide" means to anyone holding one mouse.
-	width := defaultPanelWidth
-	if w := SavedPanelWidth(); w > 0 {
-		width = w
-	}
+	width := DesiredPanelWidth()
 	// Never open past half the window. The saved width is one number shared by
 	// every panel on the machine, so a window narrower than the one it was
 	// dragged in would otherwise open a panel wider than the work pane — and
@@ -170,6 +170,31 @@ func TogglePanel(target string, auto bool) error {
 		// A window too small for the floor is one the gate above should already
 		// have refused; if it got here anyway, the floor wins over the ceiling.
 		width = MinPanelWidth
+	}
+
+	return openPanel(window, dir, width)
+}
+
+// DesiredPanelWidth is the width every panel opens at: whatever the user last
+// dragged one to, anywhere on this machine.
+//
+// One number rather than one per session. It used to be both, and the per
+// session option won — so dragging in one session left the others where they
+// were, which is not what "the panel is this wide" means to anyone holding one
+// mouse.
+func DesiredPanelWidth() int {
+	if w := SavedPanelWidth(); w > 0 {
+		return w
+	}
+	return defaultPanelWidth
+}
+
+// openPanel splits width columns off the right edge of window and runs the
+// panel in them.
+func openPanel(window, dir string, width int) error {
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate mux binary: %w", err)
 	}
 
 	// -d keeps the focus in the pane you were working in. No -b, so the panel
@@ -237,10 +262,11 @@ func NavPanel(target, direction string) error {
 		return fmt.Errorf("unknown direction %q (want up, down, top, bottom or enter)", direction)
 	}
 
-	window, _, err := panelWindow(target)
+	ctx, err := panelWindow(target)
 	if err != nil {
 		return err
 	}
+	window := ctx.window
 	pane, err := findPanelPane(window)
 	if err != nil {
 		return err
@@ -264,10 +290,11 @@ func NavPanel(target, direction string) error {
 // run-shell writes to the status line on every press. Opening one is a different
 // key's job.
 func FocusPanel(target string) error {
-	window, _, err := panelWindow(target)
+	ctx, err := panelWindow(target)
 	if err != nil {
 		return err
 	}
+	window := ctx.window
 	pane, err := findPanelPane(window)
 	if err != nil {
 		return err
@@ -539,24 +566,56 @@ func SetPanelDisabled(window string, off bool) error {
 // A window id never contains a space and a path may, so the split is on the
 // first one only — cutting anywhere else would silently open the panel in a
 // truncated directory.
-func panelWindow(target string) (window, dir string, err error) {
+// panelCtx is everything about a window the panel path needs, read in one
+// display-message. The size rides along because the viewport fix must compare
+// against it on every hook firing — and because asking for it separately would
+// mean a second round trip on a path tmux runs after every resize.
+type panelCtx struct {
+	window  string
+	session string
+	dir     string
+	width   int
+	height  int
+}
+
+func panelWindow(target string) (panelCtx, error) {
 	args := []string{"display-message", "-p"}
 	if target != "" {
 		args = append(args, "-t", target)
 	}
-	args = append(args, "#{window_id} #{pane_current_path}")
+	// The path may contain spaces, so it stays last and takes the remainder.
+	args = append(args, "#{window_id} #{session_name} #{window_width} #{window_height} #{pane_current_path}")
 
 	out, err := runner.Output("tmux", args...)
 	if err != nil {
-		return "", "", fmt.Errorf("resolve window: %w", err)
+		return panelCtx{}, fmt.Errorf("resolve window: %w", err)
 	}
-	window, dir, _ = strings.Cut(strings.TrimSpace(string(out)), " ")
-	if window == "" {
-		return "", "", fmt.Errorf("no tmux window for target %q", target)
+	ctx, ok := parsePanelCtx(strings.TrimSpace(string(out)))
+	if !ok {
+		return panelCtx{}, fmt.Errorf("no tmux window for target %q", target)
 	}
-	// An unreadable path is not fatal: opening the panel in the wrong directory
-	// beats not opening it.
-	return window, dir, nil
+	return ctx, nil
+}
+
+// parsePanelCtx splits one display-message line. Pure for testing.
+//
+// An unreadable size or path is not fatal: opening the panel in the wrong
+// directory beats not opening it, and a zero size only means the viewport fix
+// declines to compare.
+func parsePanelCtx(line string) (panelCtx, bool) {
+	var c panelCtx
+	rest := line
+	c.window, rest, _ = strings.Cut(rest, " ")
+	if c.window == "" {
+		return panelCtx{}, false
+	}
+	c.session, rest, _ = strings.Cut(rest, " ")
+	w, rest, _ := strings.Cut(rest, " ")
+	h, dir, _ := strings.Cut(rest, " ")
+	c.width, _ = strconv.Atoi(w)
+	c.height, _ = strconv.Atoi(h)
+	c.dir = dir
+	return c, true
 }
 
 // findPanelPane returns the id of the panel pane in window, or "" when the

@@ -464,6 +464,9 @@ func runPanelAuto(target string, auto bool) error {
 	tmux.ReviveServer()
 	err := tmux.TogglePanel(target, auto)
 	if auto {
+		// 훅이 가리킨 창 말고도, mux 가 크기를 고정해 둔 창이 있으면 함께 맞춘다.
+		// 그 창을 무효로 만드는 사건은 다른 세션에서 일어나는 일이 많다.
+		tmux.SyncFittedWindows(tmux.DesiredPanelWidth())
 		return nil
 	}
 	return err
@@ -536,12 +539,7 @@ func sessionsJSON(sessions []tmux.Session, vscodeDirs map[string][]string) ([]by
 		// 안(또는 동일)인 창만 인정한다. 다른 프로젝트 창의 터미널에서 이 세션에
 		// attach만 한 경우(구경)는 후보에서 제외 — 세션마다 후보가 여럿일 수
 		// 있으므로(자기 창 + 구경 창) 조건에 맞는 첫 창을 고른다.
-		for _, vdir := range vscodeDirs[s.Name] {
-			if j.Dir == vdir || strings.HasPrefix(j.Dir, vdir+"/") {
-				j.VSCodeDir = vdir
-				break
-			}
-		}
+		j.VSCodeDir = tmux.VSCodeDirFor(j.Dir, vscodeDirs[s.Name])
 		out = append(out, j)
 	}
 	return json.Marshal(out)

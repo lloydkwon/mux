@@ -77,7 +77,7 @@ type watchModel struct {
 	// Resolved at startup and **re-resolved when it stops naming a live session**
 	// — a rename does exactly that, and the cost of being wrong is not the stale
 	// marker this comment used to claim. A name nothing answers to takes the
-	// cursor with it: ownSessionAttached never matches, so ownAttached sticks at
+	// cursor with it: ownSessionClients never matches, so ownClients sticks at
 	// false and reanchorOnArrival can never fire again, and the moment the
 	// selected session goes away autoSelect falls to the top row. Measured — a
 	// session renamed after its panel started drew no ◀ at all and sat on someone
@@ -161,11 +161,14 @@ type watchModel struct {
 	// often, and there is one panel per window asking.
 	lastGhostCheck time.Time
 
-	// ownAttached is whether a client was in this pane's session as of the last
-	// refresh. Held so the *arrival* can be seen: a level would undo the user's
-	// own cursor two seconds after they moved it, an edge only fires when they
-	// come back.
-	ownAttached bool
+	// ownClients is how many clients were in this pane's session as of the last
+	// refresh. Held so an *arrival* can be seen: a level would undo the user's
+	// own cursor two seconds after they moved it, an edge only fires when
+	// someone comes. A count rather than a bool, because with a VS Code
+	// terminal parked on the session the bool is true the whole time and a
+	// Windows Terminal landing beside it was invisible — the cursor then stayed
+	// wherever it was last left, pointing at some other session.
+	ownClients int
 }
 
 // minWidth is the bar this pane leaves below. The same number decides whether a
@@ -293,7 +296,13 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The panel shows no output to read first, so a click is the
 			// decision. The keyboard keeps the two steps it needs: `mux nav`
 			// moves the cursor and enter commits.
-			return m, switchToSession(name)
+			//
+			// The cursor is deliberately not moved. This panel is the one being
+			// *left*; the panel that matters next is the target session's own,
+			// a different process, which re-anchors itself when the client
+			// lands there (reanchorOnArrival). Moving this cursor only left it
+			// pointing at the session the user went to when they came back.
+			return m, m.switchCmd(name)
 		case tea.MouseButtonRight:
 			// The other half of the move, on the button nobody presses while
 			// skimming. It does not switch: opening a project's editor without
@@ -432,7 +441,7 @@ func (m watchModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.selected == "" {
 			return m, nil
 		}
-		return m, switchToSession(m.selected)
+		return m, m.switchCmd(m.selected)
 	}
 	return m, nil
 }
@@ -497,24 +506,26 @@ func (m watchModel) selectSession(name string) watchModel {
 // a second one landing in this session also re-anchors this cursor. Rare, and
 // not wrong in direction — someone did just arrive here.
 func (m watchModel) reanchorOnArrival() watchModel {
-	was := m.ownAttached
-	m.ownAttached = m.ownSessionAttached()
+	was := m.ownClients
+	m.ownClients = m.ownSessionClients()
 
-	if m.ownSession == "" || was || !m.ownAttached {
+	// Only a rise. A drop is someone leaving, which says nothing about where
+	// the cursor of whoever stayed should be.
+	if m.ownSession == "" || m.ownClients <= was {
 		return m
 	}
 	return m.selectSession(m.ownSession)
 }
 
-// ownSessionAttached reports whether any client is currently in this pane's
-// session, as of the sessions just loaded.
-func (m watchModel) ownSessionAttached() bool {
+// ownSessionClients reports how many clients are in this pane's session, as
+// of the sessions just loaded.
+func (m watchModel) ownSessionClients() int {
 	for _, s := range m.sessions {
 		if s.Name == m.ownSession {
-			return s.Attached
+			return s.AttachedClients
 		}
 	}
-	return false
+	return 0
 }
 
 // reselect keeps the cursor pointing at a session that still exists, and picks
@@ -829,7 +840,7 @@ type editorFailedMsg struct {
 // switchToSession moves the current tmux client. It stays a tea.Cmd rather than
 // quitting first, the way the TUI's attach must: switch-client returns normally
 // instead of replacing this process, so the panel survives the switch.
-func switchToSession(name string) tea.Cmd {
+func switchToSession(name, own, editorBin, targetDir string) tea.Cmd {
 	return func() tea.Msg {
 		// Hand focus back before leaving, when there is any to hand back. The
 		// window we are about to leave would otherwise keep reporting the
@@ -838,11 +849,70 @@ func switchToSession(name string) tea.Cmd {
 		// user actually asked for.
 		restoreFocus()
 
-		if err := tmux.SwitchClient(name); err != nil {
+		// Which client moves is not left to tmux. switch-client with no -c
+		// moves "the current client", which for a command run from a pane is
+		// whichever client is watching that pane's session — and with both
+		// terminals attached that may be the VS Code one, which is supposed to
+		// watch a single project. Name Windows Terminal explicitly instead.
+		var err error
+		if tmux.SessionHasVSCodeClient(own) {
+			err = tmux.SwitchWTClient(name)
+		} else {
+			err = tmux.SwitchClient(name)
+		}
+
+		// Then bring the target's own VS Code window forward too. The terminal
+		// and the editor are two views of one session, and moving only the
+		// terminal leaves the user reading one project while typing in another.
+		// Only a window that is already open on it — a click must not launch
+		// an editor for a session nobody has open. Best effort: it rides along
+		// with the switch and must not report the switch as broken.
+		//
+		// This used to *replace* the switch when such a window existed, to
+		// keep Windows Terminal out of a session whose window was sized to the
+		// editor. The window is sized to the larger client now (viewport.go),
+		// so there is nothing left to avoid, and the skip only meant clicking
+		// those rows moved nothing.
+		if dir := vscodeWindowFor(name, editorBin, targetDir); dir != "" {
+			_ = openEditor(editorBin, dir)
+		}
+
+		if err != nil {
 			return switchFailedMsg{session: name, err: err}
 		}
 		return nil
 	}
+}
+
+// vscodeWindowFor is the folder of the VS Code window that owns a session, or
+// "" when none is open on it.
+//
+// Only a window that already exists: a click must not launch an editor for a
+// session nobody has open, and the folder comes from a VS Code client attached
+// to that very session.
+func vscodeWindowFor(name, editorBin, targetDir string) string {
+	if editorBin == "" || targetDir == "" {
+		return ""
+	}
+	return tmux.VSCodeDirFor(targetDir, tmux.VSCodeClientDirs()[name])
+}
+
+// switchCmd builds the move for one session, so a left click and enter cannot
+// drift apart on which client they are allowed to move.
+func (m watchModel) switchCmd(name string) tea.Cmd {
+	return switchToSession(name, m.ownSession, m.editorBin, m.sessionDir(name))
+}
+
+// sessionDir is a session's own directory, which is what decides *which* VS
+// Code window belongs to it. Unlike editorDirFor this does not fall back to the
+// project tag: the comparison is against a window's workspace folder, and the
+// session's real cwd is what has to sit inside it.
+func (m watchModel) sessionDir(name string) string {
+	s, ok := sessionByName(m.sessions, name)
+	if !ok {
+		return ""
+	}
+	return s.Directory
 }
 
 // openSessionEditor opens a session's project folder without moving the client.

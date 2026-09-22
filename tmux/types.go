@@ -6,17 +6,22 @@ import "time"
 
 // Session represents a tmux session with its metadata and state.
 type Session struct {
-	Name          string
-	WindowCount   int      // total window count reported by list-sessions
-	Windows       []Window // nil until enumerated via ListWindows
-	Created       time.Time
-	Activity      time.Time
-	Attached      bool
-	Directory     string
-	ActiveCommand string
-	PanePID       int
-	GitBranch     string // current git branch, empty if not a git repo
-	IsWorktree    bool   // true if Directory is a linked git worktree
+	Name        string
+	WindowCount int      // total window count reported by list-sessions
+	Windows     []Window // nil until enumerated via ListWindows
+	Created     time.Time
+	Activity    time.Time
+	Attached    bool
+	// AttachedClients is how many clients are in the session — the number
+	// Attached is derived from. The panel needs the count, not the level: a
+	// second client arriving in an already-attached session is an arrival too,
+	// and a bool cannot show it.
+	AttachedClients int
+	Directory       string
+	ActiveCommand   string
+	PanePID         int
+	GitBranch       string // current git branch, empty if not a git repo
+	IsWorktree      bool   // true if Directory is a linked git worktree
 
 	// ProjectDir is the session's @project_dir tmux option — the directory the
 	// session was opened for, set by the tmux-project VS Code profile. Empty

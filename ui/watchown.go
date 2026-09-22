@@ -50,7 +50,7 @@ func (m watchModel) ownSessionLost() bool {
 
 // adoptOwnSession takes the re-resolved name.
 //
-// It does not move the cursor. Clearing ownAttached hands that to
+// It does not move the cursor. Clearing ownClients hands that to
 // reanchorOnArrival, which fires on the next tick if a client is actually in
 // this session — one mechanism for "put the cursor where you are", and it still
 // leaves a cursor alone while the user is away.
@@ -64,6 +64,6 @@ func (m watchModel) adoptOwnSession(msg ownResolvedMsg) watchModel {
 		return m
 	}
 	m.ownSession = msg.name
-	m.ownAttached = false
+	m.ownClients = 0
 	return m
 }
