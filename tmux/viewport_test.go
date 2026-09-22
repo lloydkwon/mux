@@ -14,17 +14,17 @@ func TestParseClients(t *testing.T) {
 		wantOther vsClient
 		wantOk    bool
 	}{
-		{"VS Code 하나 + WT 하나", "100 269 69\n200 120 24\n",
-			vsClient{120, 24}, vsClient{269, 69}, true},
-		{"VS Code 없음", "100 269 69\n", vsClient{}, vsClient{269, 69}, false},
-		{"VS Code 둘", "200 120 24\n300 100 30\n", vsClient{100, 30}, vsClient{}, false},
-		{"VS Code 만", "200 120 24\n", vsClient{120, 24}, vsClient{}, true},
+		{"VS Code 하나 + WT 하나", "100 269 69 /dev/pts/6\n200 120 24 /dev/pts/9\n",
+			vsClient{120, 24, "/dev/pts/9"}, vsClient{269, 69, ""}, true},
+		{"VS Code 없음", "100 269 69 /dev/pts/6\n", vsClient{}, vsClient{269, 69, ""}, false},
+		{"VS Code 둘", "200 120 24 /dev/pts/9\n300 100 30 /dev/pts/8\n", vsClient{100, 30, "/dev/pts/8"}, vsClient{}, false},
+		{"VS Code 만", "200 120 24 /dev/pts/9\n", vsClient{120, 24, "/dev/pts/9"}, vsClient{}, true},
 		{"클라이언트 없음", "", vsClient{}, vsClient{}, false},
-		{"깨진 줄은 건너뛴다", "garbage\n200 120 24\n", vsClient{120, 24}, vsClient{}, true},
-		{"크기가 0이면 무시", "200 0 24\n", vsClient{}, vsClient{}, false},
+		{"깨진 줄은 건너뛴다", "garbage\n200 120 24 /dev/pts/9\n", vsClient{120, 24, "/dev/pts/9"}, vsClient{}, true},
+		{"크기가 0이면 무시", "200 0 24 /dev/pts/9\n", vsClient{}, vsClient{}, false},
 		// 창은 사각형 하나라 축별로 가장 큰 값을 받아야 둘 다 들어간다.
-		{"다른 클라이언트 둘은 축별 최대", "100 269 40\n101 200 69\n200 120 24\n",
-			vsClient{120, 24}, vsClient{269, 69}, true},
+		{"다른 클라이언트 둘은 축별 최대", "100 269 40 /dev/pts/6\n101 200 69 /dev/pts/7\n200 120 24 /dev/pts/9\n",
+			vsClient{120, 24, "/dev/pts/9"}, vsClient{269, 69, ""}, true},
 	}
 	for _, c := range cases {
 		vs, other, ok := parseClients(c.out, isVS)
@@ -59,13 +59,13 @@ func TestWindowFit(t *testing.T) {
 		// WT 가 같이 붙어 있으면 창은 WT 것이다 — 그래야 WT 화면에 ··· 가 없다.
 		// VS Code 는 커서를 따라가는 뷰포트로 보고, 작업 pane(269-1-60=208)이
 		// 자기 폭(178)보다 넓으므로 패널은 화면 밖에 남는다.
-		{"WT 가 더 크다", vsClient{178, 49}, vsClient{269, 68}, 60, 269, 68},
+		{"WT 가 더 크다", vsClient{width: 178, height: 49}, vsClient{width: 269, height: 68}, 60, 269, 68},
 		// VS Code 만 있으면 딱 맞춰 준다 — 패닝조차 없다.
-		{"VS Code 만", vsClient{120, 23}, vsClient{}, 70, 191, 23},
+		{"VS Code 만", vsClient{width: 120, height: 23}, vsClient{}, 70, 191, 23},
 		// WT 가 작아도 작업 pane 은 VS Code 폭 이상이어야 한다. 이게 깨지면
 		// 뷰포트가 오른쪽 끝까지 밀려 패널이 보인다.
-		{"WT 가 작으면 바닥이 이긴다", vsClient{178, 49}, vsClient{200, 30}, 60, 239, 49},
-		{"축이 서로 엇갈릴 때", vsClient{178, 60}, vsClient{300, 40}, 60, 300, 60},
+		{"WT 가 작으면 바닥이 이긴다", vsClient{width: 178, height: 49}, vsClient{width: 200, height: 30}, 60, 239, 49},
+		{"축이 서로 엇갈릴 때", vsClient{width: 178, height: 60}, vsClient{width: 300, height: 40}, 60, 300, 60},
 	}
 	for _, c := range cases {
 		w, h := windowFit(c.vs, c.other, c.panelWidth)
@@ -81,7 +81,7 @@ func TestWindowFitKeepsWorkPaneWideEnough(t *testing.T) {
 	for _, vsW := range []int{60, 120, 178, 300} {
 		for _, otherW := range []int{0, 80, 200, 269, 400} {
 			for _, panel := range []int{30, 60, 100} {
-				w, _ := windowFit(vsClient{vsW, 50}, vsClient{otherW, 50}, panel)
+				w, _ := windowFit(vsClient{width: vsW, height: 50}, vsClient{width: otherW, height: 50}, panel)
 				if work := w - paneDivider - panel; work < vsW {
 					t.Fatalf("vs=%d other=%d panel=%d: 작업 pane %d < VS Code %d",
 						vsW, otherW, panel, work, vsW)
@@ -107,5 +107,17 @@ func TestParseFittedWindows(t *testing.T) {
 	}
 	if len(parseFittedWindows("")) != 0 {
 		t.Error("빈 출력에서 창이 나왔다")
+	}
+}
+
+// 커서가 숨겨진 동안만 바닥으로 — tmux 는 그때 뷰포트를 왼쪽 위로 보낸다.
+// 커서가 보이면 tmux 추적으로 돌려줘야 셸의 clear 뒤 프롬프트를 놓치지 않는다.
+func TestViewportAction(t *testing.T) {
+	cases := map[string][2]bool{"0": {true, false}, "1": {false, true}, "": {false, false}, "x": {false, false}}
+	for in, want := range cases {
+		pin, track := viewportAction(in)
+		if pin != want[0] || track != want[1] {
+			t.Errorf("viewportAction(%q) = pin %v track %v, want pin %v track %v", in, pin, track, want[0], want[1])
+		}
 	}
 }

@@ -403,6 +403,16 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// how this panel learns what the others have seen.
 		m = m.reanchorOnArrival()
 		cmds := []tea.Cmd{mergeEventsCmd(fresh, sessionNames(m.sessions))}
+		// A VS Code terminal looking at a window taller than itself sees a
+		// viewport, and tmux sends that viewport to the top-left whenever the
+		// active pane hides its cursor — which Claude does while it streams.
+		// Kept on the bottom from here, the one process per session that is
+		// already awake every two seconds. Only while someone is attached: an
+		// empty session has no viewport to keep, which is what makes the
+		// common case cost nothing.
+		if m.ownSession != "" && m.ownClients > 0 {
+			cmds = append(cmds, keepBottomVisibleCmd(m.ownSession))
+		}
 		// A name nothing answers to is not "could not tell" — it is a question
 		// worth asking again. Costs one display-message, and only after a
 		// rename; the check itself reads the list already in hand.
@@ -895,6 +905,16 @@ func vscodeWindowFor(name, editorBin, targetDir string) string {
 		return ""
 	}
 	return tmux.VSCodeDirFor(targetDir, tmux.VSCodeClientDirs()[name])
+}
+
+// keepBottomVisibleCmd runs the viewport rule for this pane's session. A
+// command rather than a call: it shells out, and Update is driven directly by
+// tests that must not touch the developer's own server.
+func keepBottomVisibleCmd(session string) tea.Cmd {
+	return func() tea.Msg {
+		tmux.KeepBottomVisible(session)
+		return nil
+	}
 }
 
 // switchCmd builds the move for one session, so a left click and enter cannot

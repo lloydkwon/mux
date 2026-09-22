@@ -32,8 +32,12 @@ const (
 	paneDivider = 1
 )
 
-// vsClient is the size of the VS Code terminal a session is being watched from.
-type vsClient struct{ width, height int }
+// vsClient is the VS Code terminal a session is being watched from: its size,
+// and its tty, which is how refresh-client addresses it.
+type vsClient struct {
+	width, height int
+	tty           string
+}
 
 // sessionClients reports the single VS Code client watching session, and the
 // largest of everything else attached to it.
@@ -51,7 +55,7 @@ func sessionClients(session string) (vs, other vsClient, okVS bool) {
 		return vsClient{}, vsClient{}, false
 	}
 	out, err := runner.Output("tmux", "list-clients", "-t", "="+session, "-F",
-		"#{client_pid} #{client_width} #{client_height}")
+		"#{client_pid} #{client_width} #{client_height} #{client_tty}")
 	if err != nil {
 		return vsClient{}, vsClient{}, false
 	}
@@ -67,7 +71,7 @@ func parseClients(out string, isVS func(pid int) bool) (vs, other vsClient, okVS
 	seen := 0
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		f := strings.Fields(line)
-		if len(f) != 3 {
+		if len(f) != 4 {
 			continue
 		}
 		pid, err := strconv.Atoi(f[0])
@@ -81,7 +85,7 @@ func parseClients(out string, isVS func(pid int) bool) (vs, other vsClient, okVS
 		}
 		if isVS(pid) {
 			seen++
-			vs = vsClient{width: w, height: h}
+			vs = vsClient{width: w, height: h, tty: f[3]}
 			continue
 		}
 		other.width = maxInt(other.width, w)
@@ -273,4 +277,57 @@ func parseFittedWindows(out string) []panelCtx {
 		fitted = append(fitted, panelCtx{window: f[0], session: f[1], width: w, height: h})
 	}
 	return fitted
+}
+
+// KeepBottomVisible keeps a VS Code client's viewport on the bottom of a window
+// taller than it while the active pane's cursor is hidden.
+//
+// tmux pans a small client's viewport to follow the cursor, which for Claude
+// Code sits at the bottom — but only while the cursor is *shown*. Hidden, tmux
+// falls back to the top-left corner (tty.c, tty_window_offset1: `if
+// (~wp->screen->mode & MODE_CURSOR) { *ox = 0; *oy = 0; }`), and Claude hides
+// its cursor while it streams. Measured: cursor hidden → offset [0,0], the
+// newest rows gone; `refresh-client -D` past the end → bottom again.
+//
+// So: cursor hidden → pin the bottom; cursor shown → hand the viewport back to
+// tmux's own tracking. The second half is what keeps this safe for a shell —
+// a pinned viewport stops following the cursor, and `clear` puts the prompt on
+// row 1. Both commands are idempotent (measured), so this is stateless and runs
+// every tick with nothing to remember.
+//
+// ponytail: list-clients + display-message + refresh-client, 2초마다, VS Code
+// 클라이언트가 붙은 세션의 패널에서만. 눈에 띄면 cursor_flag 가 바뀔 때만
+// refresh-client 를 보내도록 직전 값을 들면 된다.
+func KeepBottomVisible(session string) {
+	vs, _, ok := sessionClients(session)
+	if !ok || vs.tty == "" {
+		return
+	}
+	// Through the client, not the session: `-t =session` leaves pane formats
+	// empty (measured — only session options resolve), and `-c` reads what
+	// that client is looking at, which is the only view that matters here.
+	out, err := runner.Output("tmux", "display-message", "-p", "-c", vs.tty, "#{cursor_flag}")
+	if err != nil {
+		return
+	}
+	pin, track := viewportAction(strings.TrimSpace(string(out)))
+	switch {
+	case pin:
+		_ = runner.Run("tmux", "refresh-client", "-t", vs.tty, "-D", "99999")
+	case track:
+		_ = runner.Run("tmux", "refresh-client", "-t", vs.tty, "-c")
+	}
+}
+
+// viewportAction maps the active pane's cursor flag onto what to do with the
+// viewport: hidden pins the bottom, shown returns to tracking, anything else
+// (unreadable) does nothing. Pure for testing.
+func viewportAction(cursorFlag string) (pin, track bool) {
+	switch cursorFlag {
+	case "0":
+		return true, false
+	case "1":
+		return false, true
+	}
+	return false, false
 }
