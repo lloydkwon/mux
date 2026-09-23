@@ -244,9 +244,24 @@ func CreateSession(name string) error {
 	return runner.Run("tmux", "new-session", "-d", "-s", name)
 }
 
-// CreateSessionWithDir creates a new detached tmux session starting in the given directory.
+// CreateSessionWithDir creates a new detached tmux session starting in the
+// given directory, tagged with it as its project.
+//
+// The tag is what the VS Code tmux-project profile matches on. A session made
+// here used to carry none, so opening that project's terminal in VS Code made
+// a twin (water_quality → si-water_quality): the profile could not tell the
+// two apart, and session_path was no help either — it records the directory
+// mux itself was started in, not the one asked for. Tagging at birth closes
+// that; the profile still falls back to the pane's cwd for sessions made
+// without a directory.
 func CreateSessionWithDir(name, dir string) error {
-	return runner.Run("tmux", "new-session", "-d", "-s", name, "-c", dir)
+	if err := runner.Run("tmux", "new-session", "-d", "-s", name, "-c", dir); err != nil {
+		return err
+	}
+	// Best-effort: a session without its tag is the old behaviour, not a
+	// failure worth refusing the session over.
+	_ = runner.Run("tmux", "set-option", "-t", name, projectDirOption, dir)
+	return nil
 }
 
 // CreateSessionWithCommand makes a detached session running argv, and returns

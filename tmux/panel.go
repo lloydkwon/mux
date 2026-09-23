@@ -79,7 +79,7 @@ func TogglePanel(target string, auto bool) error {
 	// session, fix the window wider than that client so the panel sits off its
 	// screen. fitted then means "the panel costs this VS Code window nothing",
 	// which is what lets the stand-downs below be skipped.
-	fitted := syncVSCodeViewport(ctx, DesiredPanelWidth())
+	fitted, fitWidth := syncVSCodeViewport(ctx, DesiredPanelWidth())
 
 	pane, err := findPanelPane(window)
 	if err != nil {
@@ -124,7 +124,7 @@ func TogglePanel(target string, auto bool) error {
 		// The window was grown to make room, so none of the stand-downs apply:
 		// nothing is taken from the work pane and the VS Code client cannot see
 		// the panel anyway.
-		return openPanel(window, dir, DesiredPanelWidth())
+		return openPanel(window, dir, fitWidth)
 	}
 
 	if auto {

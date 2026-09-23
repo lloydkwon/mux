@@ -127,6 +127,12 @@ func startEditor(bin, dir string) error {
 	// has handed off to the real application it is still in ours.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
+	// And not our tmux. A VS Code server launched from a pane inherits TMUX,
+	// hands it to every integrated terminal, and `tmux attach` in those then
+	// refuses to nest — the tmux-project terminal tab closes the moment it
+	// opens. Measured: two vscode-server processes carrying TMUX=…,4.
+	cmd.Env = withoutTmux(os.Environ())
+
 	err := cmd.Run()
 	if ctx.Err() == context.DeadlineExceeded {
 		return fmt.Errorf("%s did not return within %s", editorCommand, editorTimeout)
@@ -152,4 +158,17 @@ func firstLine(s string) string {
 		return strings.TrimSpace(s[:i])
 	}
 	return s
+}
+
+// withoutTmux drops the variables that would make a child believe it lives
+// inside this tmux. Pure for testing.
+func withoutTmux(environ []string) []string {
+	out := environ[:0:0]
+	for _, kv := range environ {
+		if strings.HasPrefix(kv, "TMUX=") || strings.HasPrefix(kv, "TMUX_PANE=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }

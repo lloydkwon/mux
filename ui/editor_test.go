@@ -119,12 +119,14 @@ func rightPress(y int) tea.MouseMsg {
 	return tea.MouseMsg{Y: y, Button: tea.MouseButtonRight, Action: tea.MouseActionPress}
 }
 
-// The two buttons are two different answers, and neither may do the other's
-// job: a left click that raised a window would be the surprise this split
-// exists to remove, and a right click that moved the client would take the user
-// out of the terminal they asked to stay in.
+// The two buttons are two different answers. A left click goes to the session:
+// it moves the terminal *and* raises the project's editor window, because the
+// two are views of one thing and arriving in one while reading the other is
+// the confusion the click exists to end. A right click only opens the editor —
+// it must not move the client, or it would take the user out of the terminal
+// they asked to stay in.
 func TestLeftSwitchesAndRightOpensEditor(t *testing.T) {
-	t.Run("left switches and opens nothing", func(t *testing.T) {
+	t.Run("left switches and raises the project's editor", func(t *testing.T) {
 		f := &fakeRunner{}
 		withFakeTmux(t, f)
 		calls := withFakeEditor(t, nil)
@@ -139,8 +141,8 @@ func TestLeftSwitchesAndRightOpensEditor(t *testing.T) {
 			t.Fatalf("unexpected message: %#v", msg)
 		}
 
-		if len(*calls) != 0 {
-			t.Errorf("a left click opened an editor: %v", *calls)
+		if len(*calls) != 1 || !strings.HasPrefix((*calls)[0], "/usr/bin/code ") {
+			t.Errorf("editor calls = %v, want the project folder raised once", *calls)
 		}
 		if len(f.runs) == 0 || !strings.Contains(f.runs[0], "switch-client") {
 			t.Errorf("tmux calls = %v, want a switch-client", f.runs)
@@ -174,9 +176,8 @@ func TestLeftSwitchesAndRightOpensEditor(t *testing.T) {
 }
 
 // The keyboard is the left click's twin, and `mux nav enter` arrives as this
-// exact key. There is no right button to press here, so enter must not grow the
-// editor's job.
-func TestEnterSwitchesOnly(t *testing.T) {
+// exact key: it goes to the session the same way, terminal and editor both.
+func TestEnterSwitchesAndRaisesEditor(t *testing.T) {
 	f := &fakeRunner{}
 	withFakeTmux(t, f)
 	calls := withFakeEditor(t, nil)
@@ -189,8 +190,9 @@ func TestEnterSwitchesOnly(t *testing.T) {
 	}
 	cmd()
 
-	if len(*calls) != 0 {
-		t.Errorf("enter opened an editor: %v", *calls)
+	want := "/usr/bin/code /home/u/projects/api"
+	if len(*calls) != 1 || (*calls)[0] != want {
+		t.Errorf("editor calls = %v, want [%q]", *calls, want)
 	}
 	if len(f.runs) == 0 || !strings.Contains(f.runs[0], "switch-client") {
 		t.Errorf("tmux calls = %v, want a switch-client", f.runs)
@@ -334,5 +336,16 @@ func TestFirstLine(t *testing.T) {
 	}
 	if got := firstLine("boom"); got != "boom" {
 		t.Errorf("firstLine = %q", got)
+	}
+}
+
+// 에디터에 TMUX 를 물려주면 그 VS Code 서버의 모든 터미널이 tmux 안이라고 믿어
+// `tmux attach` 를 거부한다 — tmux-project 탭이 열리자마자 닫히는 원인.
+func TestWithoutTmuxDropsOnlyTmuxVariables(t *testing.T) {
+	in := []string{"HOME=/h", "TMUX=/sock,1,0", "PATH=/bin", "TMUX_PANE=%3", "TERM=xterm"}
+	got := withoutTmux(in)
+	want := []string{"HOME=/h", "PATH=/bin", "TERM=xterm"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }

@@ -76,7 +76,7 @@ func TestStaleClientsZeroIdleDisablesIt(t *testing.T) {
 
 func TestListClientsParsesTheFormat(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
-		m.OnOutput([]byte("/dev/pts/24|237|53|my-mux|1788490351\n/dev/pts/22|269|69|ebbt|1788429498\n"),
+		m.OnOutput([]byte("100|/dev/pts/24|237|53|my-mux|1788490351\n100|/dev/pts/22|269|69|ebbt|1788429498\n"),
 			nil, "tmux", "list-clients", "-F", clientListFormat)
 		cs, err := ListClients()
 		if err != nil {
@@ -99,7 +99,7 @@ func TestListClientsParsesTheFormat(t *testing.T) {
 // safe failure.
 func TestListClientsDropsAnUnparseableLine(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
-		m.OnOutput([]byte("/dev/pts/24|237|53|my-mux|1788490351\n/dev/pts/9|wide|69|x|nope\n"),
+		m.OnOutput([]byte("100|/dev/pts/24|237|53|my-mux|1788490351\n100|/dev/pts/9|wide|69|x|nope\n"),
 			nil, "tmux", "list-clients", "-F", clientListFormat)
 		cs, _ := ListClients()
 		if len(cs) != 1 {
@@ -163,5 +163,33 @@ func TestGhostClientIdleFallsBackOnGarbage(t *testing.T) {
 				t.Fatalf("%q: want the default, got %v", out, got)
 			}
 		})
+	}
+}
+
+// 자기 단말(VS Code·Windows Terminal)은 크기가 다르고 오래 조용해도 유령이 아니다.
+// WT 와 VS Code 가 한 세션에 일부러 다른 크기로 붙어 있는 배치에서, 이 예외가 없으면
+// 30분마다 VS Code 터미널이 끊겨 탭이 사라진다(실측).
+func TestStaleClientsSpareOwnTerminals(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	newest := Client{TTY: "/dev/pts/1", Width: 269, Height: 69, Activity: now}
+	quietVSCode := Client{TTY: "/dev/pts/2", Width: 174, Height: 50, Activity: now.Add(-2 * time.Hour), Own: true}
+	quietPhone := Client{TTY: "/dev/pts/3", Width: 80, Height: 24, Activity: now.Add(-2 * time.Hour)}
+
+	got := StaleClients([]Client{newest, quietVSCode, quietPhone}, 30*time.Minute, now)
+	if len(got) != 1 || got[0].TTY != "/dev/pts/3" {
+		t.Fatalf("stale = %+v, want only the phone", got)
+	}
+}
+
+// parseClientLine 이 pid 로 Own 을 채운다 — 판별은 교체 가능한 isOwnClient 로.
+func TestParseClientLineMarksOwn(t *testing.T) {
+	orig := isOwnClient
+	t.Cleanup(func() { isOwnClient = orig })
+	isOwnClient = func(pid int) bool { return pid == 200 }
+
+	own, ok := parseClientLine("200|/dev/pts/2|174|50|work|1000")
+	other, ok2 := parseClientLine("300|/dev/pts/3|80|24|work|1000")
+	if !ok || !ok2 || !own.Own || other.Own {
+		t.Fatalf("own=%+v(%v) other=%+v(%v)", own, ok, other, ok2)
 	}
 }

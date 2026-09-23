@@ -169,6 +169,13 @@ type watchModel struct {
 	// Windows Terminal landing beside it was invisible — the cursor then stayed
 	// wherever it was last left, pointing at some other session.
 	ownClients int
+
+	// fitted is whether mux fixed this window's size to hide the panel from a
+	// VS Code client, as of the last resize event. In that state the panel's
+	// width is the fit's, and every writer here stands down: the drag
+	// heuristic, the re-layout restore, and the saved-width adoption. Read
+	// beside the other I/O in applyResize so the pure paths need no server.
+	fitted bool
 }
 
 // minWidth is the bar this pane leaves below. The same number decides whether a
@@ -635,17 +642,32 @@ func (m watchModel) applyResize(paneWidth int) (tea.Model, tea.Cmd) {
 	if err != nil {
 		return m, nil // nothing to compare against; leave the width alone
 	}
-	m, cmd := m.applyResizeWith(paneWidth, winWidth, winPanes)
+	// Read here, beside the other I/O, and handed in as a value: the pure
+	// half below is what the tests drive, and it must not touch a server.
+	m.fitted = tmux.WindowFitted(selfPane())
+	m, cmd := m.applyResizeWith(paneWidth, winWidth, winPanes, m.fitted)
 	return m, cmd
 }
 
-// applyResizeWith is the decision itself, split out so it can be tested without
-// a tmux server.
-func (m watchModel) applyResizeWith(paneWidth, winWidth, winPanes int) (watchModel, tea.Cmd) {
+// applyResizeWith is applyResize with every reading supplied. fitted says mux
+// fixed this window's size to hide the panel from a VS Code client, in which
+// case the panel's width belongs to that fit and a change to it is not a drag.
+func (m watchModel) applyResizeWith(paneWidth, winWidth, winPanes int, fitted bool) (watchModel, tea.Cmd) {
 	// A window wide enough clears the tally: only *consecutive* narrow readings
 	// mean the window really shrank.
 	if winWidth >= m.minWidth() {
 		m.narrowSamples = 0
+	}
+
+	// A fitted window's width belongs to the fit (viewport.go): it sizes the
+	// window and pins the panel on every hook. Anything this panel did to the
+	// width there would be a second writer — measured as the two alternating
+	// (99 from the fit, the panel's own target back) and as a proportional
+	// widening saved as a "drag", 60 → 107 in an afternoon. Take note of the
+	// window's shape for the narrow-window rule and touch nothing else.
+	if fitted {
+		m.winWidth, m.winPanes = winWidth, winPanes
+		return m, nil
 	}
 
 	switch {
@@ -763,6 +785,12 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth, winPanes int) (watchMod
 // and the guard doing it is in applyResizeWith: a resize landing on the width we
 // already wanted is not a drag and remembers nothing.
 func (m watchModel) adoptSavedWidth() (watchModel, tea.Cmd) {
+	// A fitted window's width is the fit's — see applyResizeWith. Adopting the
+	// saved width here put the panel back to 107 every two seconds against a
+	// fit that had capped it at 99 to keep the window inside Windows Terminal.
+	if m.fitted {
+		return m, nil
+	}
 	saved := tmux.SavedPanelWidth()
 	winWidth := m.winWidth
 
@@ -850,7 +878,7 @@ type editorFailedMsg struct {
 // switchToSession moves the current tmux client. It stays a tea.Cmd rather than
 // quitting first, the way the TUI's attach must: switch-client returns normally
 // instead of replacing this process, so the panel survives the switch.
-func switchToSession(name, own, editorBin, targetDir string) tea.Cmd {
+func switchToSession(name, own, editorBin, targetDir, fallbackDir string) tea.Cmd {
 	return func() tea.Msg {
 		// Hand focus back before leaving, when there is any to hand back. The
 		// window we are about to leave would otherwise keep reporting the
@@ -883,7 +911,7 @@ func switchToSession(name, own, editorBin, targetDir string) tea.Cmd {
 		// editor. The window is sized to the larger client now (viewport.go),
 		// so there is nothing left to avoid, and the skip only meant clicking
 		// those rows moved nothing.
-		if dir := vscodeWindowFor(name, editorBin, targetDir); dir != "" {
+		if dir := vscodeWindowFor(name, editorBin, targetDir, fallbackDir); dir != "" {
 			_ = openEditor(editorBin, dir)
 		}
 
@@ -894,17 +922,24 @@ func switchToSession(name, own, editorBin, targetDir string) tea.Cmd {
 	}
 }
 
-// vscodeWindowFor is the folder of the VS Code window that owns a session, or
-// "" when none is open on it.
+// vscodeWindowFor is the folder to hand the editor for a session: the one a
+// VS Code window already has open on it when one is attached, else the
+// session's own project folder.
 //
-// Only a window that already exists: a click must not launch an editor for a
-// session nobody has open, and the folder comes from a VS Code client attached
-// to that very session.
-func vscodeWindowFor(name, editorBin, targetDir string) string {
-	if editorBin == "" || targetDir == "" {
+// The attached window is preferred because it is *known* to be the user's —
+// the terminal in it is sitting in this very session. But a window whose
+// terminal was closed, or never opened, is still that project's window, and
+// `code <dir>` raises it if it exists and opens it if not. The rule used to
+// stop at the attached case and did nothing otherwise, which read as the click
+// being broken the moment the project's terminal tab was closed.
+func vscodeWindowFor(name, editorBin, targetDir, fallbackDir string) string {
+	if editorBin == "" {
 		return ""
 	}
-	return tmux.VSCodeDirFor(targetDir, tmux.VSCodeClientDirs()[name])
+	if dir := tmux.VSCodeDirFor(targetDir, tmux.VSCodeClientDirs()[name]); dir != "" {
+		return dir
+	}
+	return fallbackDir
 }
 
 // keepBottomVisibleCmd runs the viewport rule for this pane's session. A
@@ -920,7 +955,7 @@ func keepBottomVisibleCmd(session string) tea.Cmd {
 // switchCmd builds the move for one session, so a left click and enter cannot
 // drift apart on which client they are allowed to move.
 func (m watchModel) switchCmd(name string) tea.Cmd {
-	return switchToSession(name, m.ownSession, m.editorBin, m.sessionDir(name))
+	return switchToSession(name, m.ownSession, m.editorBin, m.sessionDir(name), m.editorDirFor(name))
 }
 
 // sessionDir is a session's own directory, which is what decides *which* VS

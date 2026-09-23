@@ -121,3 +121,34 @@ func TestViewportAction(t *testing.T) {
 		}
 	}
 }
+
+// 창이 WT 보다 넓어지면 WT 도 뷰포트를 얻고, 커서가 숨겨지는 순간 입력창이 화면 밖으로
+// 나간다(실측). 패널은 WT 안에 들어가는 만큼만, 그마저 안 되면 물러난다.
+func TestFitPanelWidth(t *testing.T) {
+	cases := []struct {
+		name      string
+		vs, other vsClient
+		want      int
+		got       int
+		ok        bool
+	}{
+		{"넉넉하면 원하는 폭 그대로", vsClient{width: 174}, vsClient{width: 269}, 60, 60, true},
+		{"모자라면 남는 만큼", vsClient{width: 174}, vsClient{width: 269}, 107, 94, true},
+		{"바닥(MinPanelWidth)도 안 들어가면 물러난다", vsClient{width: 250}, vsClient{width: 269}, 60, 0, false},
+		{"WT 가 없으면 캡 없음", vsClient{width: 174}, vsClient{}, 107, 107, true},
+	}
+	for _, c := range cases {
+		got, ok := fitPanelWidth(c.vs, c.other, c.want)
+		if got != c.got || ok != c.ok {
+			t.Errorf("%s: got %d,%v want %d,%v", c.name, got, ok, c.got, c.ok)
+		}
+	}
+}
+
+func TestParseClientList(t *testing.T) {
+	isVS := func(pid int) bool { return pid == 200 }
+	got := parseClientList("100 269 69 /dev/pts/6\n200 174 50 /dev/pts/10\nbad\n", isVS)
+	if len(got) != 2 || got[0].vscode || !got[1].vscode || got[1].tty != "/dev/pts/10" || got[0].width != 269 {
+		t.Errorf("got %+v", got)
+	}
+}

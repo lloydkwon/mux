@@ -11,7 +11,7 @@ import (
 // because that is the only form tmux gives that does not depend on the server's
 // locale — `#{t:client_activity}` renders "Thu Sep 3 18:58:18 2026", which is
 // unparseable without knowing which language the server was started in.
-const clientListFormat = "#{client_tty}|#{client_width}|#{client_height}|#{client_session}|#{client_activity}"
+const clientListFormat = "#{client_pid}|#{client_tty}|#{client_width}|#{client_height}|#{client_session}|#{client_activity}"
 
 // Client is one terminal attached to the tmux server.
 type Client struct {
@@ -20,6 +20,16 @@ type Client struct {
 	Height   int
 	Session  string
 	Activity time.Time
+
+	// Own marks a terminal the user is actually sitting at — a VS Code
+	// integrated terminal or Windows Terminal, told by the client process's
+	// environment. The ghost check exists for terminals someone walked away
+	// from on another device; these are not that, whatever their size or
+	// idle time. Measured: with WT and VS Code both attached on purpose (the
+	// window is sized to hide the panel from the editor), the editor's
+	// terminal sat "differently sized and idle" for half an hour while the
+	// user typed in WT, and got disconnected — the tab simply vanished.
+	Own bool
 }
 
 // Size is what makes a client cost something. Two clients of different sizes
@@ -54,29 +64,38 @@ func ListClients() ([]Client, error) {
 // carry all five fields is dropped rather than half-filled: this list decides
 // what to detach, and a client whose activity failed to parse would read as
 // epoch-old — which is exactly the shape that gets it disconnected.
+// isOwnClient reports whether a client process is one of the user's own
+// terminals. Replaceable in tests.
+var isOwnClient = func(pid int) bool { return isVSCodeClient(pid) || hasWTEnv(pid) }
+
 func parseClientLine(line string) (Client, bool) {
 	f := strings.Split(line, "|")
-	if len(f) < 5 || strings.TrimSpace(f[0]) == "" {
+	if len(f) < 6 || strings.TrimSpace(f[1]) == "" {
 		return Client{}, false
 	}
-	w, err := strconv.Atoi(strings.TrimSpace(f[1]))
+	pid, err := strconv.Atoi(strings.TrimSpace(f[0]))
 	if err != nil {
 		return Client{}, false
 	}
-	h, err := strconv.Atoi(strings.TrimSpace(f[2]))
+	w, err := strconv.Atoi(strings.TrimSpace(f[2]))
 	if err != nil {
 		return Client{}, false
 	}
-	sec, err := strconv.ParseInt(strings.TrimSpace(f[4]), 10, 64)
+	h, err := strconv.Atoi(strings.TrimSpace(f[3]))
+	if err != nil {
+		return Client{}, false
+	}
+	sec, err := strconv.ParseInt(strings.TrimSpace(f[5]), 10, 64)
 	if err != nil {
 		return Client{}, false
 	}
 	return Client{
-		TTY:      strings.TrimSpace(f[0]),
+		TTY:      strings.TrimSpace(f[1]),
 		Width:    w,
 		Height:   h,
-		Session:  strings.TrimSpace(f[3]),
+		Session:  strings.TrimSpace(f[4]),
 		Activity: time.Unix(sec, 0),
+		Own:      isOwnClient(pid),
 	}, true
 }
 
@@ -116,7 +135,10 @@ func StaleClients(cs []Client, idle time.Duration, now time.Time) []Client {
 	}
 	var out []Client
 	for _, c := range cs {
-		if c.TTY == newest.TTY || c.Size() == newest.Size() {
+		// The user's own terminals are never ghosts, however quiet: WT and a
+		// VS Code terminal share a session on purpose and differ in size by
+		// design, and disconnecting either takes a window the user is using.
+		if c.Own || c.TTY == newest.TTY || c.Size() == newest.Size() {
 			continue
 		}
 		if now.Sub(c.Activity) <= idle {

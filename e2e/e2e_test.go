@@ -1,0 +1,475 @@
+//go:build e2e
+
+// 격리된 진짜 tmux 서버 위에서 사용자가 보는 동작을 검사한다.
+//
+// 단위 테스트는 tmux 를 목으로 바꾸므로 "창이 WT 보다 넓어졌다", "VS Code 클라이언트가
+// 끌려갔다", "패널 폭 저장값이 오염됐다", "훅이 자기 자신을 다시 불러 끝나지 않는다" 같은
+// 회귀를 하나도 잡지 못했다 — 전부 2026-09-22 하루에 실제로 났던 것들이다. 여기 각각을
+// 시나리오 하나로 못 박는다.
+//
+// 격리는 편의가 아니라 요구사항이다(scripts/tmux-assumptions.sh 와 같은 원칙): 전용
+// 소켓(-L), 임시 HOME/XDG(panel.json·.tmux.conf), 그리고 $TMUX 로 모든 tmux 호출을 그
+// 서버로 보낸다. 훅과 패널이 띄우는 mux 는 tmux 가 넘겨주는 TMUX/TMUX_PANE 로 같은 서버를
+// 본다(실측). 사용자의 서버는 건드리지 않는다.
+//
+//	make e2e            # go test -tags e2e ./e2e/
+package e2e
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/lloydkwon/mux/tmux"
+)
+
+var (
+	muxBin string // 이 테스트가 빌드한 mux
+	sock   string // 전용 서버 소켓 경로
+	home   string // 임시 HOME (panel.json, .tmux.conf)
+)
+
+func TestMain(m *testing.M) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		fmt.Println("tmux 없음 — e2e 건너뜀")
+		os.Exit(0)
+	}
+	if _, err := exec.LookPath("script"); err != nil {
+		fmt.Println("script(1) 없음 — e2e 건너뜀")
+		os.Exit(0)
+	}
+	os.Exit(run(m))
+}
+
+func run(m *testing.M) int {
+	tmp, err := os.MkdirTemp("", "mux-e2e-")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(tmp)
+
+	home = filepath.Join(tmp, "home")
+	os.MkdirAll(filepath.Join(home, ".config", "mux"), 0o755)
+	os.Setenv("HOME", home)
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	// mux 의 TUI 소켓은 os.TempDir() 아래 uid 별 하나뿐이다 — 격리하지 않으면
+	// `mux switch` 의 폴백이 사용자의 진짜 TUI 에 attach 를 요청한다.
+	os.MkdirAll(filepath.Join(tmp, "tmp"), 0o755)
+	os.Setenv("TMPDIR", filepath.Join(tmp, "tmp"))
+
+	// mux 를 빌드한다 — 설치본이 아니라 지금 작업 트리.
+	muxBin = filepath.Join(tmp, "mux")
+	build := exec.Command("go", "build", "-o", muxBin, "./cmd/mux")
+	build.Dir = repoRoot()
+	if out, err := build.CombinedOutput(); err != nil {
+		fmt.Printf("mux 빌드 실패: %v\n%s", err, out)
+		return 1
+	}
+
+	// 진짜 훅 설정: 사용자가 `mux setup-panel` 로 얻는 그대로.
+	os.WriteFile(filepath.Join(home, ".tmux.conf"), []byte("set -g mouse on\n"), 0o644)
+	if out, err := exec.Command(muxBin, "setup-panel").CombinedOutput(); err != nil {
+		fmt.Printf("setup-panel 실패: %v\n%s", err, out)
+		return 1
+	}
+
+	name := fmt.Sprintf("mux-e2e-%d", os.Getpid())
+	os.Unsetenv("TMUX") // 테스트를 tmux 안에서 돌려도 사용자 서버로 새지 않게
+	boot := exec.Command("tmux", "-L", name, "-f", filepath.Join(home, ".tmux.conf"),
+		"new-session", "-d", "-s", "_boot", "-x", "80", "-y", "24")
+	if out, err := boot.CombinedOutput(); err != nil {
+		fmt.Printf("서버 기동 실패: %v\n%s", err, out)
+		return 1
+	}
+	out, err := exec.Command("tmux", "-L", name, "display-message", "-p", "#{socket_path}").Output()
+	if err != nil {
+		fmt.Printf("소켓 경로 실패: %v\n", err)
+		return 1
+	}
+	sock = strings.TrimSpace(string(out))
+	// 이제부터 이 프로세스(와 여기서 띄우는 mux)의 모든 `tmux …` 는 이 서버로 간다.
+	os.Setenv("TMUX", sock+",0,0")
+	defer exec.Command("tmux", "-S", sock, "kill-server").Run()
+
+	return m.Run()
+}
+
+func repoRoot() string {
+	wd, _ := os.Getwd()
+	return filepath.Dir(wd)
+}
+
+// tm 은 전용 서버에 tmux 명령을 보낸다. 실패는 테스트 실패다.
+func tm(t *testing.T, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("tmux", append([]string{"-S", sock}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("tmux %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// tmq 는 tm 과 같되 실패를 빈 문자열로 돌려준다 — 없는 옵션을 읽을 때.
+func tmq(args ...string) string {
+	out, _ := exec.Command("tmux", append([]string{"-S", sock}, args...)...).Output()
+	return strings.TrimSpace(string(out))
+}
+
+func atoi(s string) int { n, _ := strconv.Atoi(strings.TrimSpace(s)); return n }
+
+// eventually 는 cond 가 참이 될 때까지 기다린다. 훅·패널 틱은 비동기라 관측은 늘 기다림이다.
+func eventually(t *testing.T, what string, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	t.Fatalf("%s: %v 안에 되지 않았다", what, timeout)
+}
+
+// newSession 은 테스트 전용 세션을 만들고 끝나면 지운다.
+func newSession(t *testing.T, name string) {
+	t.Helper()
+	tm(t, "new-session", "-d", "-s", name, "-x", "160", "-y", "40", "-c", os.TempDir())
+	t.Cleanup(func() { exec.Command("tmux", "-S", sock, "kill-session", "-t", "="+name).Run() })
+}
+
+// client 는 크기가 정해진 가짜 터미널 하나다. script(1) 이 pty 를 만들고, 그 안에서
+// stty 로 크기를 못 박은 뒤 tmux attach 를 exec 한다 — 라이브러리 없이 되는 방법.
+type client struct {
+	cmd   *exec.Cmd
+	stdin io.WriteCloser
+	size  string // "WxH" — 이 클라이언트를 list-clients 에서 알아보는 열쇠
+}
+
+func attach(t *testing.T, session string, cols, rows int, vscode bool) *client {
+	t.Helper()
+	size := fmt.Sprintf("%dx%d", cols, rows)
+	// script(1) runs the command through $SHELL -c. Under zsh a bare `=name`
+	// is the equals expansion and "name not found" goes to the pty, never to
+	// stderr — measured as a client that silently never appeared. Pin the
+	// shell to sh and quote the target anyway.
+	inner := fmt.Sprintf(`stty cols %d rows %d; exec tmux -S %s attach-session -t "=%s"`, cols, rows, sock, session)
+	cmd := exec.Command("script", "-q", "-e", "-c", inner, "/dev/null")
+	env := []string{"TERM=xterm-256color", "SHELL=/bin/sh"}
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "TERM_PROGRAM=") || strings.HasPrefix(kv, "WT_SESSION=") ||
+			strings.HasPrefix(kv, "TERM=") || strings.HasPrefix(kv, "TMUX=") || strings.HasPrefix(kv, "SHELL=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	if vscode {
+		env = append(env, "TERM_PROGRAM=vscode")
+	} else {
+		env = append(env, "WT_SESSION=e2e-fake-wt")
+	}
+	cmd.Env = env
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("script: %v", err)
+	}
+	c := &client{cmd: cmd, stdin: stdin, size: size}
+	t.Cleanup(c.close)
+	eventually(t, "클라이언트 "+size+" attach", 5*time.Second, func() bool { return c.tty() != "" })
+	return c
+}
+
+// field reads one list-clients column for this client. list-clients is the
+// source of truth for "which client is where"; `display-message -c <tty>` was
+// measured answering for a different client than the one named.
+func (c *client) field(format string) string {
+	for _, line := range strings.Split(tmq("list-clients", "-F", "#{client_width}x#{client_height} "+format), "\n") {
+		size, rest, ok := strings.Cut(line, " ")
+		if ok && size == c.size {
+			return rest
+		}
+	}
+	return ""
+}
+
+func (c *client) tty() string     { return c.field("#{client_tty}") }
+func (c *client) session() string { return c.field("#{client_session}") }
+
+func (c *client) close() {
+	c.stdin.Close()
+	syscall.Kill(-c.cmd.Process.Pid, syscall.SIGTERM)
+	c.cmd.Wait()
+}
+
+// window 는 세션 첫 창의 크기·고정 상태·pane 배치를 한 번에 읽는다.
+type window struct {
+	id            string
+	width, height int
+	fit, sizeOpt  string
+	work, panel   int // 작업 pane 폭, 패널 pane 폭(없으면 0)
+	panelLeft     int
+}
+
+func readWindow(t *testing.T, session string) window {
+	t.Helper()
+	var w window
+	f := strings.Fields(tm(t, "display-message", "-p", "-t", session, "#{window_id} #{window_width} #{window_height}"))
+	if len(f) != 3 {
+		t.Fatalf("창 정보: %q", f)
+	}
+	w.id, w.width, w.height = f[0], atoi(f[1]), atoi(f[2])
+	w.fit = tmq("show-options", "-wqv", "-t", w.id, "@mux_vsfit")
+	w.sizeOpt = tmq("show-options", "-wqv", "-t", w.id, "window-size")
+	for _, line := range strings.Split(tm(t, "list-panes", "-t", w.id, "-F", "#{pane_width} #{pane_left} #{pane_start_command}"), "\n") {
+		p := strings.Fields(line)
+		if len(p) < 2 {
+			continue
+		}
+		if strings.Contains(line, "mux watch") {
+			w.panel, w.panelLeft = atoi(p[0]), atoi(p[1])
+		} else if atoi(p[1]) == 0 {
+			w.work = atoi(p[0])
+		}
+	}
+	return w
+}
+
+func savePanelWidth(t *testing.T, width int) {
+	t.Helper()
+	b, _ := json.Marshal(map[string]int{"width": width})
+	if err := os.WriteFile(filepath.Join(home, ".config", "mux", "panel.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func savedPanelWidth(t *testing.T) int {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(home, ".config", "mux", "panel.json"))
+	if err != nil {
+		return 0
+	}
+	var v struct{ Width int }
+	json.Unmarshal(b, &v)
+	return v.Width
+}
+
+// 훅은 클라이언트가 붙을 때 돈다. 테스트가 직접 부르는 것은 훅이 부르는 것과 같은 명령이다.
+func panelAuto(t *testing.T, session string) time.Duration {
+	t.Helper()
+	pane := tm(t, "display-message", "-p", "-t", session, "#{pane_id}")
+	start := time.Now()
+	if out, err := exec.Command(muxBin, "panel", "--auto", "-t", pane).CombinedOutput(); err != nil {
+		t.Fatalf("mux panel --auto: %v\n%s", err, out)
+	}
+	return time.Since(start)
+}
+
+// ---------------------------------------------------------------------------
+
+// 1. VS Code 클라이언트는 패널을 보지 못한다: 작업 pane 이 VS Code 폭 이상이고 패널은 그
+// 오른쪽 바깥에 있다. 뷰포트는 활성 pane 의 커서를 따르므로 이 배치면 패널까지 가지 않는다.
+func TestVSCodeClientNeverSeesPanel(t *testing.T) {
+	savePanelWidth(t, 60)
+	newSession(t, "e2e-see")
+	attach(t, "e2e-see", 220, 50, false)
+	attach(t, "e2e-see", 120, 24, true)
+
+	var w window
+	eventually(t, "창 고정", 8*time.Second, func() bool {
+		w = readWindow(t, "e2e-see")
+		return w.fit == "1" && w.panel > 0
+	})
+	if w.work < 120 {
+		t.Errorf("작업 pane %d칸 < VS Code 120칸 — 패널이 VS Code 뷰포트에 들어온다", w.work)
+	}
+	if w.panelLeft < 121 {
+		t.Errorf("패널이 %d열에서 시작 — VS Code(120칸) 화면 안이다", w.panelLeft)
+	}
+}
+
+// 2. 창은 Windows Terminal 보다 커지지 않는다. 커지면 WT 도 뷰포트를 얻고, Claude 가 커서를
+// 숨기는 순간 왼쪽 위로 튀어 입력창이 사라진다(실측: 패널 107 + VS Code 174 = 282 > WT 269).
+func TestWindowNeverOutgrowsWT(t *testing.T) {
+	savePanelWidth(t, 107) // 오염됐던 값 그대로 — 그래도 창은 WT 안에 있어야 한다
+	newSession(t, "e2e-cap")
+	attach(t, "e2e-cap", 220, 50, false)
+	attach(t, "e2e-cap", 120, 24, true)
+
+	// 정착까지 기다린다 — 붙은 직후엔 패널이 먼저 열리고 fit 이 뒤따른다.
+	var w window
+	eventually(t, "창이 WT 크기로 고정·정착", 8*time.Second, func() bool {
+		w = readWindow(t, "e2e-cap")
+		return w.fit == "1" && w.width == 220 && w.height == 49 && w.work >= 120
+	})
+	if w.panel != 99 {
+		t.Errorf("패널 %d칸, want 99 (= 220 − 120 − 1: WT 안에 들어가는 최대)", w.panel)
+	}
+	// 그리고 그대로 머문다 — 패널 프로세스가 자기 폭으로 되돌리려 하면 여기서 어긋난다.
+	time.Sleep(4 * time.Second)
+	if w2 := readWindow(t, "e2e-cap"); w2.width != 220 || w2.work < 120 || w2.panel != 99 {
+		t.Errorf("4초 뒤 창 %dx%d 작업 %d 패널 %d — 정착 상태가 흔들린다", w2.width, w2.height, w2.work, w2.panel)
+	}
+}
+
+// 3. VS Code 만 붙어 있으면 창은 딱 그 크기 + 패널: 패닝조차 없다.
+func TestVSCodeOnlyFitsExactly(t *testing.T) {
+	savePanelWidth(t, 60) // 세션이 생기는 순간 훅이 이 값으로 패널을 연다
+	newSession(t, "e2e-only")
+	attach(t, "e2e-only", 120, 24, true)
+
+	// 붙은 직후 한두 틱은 과도 상태다(패널이 먼저 열리고 fit 이 뒤따른다). 정착을 기다린다.
+	var w window
+	eventually(t, "창 고정·정착", 8*time.Second, func() bool {
+		w = readWindow(t, "e2e-only")
+		return w.fit == "1" && w.panel == 60 && w.work == 120
+	})
+	if w.width != 120+1+w.panel || w.height != 23 {
+		t.Errorf("창 %dx%d, want %dx23 (VS Code + 구분선 + 패널 %d)", w.width, w.height, 120+1+w.panel, w.panel)
+	}
+	if w.work != 120 {
+		t.Errorf("작업 pane %d, want 120", w.work)
+	}
+	if t.Failed() {
+		t.Logf("panes: %s", tm(t, "list-panes", "-t", w.id, "-F", "#{pane_id} #{pane_width}@#{pane_left} #{pane_start_command}"))
+		t.Logf("saved width: %d, window-size=%q", savedPanelWidth(t), w.sizeOpt)
+		for i := 0; i < 4; i++ {
+			time.Sleep(700 * time.Millisecond)
+			w2 := readWindow(t, "e2e-only")
+			t.Logf("+%dms: win %dx%d work=%d panel=%d@%d", (i+1)*700, w2.width, w2.height, w2.work, w2.panel, w2.panelLeft)
+		}
+	}
+}
+
+// 4. VS Code 가 떠나면 고정을 푼다 — 우리가 건 것만.
+func TestFitReleasesWhenVSCodeLeaves(t *testing.T) {
+	savePanelWidth(t, 60)
+	newSession(t, "e2e-rel")
+	attach(t, "e2e-rel", 220, 50, false)
+	vs := attach(t, "e2e-rel", 120, 24, true)
+	eventually(t, "창 고정", 8*time.Second, func() bool { return readWindow(t, "e2e-rel").fit == "1" })
+
+	vs.close()
+	eventually(t, "VS Code detach", 5*time.Second, func() bool { return vs.tty() == "" })
+	panelAuto(t, "e2e-rel")
+	w := readWindow(t, "e2e-rel")
+	if w.fit != "" || w.sizeOpt != "" {
+		t.Errorf("fit=%q window-size=%q, want 둘 다 해제", w.fit, w.sizeOpt)
+	}
+}
+
+// 5. 훅이 부르는 명령은 즉시 끝난다. resize-window 가 after-resize-window 훅을 다시 쏘고,
+// 그 run-shell 은 동기라 가드가 없으면 mux 가 자기 자신을 끝없이 부른다(실측: 120초+).
+func TestPanelAutoReturnsQuickly(t *testing.T) {
+	savePanelWidth(t, 60)
+	newSession(t, "e2e-fast")
+	attach(t, "e2e-fast", 220, 50, false)
+	attach(t, "e2e-fast", 120, 24, true)
+	eventually(t, "창 고정", 8*time.Second, func() bool { return readWindow(t, "e2e-fast").fit == "1" })
+
+	for i := 0; i < 3; i++ {
+		if d := panelAuto(t, "e2e-fast"); d > 3*time.Second {
+			t.Fatalf("mux panel --auto 가 %v 걸렸다 — 훅 재귀", d)
+		}
+	}
+}
+
+// 6. 패널 폭 저장값은 fit 을 거쳐도 그대로다. fit 이 창을 키우면 tmux 가 pane 을 비례
+// 배분하는데, 패널이 그것을 드래그로 오인해 저장하면 다음 fit 이 더 넓어진다(실측 60→107).
+func TestSavedPanelWidthSurvivesFit(t *testing.T) {
+	savePanelWidth(t, 60)
+	newSession(t, "e2e-width")
+	vs := attach(t, "e2e-width", 120, 24, true)
+	eventually(t, "창 고정", 8*time.Second, func() bool { return readWindow(t, "e2e-width").fit == "1" })
+	// WT 가 붙어 창이 커지고, VS Code 가 다른 크기로 다시 붙는다 — 오염이 나던 바로 그 흐름.
+	attach(t, "e2e-width", 220, 50, false)
+	eventually(t, "WT 크기로", 8*time.Second, func() bool { return readWindow(t, "e2e-width").width == 220 })
+	vs.close()
+	eventually(t, "VS Code detach", 5*time.Second, func() bool { return vs.tty() == "" })
+	attach(t, "e2e-width", 140, 30, true)
+	eventually(t, "재고정", 8*time.Second, func() bool { return readWindow(t, "e2e-width").fit == "1" })
+	time.Sleep(5 * time.Second) // 패널 틱 두 번 이상
+
+	if got := savedPanelWidth(t); got != 60 {
+		t.Errorf("저장된 패널 폭 %d, want 60 — fit 의 비례 배분을 드래그로 오인했다", got)
+	}
+}
+
+// 7. `mux switch` 는 Windows Terminal 만 옮긴다. WT 에서 띄운 VS Code 도 WT_SESSION 을
+// 물려받으므로 그것만 보면 VS Code 창이 끌려간다.
+func TestSwitchNeverMovesVSCodeClient(t *testing.T) {
+	savePanelWidth(t, 60)
+	newSession(t, "e2e-sw-a")
+	newSession(t, "e2e-sw-b")
+	wt := attach(t, "e2e-sw-a", 220, 50, false)
+	vs := attach(t, "e2e-sw-a", 120, 24, true)
+
+	if out, err := exec.Command(muxBin, "switch", "e2e-sw-b").CombinedOutput(); err != nil {
+		t.Fatalf("mux switch: %v\n%s", err, out)
+	}
+	eventually(t, "WT 전환", 5*time.Second, func() bool { return wt.session() == "e2e-sw-b" })
+	if got := vs.session(); got != "e2e-sw-a" {
+		t.Errorf("VS Code 클라이언트가 %q 로 끌려갔다, want e2e-sw-a 그대로", got)
+		t.Logf("clients: %s", tm(t, "list-clients", "-F", "#{client_pid} #{client_tty} #{client_width}x#{client_height} #{client_session}"))
+		msgs := strings.Split(tmq("show-messages"), "\n")
+		if len(msgs) > 25 {
+			msgs = msgs[len(msgs)-25:]
+		}
+		t.Logf("server messages:\n%s", strings.Join(msgs, "\n"))
+	}
+}
+
+// 8. 디렉터리를 알고 만든 세션은 태어날 때 @project_dir 를 갖는다 — VS Code 의 tmux-project
+// 프로필이 이 태그로 세션을 찾는다. 없으면 같은 프로젝트에 쌍둥이 세션이 생긴다.
+func TestSessionCreatedWithDirIsTagged(t *testing.T) {
+	dir := t.TempDir()
+	if err := tmux.CreateSessionWithDir("e2e-tagged", dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { exec.Command("tmux", "-S", sock, "kill-session", "-t", "=e2e-tagged").Run() })
+	if got := tmq("show-options", "-qv", "-t", "e2e-tagged", "@project_dir"); got != dir {
+		t.Errorf("@project_dir = %q, want %q", got, dir)
+	}
+}
+
+// 9. 사용자의 자기 단말(WT·VS Code)은 ListClients 에서 Own 으로 표시된다 — 패널의 유령
+// 정리가 이들을 건드리지 않는 근거. 실제 클라이언트 프로세스의 환경을 /proc 에서 읽는
+// 경로라 목으로는 못 잰다.
+func TestListClientsMarksOwnTerminals(t *testing.T) {
+	savePanelWidth(t, 60)
+	newSession(t, "e2e-own")
+	attach(t, "e2e-own", 220, 50, false) // Windows Terminal (WT_SESSION)
+	attach(t, "e2e-own", 120, 24, true)  // VS Code (TERM_PROGRAM=vscode)
+
+	var cs []tmux.Client
+	eventually(t, "클라이언트 둘", 5*time.Second, func() bool {
+		var err error
+		cs, err = tmux.ListClients()
+		return err == nil && countSession(cs, "e2e-own") == 2
+	})
+	for _, c := range cs {
+		if c.Session == "e2e-own" && !c.Own {
+			t.Errorf("%s %dx%d 가 Own 이 아니다 — 유령 정리 대상이 된다", c.TTY, c.Width, c.Height)
+		}
+	}
+}
+
+func countSession(cs []tmux.Client, session string) int {
+	n := 0
+	for _, c := range cs {
+		if c.Session == session {
+			n++
+		}
+	}
+	return n
+}

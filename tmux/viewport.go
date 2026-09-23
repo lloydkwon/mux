@@ -62,13 +62,16 @@ func sessionClients(session string) (vs, other vsClient, okVS bool) {
 	return parseClients(string(out), isVSCodeClient)
 }
 
-// parseClients splits list-clients output into the one VS Code client and the
-// largest non-VS Code client. Pure for testing.
-//
-// "Largest" is per axis rather than per client: two terminals of different
-// shapes both have to fit, and a window is one rectangle.
-func parseClients(out string, isVS func(pid int) bool) (vs, other vsClient, okVS bool) {
-	seen := 0
+// clientInfo is one attached client as list-clients reports it.
+type clientInfo struct {
+	tty           string
+	width, height int
+	vscode        bool
+}
+
+// parseClientList reads list-clients output. Pure for testing.
+func parseClientList(out string, isVS func(pid int) bool) []clientInfo {
+	var list []clientInfo
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		f := strings.Fields(line)
 		if len(f) != 4 {
@@ -83,15 +86,52 @@ func parseClients(out string, isVS func(pid int) bool) (vs, other vsClient, okVS
 		if errW != nil || errH != nil || w <= 0 || h <= 0 {
 			continue
 		}
-		if isVS(pid) {
+		list = append(list, clientInfo{tty: f[3], width: w, height: h, vscode: isVS(pid)})
+	}
+	return list
+}
+
+// parseClients splits list-clients output into the one VS Code client and the
+// largest non-VS Code client. Pure for testing.
+//
+// "Largest" is per axis rather than per client: two terminals of different
+// shapes both have to fit, and a window is one rectangle.
+func parseClients(out string, isVS func(pid int) bool) (vs, other vsClient, okVS bool) {
+	seen := 0
+	for _, c := range parseClientList(out, isVS) {
+		if c.vscode {
 			seen++
-			vs = vsClient{width: w, height: h, tty: f[3]}
+			vs = vsClient{width: c.width, height: c.height, tty: c.tty}
 			continue
 		}
-		other.width = maxInt(other.width, w)
-		other.height = maxInt(other.height, h)
+		other.width = maxInt(other.width, c.width)
+		other.height = maxInt(other.height, c.height)
 	}
 	return vs, other, seen == 1
+}
+
+// fitPanelWidth is the panel width the fit may use: the wanted one when it
+// fits beside the VS Code client inside the largest other client, narrower
+// when it does not, nothing when even the floor would not fit.
+//
+// The window must not outgrow Windows Terminal. Measured: a 107-column panel
+// beside a 174-column VS Code client made a 282-column window on a 269-column
+// WT, so WT got a viewport of its own — and with Claude's cursor hidden that
+// viewport snapped to the top-left, input box off screen, keystrokes going
+// somewhere the user could not see. Shrinking the panel keeps WT whole; when
+// not even MinPanelWidth fits, the fit backs out rather than pan WT.
+func fitPanelWidth(vs, other vsClient, want int) (int, bool) {
+	if other.width == 0 {
+		return want, true
+	}
+	room := other.width - vs.width - paneDivider
+	if room >= want {
+		return want, true
+	}
+	if room >= MinPanelWidth {
+		return room, true
+	}
+	return 0, false
 }
 
 func maxInt(a, b int) int {
@@ -165,12 +205,22 @@ func windowFit(vs, other vsClient, panelWidth int) (width, height int) {
 // Called from the panel's own hook path, so it runs on client-attached,
 // client-resized and client-session-changed — every event that can change who
 // is looking or how big they are.
-func syncVSCodeViewport(ctx panelCtx, panelWidth int) bool {
+//
+// The width returned is the one the panel must have in this window — the
+// wanted width, or less when only less fits beside the VS Code client inside
+// Windows Terminal. The caller opens the panel at exactly that, or the fit and
+// the freshly opened panel disagree on the first frame.
+func syncVSCodeViewport(ctx panelCtx, panelWidth int) (fitted bool, width int) {
 	window, session := ctx.window, ctx.session
 	c, other, ok := sessionClients(session)
 	if !ok || panelWidth <= 0 {
 		releaseWindowFit(window)
-		return false
+		return false, panelWidth
+	}
+	panelWidth, ok = fitPanelWidth(c, other, panelWidth)
+	if !ok {
+		releaseWindowFit(window)
+		return false, panelWidth
 	}
 
 	// A panel wider than the whole VS Code terminal would take more than half
@@ -180,7 +230,7 @@ func syncVSCodeViewport(ctx panelCtx, panelWidth int) bool {
 	// arrangement.
 	if panelWidth >= c.width {
 		releaseWindowFit(window)
-		return false
+		return false, panelWidth
 	}
 
 	// The status line is the session's, so it costs every client the same row.
@@ -193,7 +243,7 @@ func syncVSCodeViewport(ctx panelCtx, panelWidth int) bool {
 	width, height := windowFit(c, other, panelWidth)
 	if height < 1 {
 		releaseWindowFit(window)
-		return false
+		return false, panelWidth
 	}
 
 	// Already the right size: say so and touch nothing. This is the guard that
@@ -203,7 +253,7 @@ func syncVSCodeViewport(ctx panelCtx, panelWidth int) bool {
 	// as a `mux panel --auto` that never returned and a window left half
 	// resized, with the panel squeezed to a single column.
 	if ctx.width == width && ctx.height == height {
-		return true
+		return true, panelWidth
 	}
 
 	// The tag goes on first so the nested run this resize triggers already sees
@@ -216,7 +266,7 @@ func syncVSCodeViewport(ctx panelCtx, panelWidth int) bool {
 	// last active, or the next keystroke in VS Code undoes this.
 	if err := runner.Run("tmux", "resize-window", "-t", window,
 		"-x", strconv.Itoa(width), "-y", strconv.Itoa(height)); err != nil {
-		return false
+		return false, panelWidth
 	}
 
 	// Growing the window hands the new columns out proportionally, so the panel
@@ -225,7 +275,7 @@ func syncVSCodeViewport(ctx panelCtx, panelWidth int) bool {
 	if pane, err := findPanelPane(window); err == nil && pane != "" {
 		_ = ResizePaneWidth(pane, panelWidth)
 	}
-	return true
+	return true, panelWidth
 }
 
 // releaseWindowFit undoes a fix mux made, and does nothing otherwise — a user
@@ -279,8 +329,8 @@ func parseFittedWindows(out string) []panelCtx {
 	return fitted
 }
 
-// KeepBottomVisible keeps a VS Code client's viewport on the bottom of a window
-// taller than it while the active pane's cursor is hidden.
+// KeepBottomVisible keeps every viewport on a window — any client the window
+// is larger than — on the bottom while the active pane's cursor is hidden.
 //
 // tmux pans a small client's viewport to follow the cursor, which for Claude
 // Code sits at the bottom — but only while the cursor is *shown*. Hidden, tmux
@@ -299,23 +349,51 @@ func parseFittedWindows(out string) []panelCtx {
 // 클라이언트가 붙은 세션의 패널에서만. 눈에 띄면 cursor_flag 가 바뀔 때만
 // refresh-client 를 보내도록 직전 값을 들면 된다.
 func KeepBottomVisible(session string) {
-	vs, _, ok := sessionClients(session)
-	if !ok || vs.tty == "" {
+	if session == "" {
 		return
 	}
-	// Through the client, not the session: `-t =session` leaves pane formats
-	// empty (measured — only session options resolve), and `-c` reads what
-	// that client is looking at, which is the only view that matters here.
-	out, err := runner.Output("tmux", "display-message", "-p", "-c", vs.tty, "#{cursor_flag}")
+	out, err := runner.Output("tmux", "list-clients", "-t", "="+session, "-F",
+		"#{client_pid} #{client_width} #{client_height} #{client_tty}")
 	if err != nil {
 		return
 	}
-	pin, track := viewportAction(strings.TrimSpace(string(out)))
-	switch {
-	case pin:
-		_ = runner.Run("tmux", "refresh-client", "-t", vs.tty, "-D", "99999")
-	case track:
-		_ = runner.Run("tmux", "refresh-client", "-t", vs.tty, "-c")
+	clients := parseClientList(string(out), isVSCodeClient)
+	if len(clients) == 0 {
+		return
+	}
+	// Through a client, not the session: `-t =session` leaves pane formats
+	// empty (measured — only session options resolve), and `-c` reads what
+	// that client is looking at. Every client of the session shares the
+	// window, so any one of them answers for all.
+	out, err = runner.Output("tmux", "display-message", "-p", "-c", clients[0].tty,
+		"#{window_width} #{window_height} #{cursor_flag} #{status}")
+	if err != nil {
+		return
+	}
+	f := strings.Fields(string(out))
+	if len(f) != 4 {
+		return
+	}
+	winW, errW := strconv.Atoi(f[0])
+	winH, errH := strconv.Atoi(f[1])
+	if errW != nil || errH != nil {
+		return
+	}
+	status := parseStatusLines(f[3])
+	pin, track := viewportAction(f[2])
+	for _, c := range clients {
+		// Only a client the window is larger than has a viewport to keep.
+		// Not just VS Code: a phone, or a Windows Terminal shorter than the
+		// editor's terminal, pans the same way.
+		if c.width >= winW && c.height-status >= winH {
+			continue
+		}
+		switch {
+		case pin:
+			_ = runner.Run("tmux", "refresh-client", "-t", c.tty, "-D", "99999")
+		case track:
+			_ = runner.Run("tmux", "refresh-client", "-t", c.tty, "-c")
+		}
 	}
 }
 
@@ -330,4 +408,20 @@ func viewportAction(cursorFlag string) (pin, track bool) {
 		return false, true
 	}
 	return false, false
+}
+
+// WindowFitted reports whether mux fixed this window's size (see
+// syncVSCodeViewport). The panel asks before treating a width change as the
+// user dragging its border: growing a fitted window hands the new columns out
+// proportionally, and that widening looked exactly like a drag — measured as
+// the saved panel width creeping from 60 to 107 in one afternoon, which then
+// pushed every fitted window past Windows Terminal's width.
+func WindowFitted(target string) bool {
+	args := []string{"show-options", "-wqv"}
+	if target != "" {
+		args = append(args, "-t", target)
+	}
+	args = append(args, vsFitOption)
+	out, err := runner.Output("tmux", args...)
+	return err == nil && strings.TrimSpace(string(out)) == "1"
 }
