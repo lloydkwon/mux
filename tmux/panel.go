@@ -85,22 +85,14 @@ func TogglePanel(target string, auto bool) error {
 	if err != nil {
 		return err
 	}
-	if pane != "" {
-		if auto {
-			return nil // ensure: already there, nothing to do
-		}
-		// Closing by hand is a decision the resize hooks must not undo.
-		_ = SetPanelDisabled(window, true)
-		return runner.Run("tmux", "kill-pane", "-t", pane)
-	}
 
-	// Everything below only runs when a panel has to be created, so the common
-	// hook case — a window that already has one — costs a single list-panes.
-
-	// No live panel, but something that used to be one may still be sitting in
-	// its place: tmux-resurrect restores the pane as a bare shell. Closing it
-	// comes before every stand-down check below, because a window mux will not
-	// put a panel in is a window that wants those columns back most.
+	// Something that used to be a panel may be sitting in the window as a
+	// bare shell: tmux-resurrect restores the pane with its last screen
+	// painted in. Closing it comes first, before the live-panel check as well
+	// as the stand-downs — a window that already has a real panel is exactly
+	// where the ghost was seen last: WSL rebooted, continuum restored the old
+	// panel as zsh, and the hook opened a fresh panel beside it two minutes
+	// later. Three columns, one of them a frozen copy of another.
 	if ghost, alone, err := findGhostPane(window); err == nil && ghost != "" {
 		if alone {
 			// The ghost is the window's only pane, which means someone adopted
@@ -112,6 +104,18 @@ func TogglePanel(target string, auto bool) error {
 			_ = runner.Run("tmux", "kill-pane", "-t", ghost)
 		}
 	}
+
+	if pane != "" {
+		if auto {
+			return nil // ensure: already there, nothing to do
+		}
+		// Closing by hand is a decision the resize hooks must not undo.
+		_ = SetPanelDisabled(window, true)
+		return runner.Run("tmux", "kill-pane", "-t", pane)
+	}
+
+	// Everything below only runs when a panel has to be created, so the common
+	// hook case — a window that already has one — costs two list-panes.
 
 	if auto && PanelDisabled(window) {
 		return nil
@@ -639,40 +643,94 @@ func findPanelPane(window string) (string, error) {
 	return "", nil
 }
 
-// findGhostPane returns the id of a pane that carries the panel's title but is
-// no longer running it — what tmux-resurrect leaves behind — or "" when the
-// window has none. alone reports that the ghost is the window's only pane.
+// ghostCandidate is one pane of a window, as findGhostPane reads it.
+type ghostCandidate struct {
+	id, title, start string
+	pid              int
+}
+
+// resurrectRestoreMark is what tmux-resurrect puts in a restored pane's start
+// command: it cats the saved screen contents, then execs the shell.
+const resurrectRestoreMark = "resurrect/restore/pane_contents"
+
+// isGhost decides whether a pane is a dead panel. Pure for testing; hasChildren
+// and topLine are the two things it needs from the world.
 //
-// This is a second list-panes rather than another field on findPanelPane's, and
-// deliberately so. It only ever runs on the path that is about to create a
-// panel; the hook path, which fires constantly and almost always finds a live
-// panel, still costs exactly one list-panes. alone comes from counting the
-// lines of the same output, so it adds no call either.
+// Two ways to be one. The title still reading as the panel's, which is what
+// resurrect leaves when nothing overwrites it. Or — the case actually seen —
+// the pane was restored by resurrect and the top of its scrollback is the
+// panel's own header: the shell that took the pane over set its own title, but
+// the frozen screen underneath it is still ours.
 //
-// The title is compared whole rather than by substring: this kills a pane, and
-// the one thing worse than a leftover pane is closing one the user was in.
-// alone exists because an exact title is not proof either — resurrect restores
-// titles verbatim, so a user who kept working in the restored shell owns a pane
-// named exactly like the panel, and if it is all the window has, killing it
-// kills the session (measured 2026-08-30: two sessions lost that way).
+// A shell someone is using is never a ghost, whatever it looks like: the check
+// asks whether the pane's process has children, and kills nothing that does.
+func isGhost(c ghostCandidate, hasChildren func(pid int) bool, topLine func(id string) string) bool {
+	// The live panel carries the title too. It is the one pane here that is
+	// certainly not a ghost.
+	if strings.Contains(c.start, panelCommand) {
+		return false
+	}
+	if c.title == panelTitle {
+		return !hasChildren(c.pid)
+	}
+	if !strings.Contains(c.start, resurrectRestoreMark) {
+		return false
+	}
+	if !strings.Contains(topLine(c.id), panelHeader) {
+		return false
+	}
+	return !hasChildren(c.pid)
+}
+
+// panelHeader is the text the panel's first row always carries (see
+// notifySessionLines). Matched loosely: styles are stripped by capture-pane
+// and padding varies with width.
+const panelHeader = "AI 세션"
+
+// hasChildren is procHasChildren, replaceable in tests — the mock runner has
+// no /proc to answer from.
+var hasChildren = procHasChildren
+
+// paneTopLine is the first non-empty line of a pane's scrollback.
+func paneTopLine(id string) string {
+	out, err := runner.Output("tmux", "capture-pane", "-p", "-t", id, "-S", "-", "-E", "2")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(line) != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+// findGhostPane looks for a dead panel in window: a pane that was one before
+// tmux-resurrect restored it as a bare shell.
+//
+// alone reports whether it is the window's only pane, in which case the
+// caller must not kill it.
 func findGhostPane(window string) (ghost string, alone bool, err error) {
 	out, err := runner.Output("tmux", "list-panes", "-t", window,
-		"-F", "#{pane_id} #{pane_title}")
+		"-F", "#{pane_id}\t#{pane_pid}\t#{pane_title}\t#{pane_start_command}")
 	if err != nil {
 		return "", false, fmt.Errorf("list panes: %w", err)
 	}
 
 	panes := 0
-	for _, line := range strings.Split(string(out), "\n") {
-		id, title, found := strings.Cut(strings.TrimSpace(line), " ")
-		if strings.TrimSpace(line) != "" {
-			panes++
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
 		}
-		if !found {
-			continue // a pane with no title
+		panes++
+		f := strings.SplitN(line, "\t", 4)
+		if len(f) < 4 {
+			continue
 		}
-		if title == panelTitle {
-			ghost = id
+		pid, _ := strconv.Atoi(strings.TrimSpace(f[1]))
+		c := ghostCandidate{id: f[0], pid: pid, title: f[2], start: f[3]}
+		if ghost == "" && isGhost(c, hasChildren, paneTopLine) {
+			ghost = c.id
 		}
 	}
 	return ghost, ghost != "" && panes == 1, nil

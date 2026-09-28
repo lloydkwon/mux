@@ -215,3 +215,17 @@ func pidUnder(pid, ancestor int) (under, known bool) {
 	}
 	return false, false
 }
+
+// procHasChildren reports whether pid has any child process — for a shell,
+// whether someone is running something in it.
+//
+// Unknown reads as true. The one caller kills panes it takes for abandoned,
+// and "could not tell" must land on the side that keeps the user's work.
+func procHasChildren(pid int) bool {
+	p := strconv.Itoa(pid)
+	data, err := os.ReadFile("/proc/" + p + "/task/" + p + "/children")
+	if err != nil {
+		return true
+	}
+	return strings.TrimSpace(string(data)) != ""
+}

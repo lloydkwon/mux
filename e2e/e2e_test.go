@@ -473,3 +473,45 @@ func countSession(cs []tmux.Client, session string) int {
 	}
 	return n
 }
+
+// 10. resurrect 가 되살린 옛 패널(화면 캡처를 뿌린 빈 셸)은 살아 있는 패널 옆에서도 치워진다.
+// 실제 사례: WSL 재부팅 → continuum 복원 → 옛 패널이 zsh 로 부활 → 훅이 새 패널을 열어 셋.
+// 판정은 start command 의 복원 경로 + 스크롤백 첫 줄의 패널 헤더 + 자식 없는 셸이다.
+func TestResurrectedPanelGhostIsRemoved(t *testing.T) {
+	savePanelWidth(t, 60)
+	newSession(t, "e2e-ghost")
+	attach(t, "e2e-ghost", 220, 50, false)
+	eventually(t, "패널", 8*time.Second, func() bool { return readWindow(t, "e2e-ghost").panel > 0 })
+
+	// resurrect 가 남기는 모양 그대로: 화면 파일을 cat 하고 셸을 exec 한다.
+	contents := filepath.Join(t.TempDir(), "resurrect", "restore", "pane_contents", "pane-e2e-ghost:1.1")
+	os.MkdirAll(filepath.Dir(contents), 0o755)
+	os.WriteFile(contents, []byte(" 🔔 AI 세션\n\n ✅ old 1h\n"), 0o644)
+	win := readWindow(t, "e2e-ghost").id
+	tm(t, "split-window", "-d", "-h", "-t", win, fmt.Sprintf("cat '%s'; exec /bin/sh", contents))
+	// 그리고 사용자가 뭔가 돌리는 중인 셸 하나 — 이건 무슨 모양이든 살려야 한다.
+	busy := filepath.Join(filepath.Dir(contents), "pane-e2e-ghost:1.2")
+	os.WriteFile(busy, []byte(" 🔔 AI 세션\n"), 0o644)
+	tm(t, "split-window", "-d", "-h", "-t", win, fmt.Sprintf("cat '%s'; exec /bin/sh -c 'sleep 30'", busy))
+	eventually(t, "가짜 유령 둘", 5*time.Second, func() bool { return paneCount(t, win) == 4 })
+
+	panelAuto(t, "e2e-ghost")
+	eventually(t, "유령 제거", 5*time.Second, func() bool { return paneCount(t, win) == 3 })
+	w := readWindow(t, "e2e-ghost")
+	if w.panel == 0 {
+		t.Error("살아 있는 패널이 사라졌다")
+	}
+	for _, line := range strings.Split(tm(t, "list-panes", "-t", win, "-F", "#{pane_start_command}"), "\n") {
+		if strings.Contains(line, "pane-e2e-ghost:1.1") {
+			t.Error("빈 셸 유령이 남아 있다")
+		}
+	}
+	if !strings.Contains(tm(t, "list-panes", "-t", win, "-F", "#{pane_start_command}"), "sleep 30") {
+		t.Error("일하는 중인 셸을 죽였다")
+	}
+}
+
+func paneCount(t *testing.T, win string) int {
+	t.Helper()
+	return len(strings.Split(tm(t, "list-panes", "-t", win, "-F", "#{pane_id}"), "\n"))
+}

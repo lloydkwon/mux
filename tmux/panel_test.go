@@ -772,16 +772,28 @@ func TestTogglePanelAutoRespectsManualOff(t *testing.T) {
 
 // ghostList is what a window looks like once tmux-resurrect has restored it:
 // the panel's pane is back, in its place and at its width, running a bare shell.
+const ghostStart = "cat '/home/u/.local/share/tmux/resurrect/restore/pane_contents//pane-work:0.0'; exec /usr/bin/zsh"
+
 const ghostList = "%3 \n%9 cat '/home/u/.local/share/tmux/resurrect/restore/pane_contents//pane-work:0.0'; exec /usr/bin/zsh\n"
 
-// mockGhostWindow sets up a restored window whose panel pane came back dead,
-// with titles as resurrect leaves them — the panel's own restored verbatim.
-func mockGhostWindow(m *mockRunner, titles string) {
+// ghostPanes is the same window as findGhostPane reads it: id, pid, title and
+// start command, tab-separated.
+func ghostPanes(rows ...string) string { return strings.Join(rows, "\n") + "\n" }
+
+// withNoChildren makes every shell look idle — the mock runner has no /proc.
+func withNoChildren(t *testing.T) {
+	orig := hasChildren
+	hasChildren = func(int) bool { return false }
+	t.Cleanup(func() { hasChildren = orig })
+}
+
+// mockGhostWindow sets up a restored window whose panel pane came back dead.
+// panes is what list-panes answers for the ghost check.
+func mockGhostWindow(m *mockRunner, panes string) {
 	mockPanelWindow(m)
 	m.OnOutput([]byte(ghostList), nil, "tmux", "list-panes", "-t", "@7",
 		"-F", "#{pane_id} #{pane_start_command}")
-	m.OnOutput([]byte(titles), nil, "tmux", "list-panes", "-t", "@7",
-		"-F", "#{pane_id} #{pane_title}")
+	m.OnOutput([]byte(panes), nil, "tmux", "list-panes", "-t", "@7", "-F", "#{pane_id}\t#{pane_pid}\t#{pane_title}\t#{pane_start_command}")
 	m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
 	m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 	m.OnOutput([]byte("27\n"), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
@@ -795,8 +807,8 @@ func mockGhostWindow(m *mockRunner, titles string) {
 // pane can go.
 func TestTogglePanelClosesARestoredGhost(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
-		mockGhostWindow(m, "%3 a-hostname\n%9 "+panelTitle+"\n")
-		m.OnOutput([]byte("269\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
+		withNoChildren(t)
+		mockGhostWindow(m, ghostPanes("%3\t100\ta-hostname\t", "%9\t200\t"+panelTitle+"\t"+ghostStart))
 		old := clientEnvHas
 		clientEnvHas = func(int, string) bool { return false }
 		defer func() { clientEnvHas = old }()
@@ -850,7 +862,8 @@ func TestTogglePanelLeavesOtherTitlesAlone(t *testing.T) {
 // back most, so the dead pane goes whether or not a live one replaces it.
 func TestTogglePanelClosesTheGhostEvenWhenItWillNotOpen(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
-		mockGhostWindow(m, "%3 a-hostname\n%9 "+panelTitle+"\n")
+		withNoChildren(t)
+		mockGhostWindow(m, ghostPanes("%3\t100\ta-hostname\t", "%9\t200\t"+panelTitle+"\t"+ghostStart))
 		mockPanelWindowWidth(m, "54") // 좁은 창 — 유령은 치우되 패널은 열지 않는다
 		old := clientEnvHas
 		clientEnvHas = func(int, string) bool { return false }
@@ -875,11 +888,12 @@ func TestTogglePanelClosesTheGhostEvenWhenItWillNotOpen(t *testing.T) {
 // opens beside it.
 func TestTogglePanelUntitlesAGhostThatIsTheOnlyPane(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
+		withNoChildren(t)
 		mockPanelWindow(m)
-		m.OnOutput([]byte("%3 cat '/home/u/.local/share/tmux/resurrect/restore/pane_contents//pane-work:0.0'; exec /usr/bin/zsh\n"), nil,
+		m.OnOutput([]byte("%3 "+ghostStart+"\n"), nil,
 			"tmux", "list-panes", "-t", "@7", "-F", "#{pane_id} #{pane_start_command}")
-		m.OnOutput([]byte("%3 "+panelTitle+"\n"), nil,
-			"tmux", "list-panes", "-t", "@7", "-F", "#{pane_id} #{pane_title}")
+		m.OnOutput([]byte(ghostPanes("%3\t100\t"+panelTitle+"\t"+ghostStart)), nil,
+			"tmux", "list-panes", "-t", "@7", "-F", "#{pane_id}\t#{pane_pid}\t#{pane_title}\t#{pane_start_command}")
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
 		m.OnOutput([]byte("27\n"), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
@@ -907,21 +921,57 @@ func TestTogglePanelUntitlesAGhostThatIsTheOnlyPane(t *testing.T) {
 // The hooks fire constantly and almost always find a live panel. That path must
 // stay at one list-panes: the ghost lookup is a second one, and it only belongs
 // on the path that is about to create a pane anyway.
-func TestTogglePanelDoesNotLookForAGhostWhenThePanelIsThere(t *testing.T) {
+func TestTogglePanelRemovesAGhostBesideALivePanel(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
+		withNoChildren(t)
 		mockPanelWindow(m)
-		m.OnOutput([]byte("%3 \n%9 /home/u/.local/bin/mux watch\n"), nil,
+		m.OnOutput([]byte("%3 \n%9 /home/u/.local/bin/mux watch\n%5 "+ghostStart+"\n"), nil,
 			"tmux", "list-panes", "-t", "@7", "-F", "#{pane_id} #{pane_start_command}")
+		// The ghost's title is the shell's own — resurrect's zsh overwrote it —
+		// so only the restored screen underneath says what the pane was.
+		m.OnOutput([]byte(ghostPanes("%3\t100\ta-hostname\t", "%9\t200\t"+panelTitle+"\t/home/u/.local/bin/mux watch",
+			"%5\t300\tu@host:~/p\t"+ghostStart)), nil,
+			"tmux", "list-panes", "-t", "@7", "-F", "#{pane_id}\t#{pane_pid}\t#{pane_title}\t#{pane_start_command}")
+		m.OnOutput([]byte(" 🔔 AI 세션\n\n ✅ old 1h\n"), nil,
+			"tmux", "capture-pane", "-p", "-t", "%5", "-S", "-", "-E", "2")
 
 		if err := TogglePanel("%3", true); err != nil {
 			t.Fatalf("TogglePanel: %v", err)
 		}
-		for _, g := range m.gets {
-			if strings.Contains(g, "#{pane_title}") {
-				t.Errorf("asked %v, want no title lookup when a panel is already there", m.gets)
-			}
+		if !ran(m, "kill-pane -t %5") {
+			t.Errorf("ran %v, want the restored ghost closed", m.runs)
+		}
+		if ran(m, "kill-pane -t %9") || ran(m, "split-window") {
+			t.Errorf("ran %v, want the live panel left alone and no second one", m.runs)
 		}
 	})
+}
+
+// The rule itself, without a server.
+func TestIsGhost(t *testing.T) {
+	idle := func(int) bool { return false }
+	busy := func(int) bool { return true }
+	header := func(string) string { return " 🔔 AI 세션" }
+	other := func(string) string { return "$ " }
+	cases := []struct {
+		name string
+		c    ghostCandidate
+		kids func(int) bool
+		top  func(string) string
+		want bool
+	}{
+		{"제목이 패널 것", ghostCandidate{id: "%1", title: panelTitle, start: ghostStart}, idle, other, true},
+		{"복원 + 헤더", ghostCandidate{id: "%1", title: "u@h:~", start: ghostStart}, idle, header, true},
+		{"복원이지만 헤더 없음(사용자 셸)", ghostCandidate{id: "%1", title: "u@h:~", start: ghostStart}, idle, other, false},
+		{"복원 아님", ghostCandidate{id: "%1", title: "u@h:~", start: ""}, idle, header, false},
+		{"일하는 중인 셸은 제목이 맞아도 아님", ghostCandidate{id: "%1", title: panelTitle, start: ghostStart}, busy, header, false},
+		{"살아 있는 패널은 아님", ghostCandidate{id: "%1", title: panelTitle, start: "/x/mux watch"}, idle, header, false},
+	}
+	for _, c := range cases {
+		if got := isGhost(c.c, c.kids, c.top); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
 }
 
 // The mark itself. `select-pane -T` sets the title and returns — it must not be
