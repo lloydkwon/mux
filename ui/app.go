@@ -87,6 +87,7 @@ type Model struct {
 	// nil is the ordinary case.
 	resumeTarget    *resumeRequest
 	detachRequested bool             // set when New shell is selected from inside tmux
+	landed          bool             // the first session list has arrived and the cursor was placed
 	lastClick       clickMark        // for telling a double click from two clicks
 	focusSession    string           // session name to focus cursor on after next load
 	previewContent  string           // cached capture-pane output
@@ -304,7 +305,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				m.focusSession = ""
+			} else if !m.landed {
+				// First list, nothing asked for: land on the first session, not
+				// on "New shell". Row 0 is an action, and in the popup the
+				// bootstrap opens that action is *detach* — so enter on a list
+				// that had just appeared threw the user out of tmux entirely
+				// (measured: the WT client detached the second the popup
+				// closed, and the terminal fell back to the login shell).
+				m.cursor = firstSessionIndex(m.items)
 			}
+			m.landed = true
 		}
 		return m, nil
 
@@ -1193,7 +1203,60 @@ func AttachToSession(name string, windowIdx, paneIdx int) error {
 	// "=" forces an exact match. Plain tmux target matching falls back to
 	// prefix and then glob, so "mux" would be ambiguous next to "mux-old".
 	if os.Getenv("TMUX") != "" {
-		return runTmux(tmuxPath, "switch-client", "-t", "="+name)
+		err := switchOwnClient(tmuxPath, name)
+		// The editor comes forward with the terminal, the same rule the panel's
+		// click follows: the two are views of one session, and arriving in one
+		// while reading the other is the confusion a switch exists to end.
+		raiseEditorFor(name)
+		return err
 	}
 	return syscall.Exec(tmuxPath, []string{"tmux", "attach-session", "-t", "=" + name}, os.Environ())
+}
+
+// switchOwnClient moves the terminal the user is typing in to name.
+//
+// Which client that is cannot be left to tmux. `switch-client` with no -c
+// picks the most recently active client of the session this process sits in,
+// and with a VS Code terminal parked on the same session that is often the
+// editor's — measured: choosing a session in the bootstrap popup moved the VS
+// Code window and left Windows Terminal where it was, looking like nothing
+// had happened. When VS Code is on this session, Windows Terminal is named
+// explicitly; VS Code terminals watch one project each and never move.
+func switchOwnClient(tmuxPath, name string) error {
+	own, _ := tmux.SessionForPane("")
+	if own != "" && tmux.SessionHasVSCodeClient(own) {
+		return tmux.SwitchWTClient(name)
+	}
+	return runTmux(tmuxPath, "switch-client", "-t", "="+name)
+}
+
+// raiseEditorFor brings the target session's VS Code window forward, if there
+// is an editor and the session has a project folder. Best effort throughout:
+// it rides along with the switch and must not report the switch as broken.
+func raiseEditorFor(name string) {
+	bin := findEditor()
+	if bin == "" {
+		return
+	}
+	dir := tmux.SessionProjectDir(name)
+	if dir == "" {
+		if s, err := tmux.SessionForTarget("=" + name); err == nil {
+			dir = s.Directory
+		}
+	}
+	if dir == "" {
+		return
+	}
+	_ = openEditor(bin, dir)
+}
+
+// firstSessionIndex is where the cursor lands on a fresh list: the first
+// session row, past the action rows at the top. 0 when there is none.
+func firstSessionIndex(items []listItem) int {
+	for i, it := range items {
+		if it.kind == itemSession {
+			return i
+		}
+	}
+	return 0
 }

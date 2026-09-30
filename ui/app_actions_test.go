@@ -104,3 +104,23 @@ func TestDigitStartsOrderInputForSession(t *testing.T) {
 		t.Fatalf("order model = %#v", got.orderModel)
 	}
 }
+
+// 첫 목록이 오면 커서는 첫 세션 행에 선다 — "New shell"(행 0)이 아니라. 부트스트랩
+// 팝업에서 그 행의 enter 는 detach 라, 목록이 뜨자마자 enter 를 치면 tmux 밖으로 떨어졌다.
+func TestFirstLoadLandsOnFirstSession(t *testing.T) {
+	m := Model{tree: newTreeState(), prefs: defaultPreferences(), width: 120, height: 30}
+	updated, _ := m.Update(sessionsLoadedMsg{sessions: []tmux.Session{
+		{Name: "alpha"}, {Name: "beta"},
+	}})
+	got := updated.(Model)
+	if it := got.currentItem(); it == nil || it.kind != itemSession || it.session.Name != "alpha" {
+		t.Fatalf("cursor on %+v, want the first session row", it)
+	}
+	// 두 번째 로드는 커서를 건드리지 않는다 — 사용자가 옮긴 자리를 뺏으면 안 된다.
+	got.cursor = firstSessionIndex(got.items) + 1
+	updated, _ = got.Update(sessionsLoadedMsg{sessions: []tmux.Session{{Name: "alpha"}, {Name: "beta"}}})
+	again := updated.(Model)
+	if it := again.currentItem(); it == nil || it.session == nil || it.session.Name != "beta" {
+		t.Fatalf("second load moved the cursor to %+v", it)
+	}
+}

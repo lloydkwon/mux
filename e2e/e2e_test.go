@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/lloydkwon/mux/tmux"
+	"github.com/lloydkwon/mux/ui"
 )
 
 var (
@@ -514,4 +515,31 @@ func TestResurrectedPanelGhostIsRemoved(t *testing.T) {
 func paneCount(t *testing.T, win string) int {
 	t.Helper()
 	return len(strings.Split(tm(t, "list-panes", "-t", win, "-F", "#{pane_id}"), "\n"))
+}
+
+// 11. TUI 에서 세션을 고르면(ui.AttachToSession, tmux 안) Windows Terminal 이 움직이고 VS Code
+// 는 그대로다 — VS Code 쪽이 더 최근에 활동했어도. 무자격 switch-client 는 가장 최근 클라이언트를
+// 고르므로(실측: 부트스트랩 팝업에서 세션을 고르자 VS Code 창이 옮겨가고 WT 는 제자리) 이 경로도
+// 패널 클릭과 같은 규칙을 써야 한다.
+func TestTUIAttachMovesWTNotVSCode(t *testing.T) {
+	savePanelWidth(t, 60)
+	newSession(t, "e2e-tui-a")
+	newSession(t, "e2e-tui-b")
+	wt := attach(t, "e2e-tui-a", 220, 50, false)
+	vs := attach(t, "e2e-tui-a", 120, 24, true)
+	// VS Code 를 마지막 활동 클라이언트로 만든다 — 무자격 switch-client 라면 이쪽이 움직인다.
+	time.Sleep(1100 * time.Millisecond)
+	vs.stdin.Write([]byte(" "))
+	time.Sleep(300 * time.Millisecond)
+
+	// TUI 가 그 세션의 pane 안에서 도는 상황: TMUX_PANE 을 그 pane 으로.
+	pane := tm(t, "display-message", "-p", "-t", "e2e-tui-a", "#{pane_id}")
+	t.Setenv("TMUX_PANE", pane)
+	if err := ui.AttachToSession("e2e-tui-b", -1, -1); err != nil {
+		t.Fatalf("AttachToSession: %v", err)
+	}
+	eventually(t, "WT 전환", 5*time.Second, func() bool { return wt.session() == "e2e-tui-b" })
+	if got := vs.session(); got != "e2e-tui-a" {
+		t.Errorf("VS Code 클라이언트가 %q 로 끌려갔다, want e2e-tui-a 그대로", got)
+	}
 }
