@@ -1215,14 +1215,14 @@ func TestWatchFittedWindowWidthIsNotADrag(t *testing.T) {
 	}
 }
 
-// 붙은 VS Code 창이 없어도 세션의 프로젝트 폴더로 에디터를 부른다 — 열려 있으면 앞으로,
-// 없으면 연다. 붙은 창만 인정하던 규칙은 터미널 탭을 닫는 순간 클릭이 죽은 것처럼 보였다.
-func TestVSCodeWindowForFallsBackToProjectDir(t *testing.T) {
-	if got := vscodeWindowFor("s", "", "/p/x", "/p/x"); got != "" {
+// 열려 있는 VS Code 창이 없으면 좌클릭은 아무것도 띄우지 않는다 — 띄우는 것은 우클릭의 일이다.
+// 붙은 터미널 0개에 열린 창 3개인 날, 폴더 폴백은 아무 세션이나 눌러도 새 창을 만들었다.
+func TestVSCodeWindowForOpensNothingWhenNoWindowIsOpen(t *testing.T) {
+	if got := vscodeWindowFor("s", "", "/p/x"); got != "" {
 		t.Errorf("에디터가 없으면 아무것도 열지 않아야 한다, got %q", got)
 	}
-	// 붙은 클라이언트가 없는 환경(테스트)에서는 폴백이 답이다.
-	if got := vscodeWindowFor("no-such-session", "code", "/p/x", "/p/x"); got != "/p/x" {
-		t.Errorf("got %q, want the project folder", got)
+	// 붙은 클라이언트도, VS Code 기록(이 머신의 storage.json)에도 없는 폴더.
+	if got := vscodeWindowFor("no-such-session", "code", "/no/such/project"); got != "" {
+		t.Errorf("got %q, want nothing to raise", got)
 	}
 }

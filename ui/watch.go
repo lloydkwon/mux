@@ -878,7 +878,7 @@ type editorFailedMsg struct {
 // switchToSession moves the current tmux client. It stays a tea.Cmd rather than
 // quitting first, the way the TUI's attach must: switch-client returns normally
 // instead of replacing this process, so the panel survives the switch.
-func switchToSession(name, own, editorBin, targetDir, fallbackDir string) tea.Cmd {
+func switchToSession(name, own, editorBin, targetDir string) tea.Cmd {
 	return func() tea.Msg {
 		// Hand focus back before leaving, when there is any to hand back. The
 		// window we are about to leave would otherwise keep reporting the
@@ -911,7 +911,7 @@ func switchToSession(name, own, editorBin, targetDir, fallbackDir string) tea.Cm
 		// editor. The window is sized to the larger client now (viewport.go),
 		// so there is nothing left to avoid, and the skip only meant clicking
 		// those rows moved nothing.
-		if dir := vscodeWindowFor(name, editorBin, targetDir, fallbackDir); dir != "" {
+		if dir := vscodeWindowFor(name, editorBin, targetDir); dir != "" {
 			_ = openEditor(editorBin, dir)
 		}
 
@@ -922,24 +922,25 @@ func switchToSession(name, own, editorBin, targetDir, fallbackDir string) tea.Cm
 	}
 }
 
-// vscodeWindowFor is the folder to hand the editor for a session: the one a
-// VS Code window already has open on it when one is attached, else the
-// session's own project folder.
+// vscodeWindowFor is the folder of the VS Code window to raise for a session,
+// or "" when none is open — in which case nothing is launched.
 //
-// The attached window is preferred because it is *known* to be the user's —
-// the terminal in it is sitting in this very session. But a window whose
-// terminal was closed, or never opened, is still that project's window, and
-// `code <dir>` raises it if it exists and opens it if not. The rule used to
-// stop at the attached case and did nothing otherwise, which read as the click
-// being broken the moment the project's terminal tab was closed.
-func vscodeWindowFor(name, editorBin, targetDir, fallbackDir string) string {
-	if editorBin == "" {
+// Two ways a window is known to be open: its integrated terminal is attached
+// to this very session, or VS Code's own record of its windows lists the
+// folder (tmux.OpenVSCodeFolders). The first is the surer signal, so it goes
+// first; the second is what makes the click work when no terminal is open.
+//
+// No fallback to the project folder. A left click moves the user to a session;
+// opening an editor they did not have is the right click's job, and with
+// terminals closed the fallback opened a new window on every click.
+func vscodeWindowFor(name, editorBin, targetDir string) string {
+	if editorBin == "" || targetDir == "" {
 		return ""
 	}
 	if dir := tmux.VSCodeDirFor(targetDir, tmux.VSCodeClientDirs()[name]); dir != "" {
 		return dir
 	}
-	return fallbackDir
+	return tmux.VSCodeWindowFor(targetDir)
 }
 
 // keepBottomVisibleCmd runs the viewport rule for this pane's session. A
@@ -955,17 +956,21 @@ func keepBottomVisibleCmd(session string) tea.Cmd {
 // switchCmd builds the move for one session, so a left click and enter cannot
 // drift apart on which client they are allowed to move.
 func (m watchModel) switchCmd(name string) tea.Cmd {
-	return switchToSession(name, m.ownSession, m.editorBin, m.sessionDir(name), m.editorDirFor(name))
+	return switchToSession(name, m.ownSession, m.editorBin, m.sessionDir(name))
 }
 
-// sessionDir is a session's own directory, which is what decides *which* VS
-// Code window belongs to it. Unlike editorDirFor this does not fall back to the
-// project tag: the comparison is against a window's workspace folder, and the
-// session's real cwd is what has to sit inside it.
+// sessionDir is the directory a session is *about*, which is what decides
+// which VS Code window owns it: the project tag when the session carries one,
+// else its current directory. The tag wins because the directory follows the
+// active pane and wanders — a session tagged for projects/api whose shell is
+// sitting in ~/wandered still belongs to the api window.
 func (m watchModel) sessionDir(name string) string {
 	s, ok := sessionByName(m.sessions, name)
 	if !ok {
 		return ""
+	}
+	if s.ProjectDir != "" {
+		return s.ProjectDir
 	}
 	return s.Directory
 }
