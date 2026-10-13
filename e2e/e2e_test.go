@@ -16,6 +16,7 @@
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,9 +34,10 @@ import (
 )
 
 var (
-	muxBin string // 이 테스트가 빌드한 mux
-	sock   string // 전용 서버 소켓 경로
-	home   string // 임시 HOME (panel.json, .tmux.conf)
+	muxBin    string // 이 테스트가 빌드한 mux
+	sock      string // 전용 서버 소켓 경로
+	serverPID int    // 전용 서버 pid — kill-server 에 답하지 않을 때 SIGKILL 하려고
+	home      string // 임시 HOME (panel.json, .tmux.conf)
 )
 
 func TestMain(m *testing.M) {
@@ -84,8 +86,15 @@ func run(m *testing.M) int {
 
 	name := fmt.Sprintf("mux-e2e-%d", os.Getpid())
 	os.Unsetenv("TMUX") // 테스트를 tmux 안에서 돌려도 사용자 서버로 새지 않게
-	boot := exec.Command("tmux", "-L", name, "-f", filepath.Join(home, ".tmux.conf"),
-		"new-session", "-d", "-s", "_boot", "-x", "80", "-y", "24")
+	bootArgs := []string{"-L", name, "-f", filepath.Join(home, ".tmux.conf")}
+	if os.Getenv("MUX_E2E_TMUX_VERBOSE") != "" {
+		// 서버 로그(tmux-server-<pid>.log)를 임시 디렉터리에 남긴다 — 어떤 클라이언트가 어떤 명령을
+		// 어떤 순서로 보냈는지는 이 로그에만 있다. 재현이 어려운 멈춤을 쫓을 때 켠다.
+		bootArgs = append(bootArgs, "-vv")
+		fmt.Println("e2e tmux server log dir:", tmp)
+	}
+	boot := exec.Command("tmux", append(bootArgs, "new-session", "-d", "-s", "_boot", "-x", "80", "-y", "24")...)
+	boot.Dir = tmp
 	if out, err := boot.CombinedOutput(); err != nil {
 		fmt.Printf("서버 기동 실패: %v\n%s", err, out)
 		return 1
@@ -96,9 +105,14 @@ func run(m *testing.M) int {
 		return 1
 	}
 	sock = strings.TrimSpace(string(out))
+	// 밖에서 들여다볼 수 있게 — 실패를 재현할 때 이 소켓에 -S 로 붙어 창 상태를 본다.
+	fmt.Println("e2e tmux socket:", sock)
 	// 이제부터 이 프로세스(와 여기서 띄우는 mux)의 모든 `tmux …` 는 이 서버로 간다.
 	os.Setenv("TMUX", sock+",0,0")
-	defer exec.Command("tmux", "-S", sock, "kill-server").Run()
+	if out, err := exec.Command("tmux", "-S", sock, "display-message", "-p", "#{pid}").Output(); err == nil {
+		serverPID = atoi(string(out))
+	}
+	defer stopServer()
 
 	return m.Run()
 }
@@ -108,20 +122,84 @@ func repoRoot() string {
 	return filepath.Dir(wd)
 }
 
+// tmuxTimeout 은 서버가 이 시간 안에 답하지 않으면 멈춘 것으로 보는 기준이다. 정상 명령은
+// 수 ms 에 돌아온다. 서버가 CPU 를 다 쓰며 도는 경우 — 3.7c 는 패널처럼 작은 클라이언트의
+// 오른쪽 가장자리에 걸친 pane 의 border-status 폭이 언더플로해 그렇게 된다(tmux #5664) —
+// 그냥 기다리면 5분 뒤 go test 가 죽고 서버와 `mux watch` 는 고아로 남는다. 여기서 끊고
+// 원인을 적는다.
+const tmuxTimeout = 15 * time.Second
+
+// hungCmd 는 처음 제시간에 답하지 않은 tmux 명령이다. 서버가 멈추면 그 뒤의 모든 관측이
+// 비는데, 그걸 "안 됐다" 로만 적으면 원인이 가려진다 — 기다림이 실패할 때마다 덧붙인다.
+var hungCmd string
+
+// hangNote 는 서버 멈춤이 있었으면 그 사실을, 없었으면 빈 문자열을 돌려준다.
+func hangNote() string {
+	if hungCmd == "" {
+		return ""
+	}
+	return fmt.Sprintf("\n서버 멈춤: `tmux %s` 가 %v 안에 답하지 않았다 (%s). 3.7c 라면 tmux #5664 — 작은 클라이언트의 오른쪽 가장자리에 걸친 pane 의 border-status 폭 언더플로",
+		hungCmd, tmuxTimeout, tmuxVersion())
+}
+
+// runTmux 는 전용 서버에 명령을 보내고 stdout 을 돌려준다. hung 은 서버가 제시간에 답하지
+// 않았다는 뜻이다; 그때 err 는 "signal: killed" 라 그것만으로는 구분이 안 된다.
+func runTmux(args ...string) (out []byte, err error, hung bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), tmuxTimeout)
+	defer cancel()
+	out, err = exec.CommandContext(ctx, "tmux", append([]string{"-S", sock}, args...)...).Output()
+	hung = ctx.Err() == context.DeadlineExceeded
+	if hung && hungCmd == "" {
+		hungCmd = strings.Join(args, " ")
+	}
+	return out, err, hung
+}
+
 // tm 은 전용 서버에 tmux 명령을 보낸다. 실패는 테스트 실패다.
 func tm(t *testing.T, args ...string) string {
 	t.Helper()
-	out, err := exec.Command("tmux", append([]string{"-S", sock}, args...)...).CombinedOutput()
+	out, err, hung := runTmux(args...)
+	if hung {
+		t.Fatalf("tmux %s:%s", strings.Join(args, " "), hangNote())
+	}
 	if err != nil {
-		t.Fatalf("tmux %s: %v\n%s", strings.Join(args, " "), err, out)
+		var stderr []byte
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = ee.Stderr
+		}
+		t.Fatalf("tmux %s: %v\n%s%s", strings.Join(args, " "), err, out, stderr)
 	}
 	return strings.TrimSpace(string(out))
 }
 
-// tmq 는 tm 과 같되 실패를 빈 문자열로 돌려준다 — 없는 옵션을 읽을 때.
+// tmq 는 tm 과 같되 실패를 빈 문자열로 돌려준다 — 없는 옵션을 읽을 때. 서버가 멈춘 경우도
+// 빈 문자열이다; 바로 다음 tm 이 그 사실을 적는다.
 func tmq(args ...string) string {
-	out, _ := exec.Command("tmux", append([]string{"-S", sock}, args...)...).Output()
+	out, _, _ := runTmux(args...)
 	return strings.TrimSpace(string(out))
+}
+
+// tmuxVersion 은 소켓을 거치지 않으므로 서버가 멈춰 있어도 답한다.
+func tmuxVersion() string {
+	out, _ := exec.Command("tmux", "-V").Output()
+	return strings.TrimSpace(string(out))
+}
+
+// stopServer 는 전용 서버를 내린다. kill-server 가 3초 안에 돌아오지 않으면 서버가 돌고 있는
+// 것이므로 SIGKILL 한다 — 멈춘 서버를 남겨 두면 `mux watch` 고아와 소켓 파일이 쌓인다
+// (한 번에 25개까지 쌓인 적이 있다).
+func stopServer() {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err := exec.CommandContext(ctx, "tmux", "-S", sock, "kill-server").Run()
+	if err == nil && ctx.Err() == nil {
+		return
+	}
+	if serverPID > 0 && syscall.Kill(serverPID, 0) == nil {
+		fmt.Printf("e2e: tmux 서버(pid %d)가 kill-server 에 답하지 않아 SIGKILL — %s\n", serverPID, tmuxVersion())
+		_ = syscall.Kill(serverPID, syscall.SIGKILL)
+		_ = os.Remove(sock)
+	}
 }
 
 func atoi(s string) int { n, _ := strconv.Atoi(strings.TrimSpace(s)); return n }
@@ -130,20 +208,51 @@ func atoi(s string) int { n, _ := strconv.Atoi(strings.TrimSpace(s)); return n }
 func eventually(t *testing.T, what string, timeout time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	for time.Now().Before(deadline) && hungCmd == "" {
 		if cond() {
 			return
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
-	t.Fatalf("%s: %v 안에 되지 않았다", what, timeout)
+	t.Fatalf("%s: %v 안에 되지 않았다%s", what, timeout, hangNote())
+}
+
+// eventuallyWindow 는 세션 첫 창이 cond 를 만족할 때까지 기다리고, 못 하면 마지막으로 본
+// 창 상태를 함께 적는다 — "안 됐다"만으로는 어느 축이 어긋났는지 알 수 없다.
+func eventuallyWindow(t *testing.T, session, what string, timeout time.Duration, cond func(window) bool) window {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var w window
+	for time.Now().Before(deadline) && hungCmd == "" {
+		w = readWindow(t, session)
+		if cond(w) {
+			return w
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	// 서버가 본 마지막 명령들 — 패널이 안 열렸는지, 열렸다 닫혔는지는 여기서만 보인다.
+	var trail []string
+	for _, l := range strings.Split(tmq("show-messages"), "\n") {
+		if strings.Contains(l, "split-window") || strings.Contains(l, "kill-pane") ||
+			strings.Contains(l, "resize-") || strings.Contains(l, "error") || strings.Contains(l, "message:") {
+			trail = append(trail, l)
+		}
+	}
+	if len(trail) > 14 {
+		trail = trail[len(trail)-14:]
+	}
+	t.Fatalf("%s: %v 안에 되지 않았다 — 마지막 창: %dx%d fit=%q size=%q work=%d panel=%d@%d clients=[%s] saved=%d\n서버 로그:\n  %s%s",
+		what, timeout, w.width, w.height, w.fit, w.sizeOpt, w.work, w.panel, w.panelLeft,
+		strings.ReplaceAll(tmq("list-clients", "-t", "="+session, "-F", "#{client_width}x#{client_height}"), "\n", " "),
+		savedPanelWidth(t), strings.Join(trail, "\n  "), hangNote())
+	return w
 }
 
 // newSession 은 테스트 전용 세션을 만들고 끝나면 지운다.
 func newSession(t *testing.T, name string) {
 	t.Helper()
 	tm(t, "new-session", "-d", "-s", name, "-x", "160", "-y", "40", "-c", os.TempDir())
-	t.Cleanup(func() { exec.Command("tmux", "-S", sock, "kill-session", "-t", "="+name).Run() })
+	t.Cleanup(func() { tmq("kill-session", "-t", "="+name) })
 }
 
 // client 는 크기가 정해진 가짜 터미널 하나다. script(1) 이 pty 를 만들고, 그 안에서
@@ -286,9 +395,7 @@ func TestVSCodeClientNeverSeesPanel(t *testing.T) {
 	attach(t, "e2e-see", 220, 50, false)
 	attach(t, "e2e-see", 120, 24, true)
 
-	var w window
-	eventually(t, "창 고정", 8*time.Second, func() bool {
-		w = readWindow(t, "e2e-see")
+	w := eventuallyWindow(t, "e2e-see", "창 고정", 8*time.Second, func(w window) bool {
 		return w.fit == "1" && w.panel > 0
 	})
 	if w.work < 120 {
@@ -308,9 +415,7 @@ func TestWindowNeverOutgrowsWT(t *testing.T) {
 	attach(t, "e2e-cap", 120, 24, true)
 
 	// 정착까지 기다린다 — 붙은 직후엔 패널이 먼저 열리고 fit 이 뒤따른다.
-	var w window
-	eventually(t, "창이 WT 크기로 고정·정착", 8*time.Second, func() bool {
-		w = readWindow(t, "e2e-cap")
+	w := eventuallyWindow(t, "e2e-cap", "창이 WT 크기로 고정·정착", 8*time.Second, func(w window) bool {
 		return w.fit == "1" && w.width == 220 && w.height == 49 && w.work >= 120
 	})
 	if w.panel != 99 {
@@ -330,9 +435,7 @@ func TestVSCodeOnlyFitsExactly(t *testing.T) {
 	attach(t, "e2e-only", 120, 24, true)
 
 	// 붙은 직후 한두 틱은 과도 상태다(패널이 먼저 열리고 fit 이 뒤따른다). 정착을 기다린다.
-	var w window
-	eventually(t, "창 고정·정착", 8*time.Second, func() bool {
-		w = readWindow(t, "e2e-only")
+	w := eventuallyWindow(t, "e2e-only", "창 고정·정착", 8*time.Second, func(w window) bool {
 		return w.fit == "1" && w.panel == 60 && w.work == 120
 	})
 	if w.width != 120+1+w.panel || w.height != 23 {
@@ -437,7 +540,7 @@ func TestSessionCreatedWithDirIsTagged(t *testing.T) {
 	if err := tmux.CreateSessionWithDir("e2e-tagged", dir); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { exec.Command("tmux", "-S", sock, "kill-session", "-t", "=e2e-tagged").Run() })
+	t.Cleanup(func() { tmq("kill-session", "-t", "=e2e-tagged") })
 	if got := tmq("show-options", "-qv", "-t", "e2e-tagged", "@project_dir"); got != dir {
 		t.Errorf("@project_dir = %q, want %q", got, dir)
 	}
