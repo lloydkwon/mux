@@ -501,6 +501,41 @@ func TestFitHoldsWithHiddenVSCodeTabWhenTerminalLeaves(t *testing.T) {
 	}
 }
 
+// 4c. 고정된 창 안에서 패널이 틀어지면 다음 훅이 되돌린다. 창 크기가 이미 맞으면 아무것도
+// 안 하던 가드 때문에, 실측(2026-10-14) 239칸 창이 작업 74 / 패널 164 로 갈라진 채
+// 머물렀다 — 패널 프로세스는 고정된 창의 폭을 fit 에 맡기므로 fit 말고는 고칠 주체가 없다.
+func TestFitRepinsDriftedPanel(t *testing.T) {
+	savePanelWidth(t, 45)
+	newSession(t, "e2e-pin")
+	attach(t, "e2e-pin", 181, 55, true)
+
+	w := eventuallyWindow(t, "e2e-pin", "VS Code 에 맞춰 고정", 8*time.Second, func(w window) bool {
+		return w.fit == "1" && w.panel == 45 && w.work == 181
+	})
+
+	// 틀어짐을 만든다: 고정된 창의 크기는 그대로, 패널만 넓힌다.
+	pane := tm(t, "list-panes", "-t", w.id, "-F", "#{pane_id} #{pane_start_command}")
+	var panelID string
+	for _, line := range strings.Split(pane, "\n") {
+		if id, cmd, ok := strings.Cut(line, " "); ok && strings.Contains(cmd, "mux watch") {
+			panelID = id
+		}
+	}
+	if panelID == "" {
+		t.Fatalf("패널 pane 을 못 찾았다:\n%s", pane)
+	}
+	tm(t, "resize-pane", "-t", panelID, "-x", "164")
+	if d := readWindow(t, "e2e-pin"); d.panel != 164 {
+		t.Fatalf("틀어짐 재현 실패: 패널 %d", d.panel)
+	}
+
+	panelAuto(t, "e2e-pin")
+	got := readWindow(t, "e2e-pin")
+	if got.panel != 45 || got.work != 181 {
+		t.Errorf("훅 뒤 작업 %d / 패널 %d, want 181 / 45", got.work, got.panel)
+	}
+}
+
 // 5. 훅이 부르는 명령은 즉시 끝난다. resize-window 가 after-resize-window 훅을 다시 쏘고,
 // 그 run-shell 은 동기라 가드가 없으면 mux 가 자기 자신을 끝없이 부른다(실측: 120초+).
 func TestPanelAutoReturnsQuickly(t *testing.T) {

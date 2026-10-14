@@ -285,7 +285,15 @@ func syncVSCodeViewport(ctx panelCtx, panelWidth int) (fitted bool, width int) {
 	// command again. Without the comparison that is an unbounded chain: measured
 	// as a `mux panel --auto` that never returned and a window left half
 	// resized, with the panel squeezed to a single column.
+	//
+	// The panel inside is checked even so. The panel process leaves a fitted
+	// window's widths to this function, so returning here without looking
+	// meant a panel knocked off its width stayed off it: measured 2026-10-14,
+	// a 239-column window split 74 / 164 and held there with every hook
+	// passing through this branch. Resizing a pane fires no window hook, so
+	// the guard above still holds.
 	if ctx.width == width && ctx.height == height {
+		pinPanelWidth(window, panelWidth)
 		return true, panelWidth
 	}
 
@@ -309,6 +317,31 @@ func syncVSCodeViewport(ctx panelCtx, panelWidth int) (fitted bool, width int) {
 		_ = ResizePaneWidth(pane, panelWidth)
 	}
 	return true, panelWidth
+}
+
+// pinPanelWidth puts a fitted window's panel back at width when it is not
+// there. One list-panes, and a resize only when it is off.
+//
+// Its own list-panes rather than findPanelPane: that one's format is shared by
+// every mock key that finds a panel, and this needs the width beside the id.
+func pinPanelWidth(window string, width int) {
+	out, err := runner.Output("tmux", "list-panes", "-t", window,
+		"-F", "#{pane_id} #{pane_width} #{pane_start_command}")
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.SplitN(strings.TrimSpace(line), " ", 3)
+		if len(f) != 3 || !strings.Contains(f[2], panelCommand) {
+			continue
+		}
+		cur, err := strconv.Atoi(f[1])
+		if err != nil || cur == width {
+			return
+		}
+		_ = ResizePaneWidth(f[0], width)
+		return
+	}
 }
 
 // releaseWindowFit undoes a fix mux made, and does nothing otherwise — a user

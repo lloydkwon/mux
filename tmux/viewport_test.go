@@ -160,3 +160,31 @@ func TestParseClientList(t *testing.T) {
 		t.Errorf("got %+v", got)
 	}
 }
+
+// 창 크기가 이미 맞아도 패널 폭은 바로잡는다. 크기가 맞으면 아무것도 안 하던 가드 때문에
+// 고정된 창 안에서 패널이 164칸으로 틀어진 채 머물렀다(2026-10-14 실측: 작업 74 / 패널 164).
+// 패널 프로세스는 고정된 창의 폭을 fit 에 맡기므로, fit 이 안 고치면 아무도 안 고친다.
+func TestPinPanelWidth(t *testing.T) {
+	listArgs := []string{"list-panes", "-t", "@1", "-F", "#{pane_id} #{pane_width} #{pane_start_command}"}
+	cases := []struct {
+		name     string
+		out      string
+		wantRuns []string
+	}{
+		{"틀어졌으면 되돌린다", "%0 74 zsh\n%1 164 /bin/mux watch\n", []string{"tmux resize-pane -t %1 -x 45"}},
+		{"맞으면 아무것도 안 한다", "%0 193 zsh\n%1 45 /bin/mux watch\n", nil},
+		{"패널이 없으면 아무것도 안 한다", "%0 239 zsh\n", nil},
+		{"폭을 못 읽으면 아무것도 안 한다", "%0 74 zsh\n%1 ?? /bin/mux watch\n", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			withMock(t, func(m *mockRunner) {
+				m.OnOutput([]byte(c.out), nil, "tmux", listArgs...)
+				pinPanelWidth("@1", 45)
+				if len(m.runs) != len(c.wantRuns) || (len(c.wantRuns) > 0 && m.runs[0] != c.wantRuns[0]) {
+					t.Errorf("runs = %v, want %v", m.runs, c.wantRuns)
+				}
+			})
+		})
+	}
+}
