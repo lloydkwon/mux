@@ -8,7 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This repo is a **personal fork**, third in a chain: `lunemis/mux` → `xguru/mux` → this repo. The module path is `github.com/lloydkwon/mux`. Fork-specific features: the "New shell" / "New tmux session" action rows at the top of the list, persistent per-session ordering (`0`–`9`, `o` to rotate sort), and the Claude progress state badges.
 
-Remotes: `origin` is this fork (`lloydkwon/mux`, SSH), `upstream` is the fork it came from (`xguru/mux`). Push over SSH — the `gh` OAuth token lacks the `workflow` scope, so HTTPS pushes are rejected for touching `.github/workflows/`. Use `go install ./cmd/mux` to install the working tree; `@latest` installs the published branch instead.
+원격은 둘이다. `origin` 은 이 포크(`lloydkwon/mux`, SSH)이고, `upstream` 은 이 포크가 갈라져 나온 `xguru/mux` 다. `upstream` 은 원래 저장소의 새 변경을 받아 보는 용도라 HTTPS 로 fetch 만 하고, push 주소는 `DISABLED` 로 막아 두었다(`git remote set-url --push upstream DISABLED`) — 남의 저장소로 가는 push 가 실수로라도 나가지 않게. 새 변경은 `git fetch upstream && git log --oneline HEAD..upstream/main` 으로 본다. 원본 `lunemis/mux` 는 원격으로 두지 않는다. 2026-10-14 에 확인했을 때 두 저장소 모두 이 포크에 없는 커밋이 0개였다(`xguru` 는 07-18, `lunemis` 는 07-07 이후 변경 없음). 이 클론에는 한때 `upstream` 이 빠져 있었으므로, 없으면 `git remote add upstream https://github.com/xguru/mux.git` 로 다시 단다.
+
+Push over SSH — the `gh` OAuth token lacks the `workflow` scope, so HTTPS pushes are rejected for touching `.github/workflows/`. Use `go install ./cmd/mux` to install the working tree; `@latest` installs the published branch instead.
 
 ## Commands
 
