@@ -1,0 +1,13 @@
+⚡ tmux sessions 1                                                                       sort: name|
+filter: api (esc clear)|
+╭──────────────────────────────────────┬───────────────────────────────────────────────────────────╮|
+│▶ api-server          ❗ ⌥ feat/lon...│[ api-serv  ❗ claude  ⌥ feat/long-branch-name-that-must-yi│|
+│                                      │  ❗ approval · Bash: git push                             │|
+│                                      │───────────────────────────────────────────────────────────│|
+│                                      │                                                           │|
+│                                      │                                                           │|
+│                                      │                                                           │|
+│                                      │                                                           │|
+│                                      │                                                           │|
+╰──────────────────────────────────────┴───────────────────────────────────────────────────────────╯|
+↑↓/jk navigate • tab expand • ⇧tab collapse • enter/2click attach • n new • x kill • r rename • m me|

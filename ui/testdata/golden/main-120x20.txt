@@ -1,0 +1,19 @@
+⚡ tmux sessions 4                                                                                           sort: name|
+╭──────────────────────────────────────────────┬───────────────────────────────────────────────────────────────────────╮|
+│○ New shell           leave tmux              │[ api-server ]  /ho  ❗ claude  ⌥ feat/long-branch-name-that-must-yield│|
+│+ New tmux session    create and attach       │  ❗ approval · Bash: git push                                         │|
+│▶ a-session-with-...        ✅                │───────────────────────────────────────────────────────────────────────│|
+│▶ api-server                ❗ ⌥ feat/long-...│$ git push                                                             │|
+│▶ mux                       ⏳          ⌥ main│? Allow Bash: git push  (y/n)                                          │|
+│▶ notes                         ✎ 회의록 ...  │                                                                       │|
+│                                              │                                                                       │|
+│                                              │                                                                       │|
+│                                              │                                                                       │|
+│                                              │                                                                       │|
+│                                              │                                                                       │|
+│                                              │                                                                       │|
+│                                              │                                                                       │|
+│                                              │                                                                       │|
+│                                              │                                                                       │|
+╰──────────────────────────────────────────────┴───────────────────────────────────────────────────────────────────────╯|
+↑↓/jk navigate • tab expand • ⇧tab collapse • enter/2click attach • n new • x kill • r rename • m memo • v copy • 0-9 or|

@@ -1,0 +1,24 @@
+ 🔔 AI 세션                         |
+                                    |
+ ✅ a-session-with-a-rather-lon...  |
+                                    |
+ ❗ api-server  ⌥ feat/long-bran... |
+    Bash: git push                  |
+    아직 없음                       |
+                                    |
+ ⏳ mux  ◀                   ⌥ main |
+                                    |
+ ── 세션 ────────────────────────── |
+                                    |
+    notes                           |
+  ✎ 회의록 정리 중                  |
+                                    |
+ ── 최근 이벤트 ─────────────────── |
+ 아직 없음                          |
+                                    |
+                                    |
+                                    |
+                                    |
+                                    |
+                                    |
+                                    |

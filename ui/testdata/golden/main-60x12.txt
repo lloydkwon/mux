@@ -1,0 +1,11 @@
+⚡ tmux sessions 4                               sort: name|
+╭──────────────────────┬───────────────────────────────────╮|
+│○ New shell           │[ api-serv  ❗ claude  ⌥ feat/long-│|
+│+ New tmux ...        │  ❗ approval · Bash: git push     │|
+│▶ a-session...        │───────────────────────────────────│|
+│▶ api-server          │$ git push                         │|
+│▶ mux                 │? Allow Bash: git push  (y/n)      │|
+│▶ notes               │                                   │|
+│                      │                                   │|
+╰──────────────────────┴───────────────────────────────────╯|
+↑↓/jk navigate • tab expand • ⇧tab collapse • enter/2click a|

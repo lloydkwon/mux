@@ -21,6 +21,7 @@ make install PREFIX=~/.local     # installs to $PREFIX/bin
 
 go test ./ui -run TestFlattenMenu -v    # single test
 go test ./herdr                        # herdr 매핑 — 캡처한 픽스처로 hermetic
+go test ./ui -run TestGolden -update  # 화면 골든(ui/testdata/golden)을 다시 쓴다 — 커밋 diff 로 바뀐 화면을 본다
 go vet ./... && golangci-lint run       # expected before submitting (no repo config; defaults)
 GOARCH=arm64 go build ./cmd/mux         # CI also cross-compiles this
 
