@@ -638,9 +638,15 @@ func selfPane() string { return os.Getenv("TMUX_PANE") }
 // The lower clamp is the second guard: a width the panel could not render in is
 // never adopted as intent, so a transient squeeze cannot become permanent.
 func (m watchModel) applyResize(paneWidth int) (tea.Model, tea.Cmd) {
-	winWidth, winPanes, err := tmux.WindowShape(selfPane())
+	winWidth, winPanes, livePane, err := tmux.PaneShape(selfPane())
 	if err != nil {
 		return m, nil // nothing to compare against; leave the width alone
+	}
+	// The pane width from the same instant as the window, not the message's:
+	// see tmux.PaneShape for the stale-message drag this prevents. The
+	// message's width only stands in when tmux answered with nothing.
+	if livePane > 0 {
+		paneWidth = livePane
 	}
 	// Read here, beside the other I/O, and handed in as a value: the pure
 	// half below is what the tests drive, and it must not touch a server.

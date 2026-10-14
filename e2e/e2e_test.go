@@ -536,6 +536,69 @@ func TestFitRepinsDriftedPanel(t *testing.T) {
 	}
 }
 
+// 4e. 막 열린 패널은 창이 커지며 생긴 재배치를 드래그로 오해해 저장하지 않는다.
+// 늦게 도착한 첫 크기 메시지(커지기 전 폭)와 그 순간 읽은 창 폭(커진 뒤)을 짝지으면,
+// 다음 메시지의 재배치된 폭이 «창은 그대로, 패널만 바뀜» = 드래그로 읽혀 전역 저장 폭이
+// 바뀌고 모든 패널이 따라간다. 실측: 160→239 에서 45 가 84 로 저장됐다.
+func TestFreshPanelDoesNotSaveRelayoutAsDrag(t *testing.T) {
+	savePanelWidth(t, 45)
+	newSession(t, "e2e-fresh")
+	attach(t, "e2e-fresh", 239, 57, false) // 패널 프로세스가 막 뜬 직후
+
+	time.Sleep(4 * time.Second) // 틱 두 번 — 저장했다면 이미 썼다
+	if s := savedPanelWidth(t); s != 45 {
+		t.Errorf("저장 폭 %d, want 45 — 창 재배치를 드래그로 저장했다", s)
+	}
+	if w := readWindow(t, "e2e-fresh"); w.panel != 45 {
+		t.Errorf("패널 %d칸, want 45", w.panel)
+	}
+}
+
+// 4d. 고정되지 않은 채 남은 세션(예전 바이너리 시절에 VS Code 가 붙은 것)도 큰 터미널이
+// 들렀다 떠나면 VS Code 에 맞춰 고정된다. 실측(2026-10-14): water-ai 의 VS Code 둘은
+// 12:13 에 붙어 고정이 안 된 채였고, kitty 가 들렀다 떠나자 창이 VS Code 폭으로 줄어
+// 패널이 편집기 화면에 들어왔다.
+func TestTerminalVisitFitsAnUnfittedSession(t *testing.T) {
+	savePanelWidth(t, 45)
+	newSession(t, "e2e-vis-a")
+	newSession(t, "e2e-vis-b")
+	big := attach(t, "e2e-vis-b", 239, 57, false)
+	// B 가 자리잡기 전에 A 에 붙으면 별개의 경합(저장 폭이 바뀐다)에 먼저 걸린다.
+	// 여기서 묻는 것은 그게 아니다.
+	eventuallyWindow(t, "e2e-vis-b", "B 정착", 5*time.Second, func(w window) bool {
+		return w.width == 239 && w.panel == 45
+	})
+	time.Sleep(time.Second)
+	attach(t, "e2e-vis-a", 80, 30, true)
+	time.Sleep(1100 * time.Millisecond)
+	attach(t, "e2e-vis-a", 188, 55, true)
+	w := eventuallyWindow(t, "e2e-vis-a", "VS Code 에 맞춰 고정", 8*time.Second, func(w window) bool {
+		return w.fit == "1" && w.panel == 45
+	})
+	// 예전 바이너리가 남긴 상태를 만든다: 고정 표시와 수동 크기를 지운다.
+	tm(t, "set-option", "-wu", "-t", w.id, "@mux_vsfit")
+	tm(t, "set-option", "-wu", "-t", w.id, "window-size")
+	eventually(t, "고정 해제 재현", 5*time.Second, func() bool {
+		r := readWindow(t, "e2e-vis-a")
+		return r.fit == "" && r.width == 188
+	})
+
+	for _, target := range []string{"e2e-vis-a", "e2e-vis-b"} {
+		if out, err := exec.Command(muxBin, "switch", target).CombinedOutput(); err != nil {
+			t.Fatalf("mux switch %s: %v\n%s", target, err, out)
+		}
+		tgt := target
+		eventually(t, "큰 터미널 → "+tgt, 5*time.Second, func() bool { return big.session() == tgt })
+	}
+
+	got := eventuallyWindow(t, "e2e-vis-a", "들렀다 떠난 뒤 VS Code 에 맞춰 고정", 8*time.Second, func(w window) bool {
+		return w.fit == "1" && w.width == 188+1+45 && w.work >= 188
+	})
+	if got.panelLeft < 189 {
+		t.Errorf("패널이 %d열에서 시작 — VS Code(188칸) 화면 안이다", got.panelLeft)
+	}
+}
+
 // 5. 훅이 부르는 명령은 즉시 끝난다. resize-window 가 after-resize-window 훅을 다시 쏘고,
 // 그 run-shell 은 동기라 가드가 없으면 mux 가 자기 자신을 끝없이 부른다(실측: 120초+).
 func TestPanelAutoReturnsQuickly(t *testing.T) {

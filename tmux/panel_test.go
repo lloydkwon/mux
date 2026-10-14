@@ -1157,6 +1157,33 @@ func TestWindowShapeRefusesAPartialAnswer(t *testing.T) {
 	}
 }
 
+// 패널의 리사이즈 판정은 창 폭과 자기 pane 폭을 «같은 순간»에 읽어야 한다. 창은 지금 읽고
+// pane 폭은 늦게 온 메시지에서 가져오면, 창이 커지며 생긴 재배치가 드래그로 읽혀 전역 저장
+// 폭이 바뀐다(실측: 막 열린 패널에서 45 → 84).
+func TestPaneShapeReadsWindowAndPaneTogether(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		m.OnOutput([]byte("239 2 45\n"), nil, "tmux", "display-message", "-p", "-t", "%3",
+			"#{window_width} #{window_panes} #{pane_width}")
+
+		w, panes, pw, err := PaneShape("%3")
+		if err != nil {
+			t.Fatalf("PaneShape: %v", err)
+		}
+		if w != 239 || panes != 2 || pw != 45 {
+			t.Errorf("got %d/%d/%d, want 239/2/45", w, panes, pw)
+		}
+	})
+	for _, out := range []string{" \n", "239 2\n", "\n", "239 2 x\n"} {
+		withMock(t, func(m *mockRunner) {
+			m.OnOutput([]byte(out), nil, "tmux", "display-message", "-p", "-t", "%3",
+				"#{window_width} #{window_panes} #{pane_width}")
+			if _, _, _, err := PaneShape("%3"); err == nil {
+				t.Errorf("output %q was accepted as a shape", out)
+			}
+		})
+	}
+}
+
 // 저장폭은 기계 전체가 공유하는 숫자 하나다. 그것을 드래그한 창보다 좁은 창에서
 // 패널을 열면, 작업 pane 보다 넓은 패널이 열리고 `mux watch` 가 첫 프레임에 줄인다 —
 // 패널이 뜨는 모든 창에서 잘못된 크기가 한 번씩 번쩍인다. 창의 절반이 상한이고,

@@ -507,6 +507,38 @@ func WindowShape(target string) (width, panes int, err error) {
 	return width, panes, nil
 }
 
+// PaneShape is WindowShape plus target's own pane width, all from one call.
+//
+// The panel's resize decision needs its pane width from the same instant as the
+// window's. Taking it from the WindowSizeMsg instead paired a stale message with
+// a live window: a panel that had just opened got its pre-growth width (45)
+// alongside the grown window (239), recorded that as its first size, and then
+// read the re-laid-out width (84) of the next message as "same window, different
+// pane" — a drag — and saved it for every panel (measured 2026-10-14).
+func PaneShape(target string) (winWidth, panes, paneWidth int, err error) {
+	args := []string{"display-message", "-p"}
+	if target != "" {
+		args = append(args, "-t", target)
+	}
+	args = append(args, "#{window_width} #{window_panes} #{pane_width}")
+
+	out, err := runner.Output("tmux", args...)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("resolve pane shape: %w", err)
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) != 3 {
+		return 0, 0, 0, fmt.Errorf("parse pane shape: %q", strings.TrimSpace(string(out)))
+	}
+	var n [3]int
+	for i, f := range fields {
+		if n[i], err = strconv.Atoi(f); err != nil {
+			return 0, 0, 0, fmt.Errorf("parse pane shape %q: %w", f, err)
+		}
+	}
+	return n[0], n[1], n[2], nil
+}
+
 // WindowWidth reports the width of target's window. Pass "" for the current
 // pane's window.
 //
@@ -580,6 +612,10 @@ type panelCtx struct {
 	dir     string
 	width   int
 	height  int
+	// fitted is true only where the caller already knows mux fixed this
+	// window — the SyncFittedWindows sweep. false means "not known", not
+	// "not fitted".
+	fitted bool
 }
 
 func panelWindow(target string) (panelCtx, error) {

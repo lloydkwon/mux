@@ -292,7 +292,21 @@ func syncVSCodeViewport(ctx panelCtx, panelWidth int) (fitted bool, width int) {
 	// a 239-column window split 74 / 164 and held there with every hook
 	// passing through this branch. Resizing a pane fires no window hook, so
 	// the guard above still holds.
+	//
+	// Right size is not the same as fixed, though. A window tmux sized itself —
+	// window-size largest, a big terminal just switched in — already measures
+	// the target, and returning here left it without the tag and without a
+	// manual size. When that terminal left, tmux shrank the window to the
+	// editor's width and the sweep skipped it for want of the tag, so the
+	// panel walked into the editor's view (measured 2026-10-14). A resize to
+	// the size it already has is what turns window-size to manual; the run it
+	// triggers finds the tag and stops.
 	if ctx.width == width && ctx.height == height {
+		if !ctx.fitted && !WindowFitted(window) {
+			_ = runner.Run("tmux", "set-option", "-w", "-t", window, vsFitOption, "1")
+			_ = runner.Run("tmux", "resize-window", "-t", window,
+				"-x", strconv.Itoa(width), "-y", strconv.Itoa(height))
+		}
 		pinPanelWidth(window, panelWidth)
 		return true, panelWidth
 	}
@@ -390,7 +404,7 @@ func parseFittedWindows(out string) []panelCtx {
 		if errW != nil || errH != nil {
 			continue
 		}
-		fitted = append(fitted, panelCtx{window: f[0], session: f[1], width: w, height: h})
+		fitted = append(fitted, panelCtx{window: f[0], session: f[1], width: w, height: h, fitted: true})
 	}
 	return fitted
 }

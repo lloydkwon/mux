@@ -107,10 +107,10 @@ func TestParseFittedWindows(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("got %d windows (%+v), want 2", len(got), got)
 	}
-	if got[0] != (panelCtx{window: "@1", session: "work", width: 269, height: 68}) {
+	if got[0] != (panelCtx{window: "@1", session: "work", width: 269, height: 68, fitted: true}) {
 		t.Errorf("first = %+v", got[0])
 	}
-	if got[1] != (panelCtx{window: "@3", session: "third", width: 190, height: 24}) {
+	if got[1] != (panelCtx{window: "@3", session: "third", width: 190, height: 24, fitted: true}) {
 		t.Errorf("second = %+v", got[1])
 	}
 	if len(parseFittedWindows("")) != 0 {
@@ -187,4 +187,63 @@ func TestPinPanelWidth(t *testing.T) {
 			})
 		})
 	}
+}
+
+// 크기가 이미 맞아도 고정 표시가 없는 창은 고정 상태로 만든다. 큰 터미널이 들어오면
+// tmux 가 훅보다 먼저 창을 그 크기로 키우므로, 목표 크기와 현재 크기가 같아 아무것도 안
+// 하고 돌아갔다 — 표시도 수동 크기도 없이. 그 터미널이 떠나면 tmux 가 창을 VS Code 폭으로
+// 줄이고, 표시가 없어 재정렬 대상에서도 빠져 패널이 편집기 화면에 들어왔다(2026-10-14).
+func TestSyncMarksARightSizedUnfittedWindow(t *testing.T) {
+	setup := func(m *mockRunner, tag string) {
+		m.OnOutput([]byte("10 188 55 /dev/pts/15 2000\n11 80 30 /dev/pts/17 1000\n20 239 57 /dev/pts/19 3000\n"), nil,
+			"tmux", "list-clients", "-t", "=water", "-F",
+			"#{client_pid} #{client_width} #{client_height} #{client_tty} #{client_activity}")
+		m.OnOutput([]byte("on\n"), nil, "tmux", "display-message", "-p", "-t", "=water", "#{status}")
+		m.OnOutput([]byte(tag+"\n"), nil, "tmux", "show-options", "-wqv", "-t", "@2", vsFitOption)
+		m.OnOutput([]byte("%5 193 zsh\n%6 45 /bin/mux watch\n"), nil,
+			"tmux", "list-panes", "-t", "@2", "-F", "#{pane_id} #{pane_width} #{pane_start_command}")
+	}
+	origVS := isVSCodeClient
+	t.Cleanup(func() { isVSCodeClient = origVS })
+	isVSCodeClient = func(pid int) bool { return pid == 10 || pid == 11 }
+
+	// tmux 가 이미 239x56 으로 키워 둔 창 — 목표와 같다.
+	ctx := panelCtx{window: "@2", session: "water", width: 239, height: 56}
+
+	t.Run("표시가 없으면 고정 상태로 만든다", func(t *testing.T) {
+		withMock(t, func(m *mockRunner) {
+			setup(m, "")
+			fitted, _ := syncVSCodeViewport(ctx, 45)
+			want := []string{
+				"tmux set-option -w -t @2 " + vsFitOption + " 1",
+				"tmux resize-window -t @2 -x 239 -y 56",
+			}
+			if !fitted || len(m.runs) != 2 || m.runs[0] != want[0] || m.runs[1] != want[1] {
+				t.Errorf("fitted=%v runs=%v, want %v", fitted, m.runs, want)
+			}
+		})
+	})
+	t.Run("이미 표시돼 있으면 아무것도 안 한다", func(t *testing.T) {
+		withMock(t, func(m *mockRunner) {
+			setup(m, "1")
+			if fitted, _ := syncVSCodeViewport(ctx, 45); !fitted || len(m.runs) != 0 {
+				t.Errorf("fitted=%v runs=%v, want 아무 변경 없음", fitted, m.runs)
+			}
+		})
+	})
+	t.Run("정렬 경로는 표시를 다시 묻지 않는다", func(t *testing.T) {
+		withMock(t, func(m *mockRunner) {
+			setup(m, "")
+			c := ctx
+			c.fitted = true
+			if fitted, _ := syncVSCodeViewport(c, 45); !fitted || len(m.runs) != 0 {
+				t.Errorf("fitted=%v runs=%v, want 아무 변경 없음", fitted, m.runs)
+			}
+			for _, g := range m.gets {
+				if g == "tmux show-options -wqv -t @2 "+vsFitOption {
+					t.Errorf("이미 아는 표시를 다시 물었다")
+				}
+			}
+		})
+	})
 }
