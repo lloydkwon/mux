@@ -49,6 +49,53 @@ func TestIsWTClientExcludesVSCode(t *testing.T) {
 	}
 }
 
+// 옮길 클라이언트 고르기: WT 가 있으면 WT, 없으면 VS Code 가 아닌 것 중 최근 것.
+// 네이티브 Linux 에는 WT 가 없다 — WezTerm 같은 터미널을 못 찾아 패널 클릭이 전부
+// "no tmux client attached from Windows Terminal" 로 실패했다(2026-10-14 실측).
+func TestSwitchWTClientFallsBackToNonVSCodeTerminal(t *testing.T) {
+	origWT, origVS := hasWTEnv, isVSCodeClient
+	t.Cleanup(func() { hasWTEnv, isVSCodeClient = origWT, origVS })
+
+	listArgs := []string{"list-clients", "-F", "#{client_pid} #{client_activity} #{client_name}"}
+	// 100: WezTerm(가장 오래됨), 200: VS Code(가장 최근), 300: WezTerm, 400: WT
+	all := "100 1000 /dev/pts/1\n200 9000 /dev/pts/2\n300 2000 /dev/pts/3\n"
+
+	cases := []struct {
+		name    string
+		out     string
+		wt      map[int]bool
+		want    string
+		wantErr bool
+	}{
+		{"WT 가 없으면 VS Code 아닌 최근 클라이언트", all, nil, "/dev/pts/3", false},
+		{"WT 가 있으면 더 최근인 다른 터미널보다 WT 가 먼저", all + "400 1500 /dev/pts/4\n", map[int]bool{400: true}, "/dev/pts/4", false},
+		{"VS Code 뿐이면 아무것도 안 옮긴다", "200 9000 /dev/pts/2\n", nil, "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			hasWTEnv = func(pid int) bool { return c.wt[pid] }
+			isVSCodeClient = func(pid int) bool { return pid == 200 }
+			withMock(t, func(m *mockRunner) {
+				m.OnOutput([]byte(c.out), nil, "tmux", listArgs...)
+				err := SwitchWTClient("target")
+				if c.wantErr {
+					if err == nil || len(m.runs) != 0 {
+						t.Fatalf("err=%v runs=%v, want error and no switch", err, m.runs)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				want := "tmux switch-client -c " + c.want + " -t =target"
+				if len(m.runs) != 1 || m.runs[0] != want {
+					t.Errorf("runs = %v, want [%s]", m.runs, want)
+				}
+			})
+		})
+	}
+}
+
 // VS Code 클라이언트가 붙은 세션인지: 붙어 있으면 무자격 switch-client 를 쓰면 안 된다.
 func TestAnyVSCodeClient(t *testing.T) {
 	isVS := func(pid int) bool { return pid == 200 }

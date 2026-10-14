@@ -366,13 +366,25 @@ var hasWTEnv = func(pid int) bool { return procEnvHasPrefix(pid, "WT_SESSION=") 
 // those are exactly the ones SwitchWTClient must never move.
 var isWTClient = func(pid int) bool { return hasWTEnv(pid) && !isVSCodeClient(pid) }
 
+// isTerminalClient reports whether a tmux client is anything but a VS Code
+// integrated terminal — SwitchWTClient's fallback when no Windows Terminal is
+// attached. A func rather than a var: it is defined by isVSCodeClient, which
+// tests already replace.
+func isTerminalClient(pid int) bool { return !isVSCodeClient(pid) }
+
 // SwitchWTClient points the most recently active Windows Terminal client at
 // the named session (exact match, see SwitchClient for the "=" rationale).
 //
-// Only Windows Terminal clients are touched: VS Code integrated-terminal
-// clients each watch a single session on purpose, and yanking them somewhere
-// else would be hostile. Windows Terminal is identified by the WT_SESSION
-// environment variable on the client process.
+// VS Code integrated-terminal clients are never touched: each watches a single
+// session on purpose, and yanking them somewhere else would be hostile. Windows
+// Terminal is identified by the WT_SESSION environment variable on the client
+// process.
+//
+// Without a Windows Terminal client the most recent client that is not VS Code
+// moves instead. The name predates that: on native Linux the terminal beside
+// VS Code is WezTerm or GNOME Terminal, nothing carries WT_SESSION, and every
+// panel click failed with the error below (measured 2026-10-14). Windows
+// Terminal still goes first so a WSL setup moves exactly what it did before.
 func SwitchWTClient(name string) error {
 	out, err := runner.Output("tmux", "list-clients", "-F",
 		"#{client_pid} #{client_activity} #{client_name}")
@@ -381,7 +393,10 @@ func SwitchWTClient(name string) error {
 	}
 	client := mostRecentWTClient(string(out), isWTClient)
 	if client == "" {
-		return errors.New("no tmux client attached from Windows Terminal")
+		client = mostRecentWTClient(string(out), isTerminalClient)
+	}
+	if client == "" {
+		return errors.New("no tmux client attached outside VS Code")
 	}
 	return runner.Run("tmux", "switch-client", "-c", client, "-t", "="+name)
 }

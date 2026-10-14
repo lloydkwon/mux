@@ -178,7 +178,7 @@ func main() {
 
 	switchCmd := &cobra.Command{
 		Use:   "switch <session>",
-		Short: "Switch the Windows Terminal tmux client to a session",
+		Short: "Switch the terminal (not VS Code) tmux client to a session",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			err := tmux.SwitchWTClient(args[0])
