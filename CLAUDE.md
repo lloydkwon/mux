@@ -25,6 +25,7 @@ go test ./ui -run TestGolden -update  # 화면 골든(ui/testdata/golden)을 다
 go vet ./... && golangci-lint run       # expected before submitting (no repo config; defaults)
 GOARCH=arm64 go build ./cmd/mux         # CI also cross-compiles this
 
+scripts/tui-snapshot.sh --keys 'j Tab'   # 격리 서버에서 작업 트리 빌드를 띄워 화면을 글자로 찍는다 (에이전트용)
 scripts/test-fixture.sh up      # real tmux sessions (multi-window/pane/empty) for manual TUI checks
 scripts/test-fixture.sh down    # tear them down
 
