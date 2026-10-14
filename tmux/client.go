@@ -22,7 +22,8 @@ type Client struct {
 	Activity time.Time
 
 	// Own marks a terminal the user is actually sitting at — a VS Code
-	// integrated terminal or Windows Terminal, told by the client process's
+	// integrated terminal, Windows Terminal or any other local terminal
+	// emulator (terminalEnvPrefixes), told by the client process's
 	// environment. The ghost check exists for terminals someone walked away
 	// from on another device; these are not that, whatever their size or
 	// idle time. Measured: with WT and VS Code both attached on purpose (the
@@ -60,14 +61,44 @@ func ListClients() ([]Client, error) {
 	return cs, nil
 }
 
+// isOwnClient reports whether a client process is one of the user's own
+// terminals. Replaceable in tests.
+var isOwnClient = func(pid int) bool {
+	return isVSCodeClient(pid) || hasWTEnv(pid) || hasTerminalEnv(pid)
+}
+
+// terminalEnvPrefixes are what a local GUI terminal emulator leaves in the
+// environment of what runs inside it. VS Code and Windows Terminal were the
+// whole list under WSL; on native Linux the terminal beside VS Code is WezTerm
+// or a VTE one, carries neither, and was disconnected as a ghost after half an
+// hour of the user working in the editor (measured 2026-10-14).
+//
+// A client from another device over ssh has none of these — sshd passes only
+// LANG and LC_* by default — so it stays a candidate, which is the case the
+// ghost check was written for.
+var terminalEnvPrefixes = []string{
+	"TERM_PROGRAM=",        // WezTerm, VS Code, iTerm2, Apple Terminal, Ghostty
+	"VTE_VERSION=",         // GNOME Terminal, Ptyxis, Tilix
+	"KITTY_WINDOW_ID=",     // kitty
+	"ALACRITTY_WINDOW_ID=", // Alacritty
+	"KONSOLE_VERSION=",     // Konsole
+}
+
+// hasTerminalEnv reports whether a client process runs inside a local terminal
+// emulator. Replaceable in tests.
+var hasTerminalEnv = func(pid int) bool {
+	for _, p := range terminalEnvPrefixes {
+		if procEnvHasPrefix(pid, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // parseClientLine turns one formatted line into a Client. A line that does not
 // carry all five fields is dropped rather than half-filled: this list decides
 // what to detach, and a client whose activity failed to parse would read as
 // epoch-old — which is exactly the shape that gets it disconnected.
-// isOwnClient reports whether a client process is one of the user's own
-// terminals. Replaceable in tests.
-var isOwnClient = func(pid int) bool { return isVSCodeClient(pid) || hasWTEnv(pid) }
-
 func parseClientLine(line string) (Client, bool) {
 	f := strings.Split(line, "|")
 	if len(f) < 6 || strings.TrimSpace(f[1]) == "" {

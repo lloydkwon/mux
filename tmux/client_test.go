@@ -2,6 +2,9 @@ package tmux
 
 import (
 	"errors"
+	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -192,4 +195,59 @@ func TestParseClientLineMarksOwn(t *testing.T) {
 	if !ok || !ok2 || !own.Own || other.Own {
 		t.Fatalf("own=%+v(%v) other=%+v(%v)", own, ok, other, ok2)
 	}
+}
+
+// 로컬 GUI 터미널에서 붙은 클라이언트는 유령이 아니다. WSL 시절에는 VS Code 와
+// Windows Terminal 만 있었지만, 네이티브 Linux 의 WezTerm 은 둘 다 아니라서
+// VS Code 에서 30분 일하는 동안 끊겼다(2026-10-14, clients.log 14:38·15:29).
+// 다른 기기에서 ssh 로 붙은 것은 sshd 가 터미널 표시를 넘기지 않으므로 여전히 후보다.
+func TestHasTerminalEnvRecognisesLocalTerminals(t *testing.T) {
+	if _, err := os.Stat("/proc/self/environ"); err != nil {
+		t.Skip("/proc 가 없다 — 판별은 이 환경에서 «모름»(false)이다")
+	}
+	cases := []struct {
+		name string
+		env  []string
+		want bool
+	}{
+		{"WezTerm", []string{"TERM_PROGRAM=WezTerm", "WEZTERM_PANE=0"}, true},
+		{"GNOME Terminal·Ptyxis", []string{"VTE_VERSION=7600"}, true},
+		{"kitty", []string{"KITTY_WINDOW_ID=1"}, true},
+		{"Alacritty", []string{"ALACRITTY_WINDOW_ID=94"}, true},
+		{"Konsole", []string{"KONSOLE_VERSION=240802"}, true},
+		{"다른 기기의 ssh", []string{"SSH_CONNECTION=10.0.0.2 5555 10.0.0.1 22", "LANG=ko_KR.UTF-8"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cmd := exec.Command("sleep", "30")
+			cmd.Env = c.env
+			if err := cmd.Start(); err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+			waitForExec(t, cmd.Process.Pid, "sleep")
+			if got := hasTerminalEnv(cmd.Process.Pid); got != c.want {
+				t.Errorf("hasTerminalEnv(%v) = %v, want %v", c.env, got, c.want)
+			}
+		})
+	}
+}
+
+// waitForExec waits until pid has exec'd into the named program and its new
+// environment is readable. Before exec its /proc environ is still the parent's
+// — the test process's own, which may well carry TERM_PROGRAM — and measured,
+// for a moment after comm changes it reads back empty.
+func waitForExec(t *testing.T, pid int, comm string) {
+	t.Helper()
+	dir := "/proc/" + strconv.Itoa(pid) + "/"
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile(dir + "comm")
+		env, err2 := os.ReadFile(dir + "environ")
+		if err == nil && err2 == nil && strings.TrimSpace(string(b)) == comm && len(env) > 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("pid %d never became %q", pid, comm)
 }
