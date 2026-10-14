@@ -472,6 +472,35 @@ func TestFitReleasesWhenVSCodeLeaves(t *testing.T) {
 	}
 }
 
+// 4b. 숨은 VS Code 터미널 탭이 하나 더 붙어 있어도, 큰 터미널이 다른 세션으로 떠난 뒤
+// 창은 보고 있는 VS Code 에 맞춰 고정된 채로 남는다. 둘이면 물러나던 시절에는 창이
+// VS Code 폭으로 줄어 패널이 편집기 화면에 들어왔다(2026-10-14 실측: my-mux 에 183x55 와
+// 몇 시간째 유휴인 80x30 이 붙어 있었다).
+func TestFitHoldsWithHiddenVSCodeTabWhenTerminalLeaves(t *testing.T) {
+	savePanelWidth(t, 60)
+	newSession(t, "e2e-hid-a")
+	newSession(t, "e2e-hid-b")
+	big := attach(t, "e2e-hid-a", 220, 50, false)
+	attach(t, "e2e-hid-a", 80, 20, true) // 숨은 탭 — 먼저 붙어 활동 시각이 더 오래됐다
+	// client_activity 는 초 단위라, 같은 초에 붙으면 크기로 가린다. 순서를 확실히 한다.
+	time.Sleep(1100 * time.Millisecond)
+	attach(t, "e2e-hid-a", 120, 24, true) // 보고 있는 VS Code
+
+	eventually(t, "창 고정", 8*time.Second, func() bool { return readWindow(t, "e2e-hid-a").fit == "1" })
+
+	if out, err := exec.Command(muxBin, "switch", "e2e-hid-b").CombinedOutput(); err != nil {
+		t.Fatalf("mux switch: %v\n%s", err, out)
+	}
+	eventually(t, "큰 터미널 전환", 5*time.Second, func() bool { return big.session() == "e2e-hid-b" })
+
+	w := eventuallyWindow(t, "e2e-hid-a", "VS Code 에 맞춰 재고정", 8*time.Second, func(w window) bool {
+		return w.fit == "1" && w.width == 120+1+w.panel && w.work >= 120
+	})
+	if w.panelLeft < 121 {
+		t.Errorf("패널이 %d열에서 시작 — 보고 있는 VS Code(120칸) 화면 안이다", w.panelLeft)
+	}
+}
+
 // 5. 훅이 부르는 명령은 즉시 끝난다. resize-window 가 after-resize-window 훅을 다시 쏘고,
 // 그 run-shell 은 동기라 가드가 없으면 mux 가 자기 자신을 끝없이 부른다(실측: 120초+).
 func TestPanelAutoReturnsQuickly(t *testing.T) {

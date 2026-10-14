@@ -2,8 +2,10 @@ package tmux
 
 import "testing"
 
-// VS Code 클라이언트는 정확히 하나일 때만 창을 맞춘다 — 둘이면 크기가 서로 다를 수
-// 있고 창은 하나뿐이라 누구에게도 맞출 수 없다.
+// VS Code 클라이언트가 여럿이면 가장 최근에 쓴 것에 맞춘다. 물러나던 시절에는 숨은
+// 터미널 탭 하나(80x30, 몇 시간째 유휴)가 붙어 있는 것만으로 fit 이 풀려, 큰 터미널이
+// 다른 세션으로 떠나는 순간 창이 VS Code 폭으로 줄고 패널이 VS Code 화면에 들어왔다
+// (2026-10-14 실측). 다섯째 칸은 client_activity 다.
 func TestParseClients(t *testing.T) {
 	isVS := func(pid int) bool { return pid == 200 || pid == 300 }
 
@@ -17,7 +19,13 @@ func TestParseClients(t *testing.T) {
 		{"VS Code 하나 + WT 하나", "100 269 69 /dev/pts/6\n200 120 24 /dev/pts/9\n",
 			vsClient{120, 24, "/dev/pts/9"}, vsClient{269, 69, ""}, true},
 		{"VS Code 없음", "100 269 69 /dev/pts/6\n", vsClient{}, vsClient{269, 69, ""}, false},
-		{"VS Code 둘", "200 120 24 /dev/pts/9\n300 100 30 /dev/pts/8\n", vsClient{100, 30, "/dev/pts/8"}, vsClient{}, false},
+		{"VS Code 둘이면 최근 것", "200 120 24 /dev/pts/9 2000\n300 80 30 /dev/pts/8 1000\n",
+			vsClient{120, 24, "/dev/pts/9"}, vsClient{}, true},
+		{"VS Code 둘, 순서가 바뀌어도 최근 것", "300 80 30 /dev/pts/8 1000\n200 183 55 /dev/pts/9 2000\n",
+			vsClient{183, 55, "/dev/pts/9"}, vsClient{}, true},
+		// 같은 초에 붙으면 활동 시각으로 못 가린다. 숨은 탭은 대개 기본 크기라 큰 쪽이 보는 쪽이다.
+		{"활동 시각이 같으면 큰 것", "300 80 30 /dev/pts/8 1000\n200 120 24 /dev/pts/9 1000\n",
+			vsClient{120, 24, "/dev/pts/9"}, vsClient{}, true},
 		{"VS Code 만", "200 120 24 /dev/pts/9\n", vsClient{120, 24, "/dev/pts/9"}, vsClient{}, true},
 		{"클라이언트 없음", "", vsClient{}, vsClient{}, false},
 		{"깨진 줄은 건너뛴다", "garbage\n200 120 24 /dev/pts/9\n", vsClient{120, 24, "/dev/pts/9"}, vsClient{}, true},

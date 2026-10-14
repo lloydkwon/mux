@@ -39,13 +39,18 @@ type vsClient struct {
 	tty           string
 }
 
-// sessionClients reports the single VS Code client watching session, and the
+// sessionClients reports the VS Code client the window is fitted to, and the
 // largest of everything else attached to it.
 //
-// Exactly one VS Code client, or nothing: two VS Code windows on one session can
-// disagree about size and there is only one window to fit, so no geometry
-// satisfies both. Backing out there leaves the ordinary behaviour rather than
-// picking a winner the other window would suffer for.
+// With several VS Code clients the most recently active one wins. Two of them
+// can disagree about size and there is only one window, so one has to lose —
+// and backing out instead, which this used to do, made the loser everyone: a
+// hidden terminal tab (80x30, idle for hours) was enough to release the fit,
+// so the moment the big terminal switched to another session the window shrank
+// to the editor's width and the panel walked into the editor's view (measured
+// 2026-10-14). The one that loses now is a terminal nobody is looking at; a
+// smaller one gets a viewport that follows the cursor, a larger one sees the
+// panel.
 //
 // The largest other client is what the window is really sized for — see
 // windowFit. Both come from one list-clients because they are only ever wanted
@@ -55,7 +60,7 @@ func sessionClients(session string) (vs, other vsClient, okVS bool) {
 		return vsClient{}, vsClient{}, false
 	}
 	out, err := runner.Output("tmux", "list-clients", "-t", "="+session, "-F",
-		"#{client_pid} #{client_width} #{client_height} #{client_tty}")
+		"#{client_pid} #{client_width} #{client_height} #{client_tty} #{client_activity}")
 	if err != nil {
 		return vsClient{}, vsClient{}, false
 	}
@@ -67,14 +72,18 @@ type clientInfo struct {
 	tty           string
 	width, height int
 	vscode        bool
+	// activity is client_activity in unix seconds, or 0 when the format did
+	// not ask for it — KeepBottomVisible has no use for it.
+	activity int64
 }
 
-// parseClientList reads list-clients output. Pure for testing.
+// parseClientList reads list-clients output: pid, width, height, tty and an
+// optional activity. Pure for testing.
 func parseClientList(out string, isVS func(pid int) bool) []clientInfo {
 	var list []clientInfo
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		f := strings.Fields(line)
-		if len(f) != 4 {
+		if len(f) != 4 && len(f) != 5 {
 			continue
 		}
 		pid, err := strconv.Atoi(f[0])
@@ -86,28 +95,52 @@ func parseClientList(out string, isVS func(pid int) bool) []clientInfo {
 		if errW != nil || errH != nil || w <= 0 || h <= 0 {
 			continue
 		}
-		list = append(list, clientInfo{tty: f[3], width: w, height: h, vscode: isVS(pid)})
+		c := clientInfo{tty: f[3], width: w, height: h, vscode: isVS(pid)}
+		if len(f) == 5 {
+			// An unreadable activity reads as 0, the oldest: it can lose the
+			// pick but never drops a client from the list.
+			c.activity, _ = strconv.ParseInt(f[4], 10, 64)
+		}
+		list = append(list, c)
 	}
 	return list
 }
 
-// parseClients splits list-clients output into the one VS Code client and the
-// largest non-VS Code client. Pure for testing.
+// parseClients splits list-clients output into the VS Code client to fit — the
+// most recently active one — and the largest non-VS Code client. Pure for
+// testing.
 //
 // "Largest" is per axis rather than per client: two terminals of different
 // shapes both have to fit, and a window is one rectangle.
 func parseClients(out string, isVS func(pid int) bool) (vs, other vsClient, okVS bool) {
-	seen := 0
-	for _, c := range parseClientList(out, isVS) {
+	var best *clientInfo
+	list := parseClientList(out, isVS)
+	for i := range list {
+		c := &list[i]
 		if c.vscode {
-			seen++
-			vs = vsClient{width: c.width, height: c.height, tty: c.tty}
+			if best == nil || preferVSCodeClient(*c, *best) {
+				best = c
+			}
 			continue
 		}
 		other.width = maxInt(other.width, c.width)
 		other.height = maxInt(other.height, c.height)
 	}
-	return vs, other, seen == 1
+	if best == nil {
+		return vsClient{}, other, false
+	}
+	return vsClient{width: best.width, height: best.height, tty: best.tty}, other, true
+}
+
+// preferVSCodeClient reports whether a is the VS Code client to fit rather than
+// b: the more recently active, and on a tie the larger. Activity is in whole
+// seconds, so two terminals attached together tie, and a hidden terminal tab
+// sits at a small default size while the one in view fills the editor.
+func preferVSCodeClient(a, b clientInfo) bool {
+	if a.activity != b.activity {
+		return a.activity > b.activity
+	}
+	return a.width*a.height > b.width*b.height
 }
 
 // fitPanelWidth is the panel width the fit may use: the wanted one when it
