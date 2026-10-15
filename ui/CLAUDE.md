@@ -14,7 +14,7 @@ tmux·파일·프로세스를 만지는 일은 `tea.Cmd` 로, 기능 스위치�
 | `source.go`, `source_herdr.go` | herdr.md |
 | `source_claude.go` | claude-mode.md |
 | `watch.go` | panel.md, panel-width.md |
-| `watchown.go`, `notify.go`, `editor.go`, `restart.go` | panel.md (`notify.go` 는 note.md 도) |
+| `watchown.go`, `notify.go`, `editor.go`, `windowfocus.go`, `restart.go` | panel.md (`notify.go` 는 note.md 도) |
 | `watchevents.go` | panel-events.md |
 | `watchghost.go` | panel-width.md |
 | `border.go` | border.md |

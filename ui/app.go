@@ -1203,9 +1203,11 @@ func AttachToSession(name string, windowIdx, paneIdx int) error {
 	// "=" forces an exact match. Plain tmux target matching falls back to
 	// prefix and then glob, so "mux" would be ambiguous next to "mux-old".
 	if os.Getenv("TMUX") != "" {
-		// Only the terminal moves. VS Code opens from the panel's right click
-		// and nowhere else — picking a session here used to launch it too.
-		return switchOwnClient(tmuxPath, name)
+		err := switchOwnClient(tmuxPath, name)
+		// The editor comes forward with the terminal, by the same rule as the
+		// panel's left click: only a window already open on the session.
+		raiseEditorFor(name)
+		return err
 	}
 	return syscall.Exec(tmuxPath, []string{"tmux", "attach-session", "-t", "=" + name}, os.Environ())
 }
@@ -1225,6 +1227,27 @@ func switchOwnClient(tmuxPath, name string) error {
 		return tmux.SwitchWTClient(name)
 	}
 	return runTmux(tmuxPath, "switch-client", "-t", "="+name)
+}
+
+// raiseEditorFor brings the target session's VS Code window forward when one is
+// already open on it — never launches one (raiseOpenEditor). Before that rule
+// reached here, picking a session in `mux` started VS Code whenever it was not
+// running.
+func raiseEditorFor(name string) {
+	bin := findEditor()
+	if bin == "" {
+		return
+	}
+	dir := tmux.SessionProjectDir(name)
+	if dir == "" {
+		if s, err := tmux.SessionForTarget("=" + name); err == nil {
+			dir = s.Directory
+		}
+	}
+	if dir == "" {
+		return
+	}
+	raiseOpenEditor(name, bin, dir, focusShellWindow)
 }
 
 // firstSessionIndex is where the cursor lands on a fresh list: the first

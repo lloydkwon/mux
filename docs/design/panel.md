@@ -39,14 +39,53 @@ VS Code 로 여는 것**이다. 오른쪽 클릭은 **전환하지 않는다** �
 떠나지 않고 다른 프로젝트의 에디터만 여는 것이 이 제스처가 있는 이유이고, 옮기고
 싶으면 왼쪽 버튼이 바로 옆에 있다.
 
-**VS Code 를 여는 곳은 오른쪽 클릭 하나뿐이다.** 왼쪽 클릭·`enter`·`mux nav enter`,
-그리고 TUI(`mux`)에서 세션을 고르는 것은 터미널만 옮긴다. 한때는 전환이 그 프로젝트의
-VS Code 창을 함께 앞으로 냈다(TUI 는 창이 없으면 새로 띄우기까지 했고, 패널은 열린
-창만 — 붙은 통합 터미널이나 Windows 쪽 `storage.json` 의 창 목록으로 찾았다). «터미널과
-에디터는 한 세션의 두 화면»이라는 이유였지만, 실제로는 세션을 고를 때마다 원하지 않은
-에디터가 앞을 가렸다(2026-10-15 사용자 요청으로 제거). 창 목록을 읽던
-`tmux/vscodewindows.go` 도 그 일에만 쓰여 같이 지웠다. 전환에 에디터를 다시 붙이고
-싶어지면, 오른쪽 클릭이 이미 그 일을 한다는 것부터 볼 것.
+**VS Code 를 «띄우는» 것은 오른쪽 클릭뿐이다. 전환은 «이미 열린» 창만 앞으로 낸다.**
+왼쪽 클릭·`enter`·`mux nav enter`, 그리고 TUI(`mux`)에서 세션을 고르는 것은 모두
+`raiseOpenEditor`(`ui/watch.go`) 한 곳을 거친다 — 터미널을 옮기고, 그 세션의 VS Code
+창이 이미 열려 있으면 그 창을 앞으로 내고, 없으면 아무것도 하지 않는다. 터미널과
+에디터는 한 세션의 두 화면이라 하나만 옮기면 다른 프로젝트를 읽으며 타이핑하게 된다.
+열린 창은 두 가지로 안다: 그 창의 통합 터미널이 세션에 붙어 있거나(`VSCodeClientDirs`),
+VS Code 자신의 창 기록(`storage.json`, `tmux/vscodewindows.go`)에 그 폴더가 있거나.
+
+TUI 는 한때 이 규칙의 «이미 열린» 절반 없이 자기 사본을 갖고 있어서, 세션을 고를
+때마다 VS Code 가 없으면 새로 띄웠다(2026-10-15). 그 버그를 고친다며 전환에서 에디터를
+통째로 뺀 적이 있는데 그건 틀렸다 — 오른쪽 클릭으로 띄운 창을 왼쪽 클릭이 앞으로 내는
+것이 원래 기능이다. 고칠 곳은 TUI 가 같은 함수를 쓰게 하는 것이었다.
+
+네이티브 리눅스의 VS Code 는 창 기록을 `~/.config/Code/User/globalStorage/storage.json` 에
+`file://` 폴더로 쓴다(WSL 에서는 Windows 쪽 파일의 `vscode-remote://wsl+…` 폴더만 센다).
+VS Code 는 끝날 때도 다음에 되살릴 창 목록을 그 파일에 남기므로, 네이티브 기록은
+VS Code 프로세스(`comm` 이 `code`)가 떠 있을 때만 믿는다 — 아니면 VS Code 가 꺼진
+동안의 왼쪽 클릭이 VS Code 를 띄운다. `TestOpenVSCodeFoldersIgnoresStorageWhenVSCodeIsNotRunning`.
+
+**네이티브 Wayland 에서는 `code <폴더>` 가 창을 앞으로 내지 못한다.** VS Code 는 그 폴더의
+창에 포커스를 요청하지만, GNOME(Mutter)은 활성화 토큰이 없는 요청을 버린다. 클릭은
+터미널 → tmux → 패널 프로세스를 거쳐 `code` 에 닿으므로 토큰이 남아 있을 수 없다. WSL 에서
+이 기능이 동작한 것은 Windows 가 그 요청을 들어줬기 때문이다(2026-10-15 네이티브로 옮긴 뒤
+water-ai 를 눌러도 창이 오지 않았다). `wmctrl`·`xdotool` 은 X11 창만 다루고 VS Code 는
+Wayland 로 돈다(`--ozone-platform=wayland`, 한글 입력 때문에 바꿀 수 없다).
+
+그래서 창은 GNOME Shell 안에서 올린다(`ui/windowfocus.go`). dotfiles 의 `window-focus@local`
+확장이 세션 버스에 `List`(VS Code 창의 id·제목, JSON)와 `Activate(id)` 를 내놓고, mux 는
+`busctl` 로 목록을 받아 **폴더의 창을 Go 에서 고른다** — 고르는 규칙을 테스트하려고 확장이
+아니라 여기 뒀다(`TestPickEditorWindow`). VS Code 기본 제목 `… - <폴더 이름> - Visual Studio
+Code` 의 **폴더 칸만** 보고 그 칸과 **같아야** 한다 — 부분 문자열이면 mux 를 찾다 my-mux
+창을 올리고, 다른 칸(열린 파일 이름)까지 보면 `doublecmd` 라는 파일이 열린 창이 doublecmd
+프로젝트 행을 가로챈다. 같은 이름의 폴더 창이 둘이면 고르지 않는다(엉뚱한 프로젝트를
+올리느니 안 올린다). 프로필 이름이 낀 제목은 맞지 않아 `code` 로 물러선다.
+
+결과는 셋이고 섞으면 원칙이 깨진다(`focusResult`): **올림**, **창 없음**(shell 이 답했고
+그 폴더의 창이 하나로 정해지지 않음), **물을 수 없음**(확장이 없음 — WSL·다른 데스크톱·아직
+안 켜짐, 실측 2ms 에 실패). 왼쪽 클릭은 «물을 수 없음»일 때만 `code <폴더>` 로 물러선다.
+«창 없음»은 창 기록이 낡았다는 답이라, 거기서 `code` 를 부르면 왼쪽 클릭이 창을 띄운다.
+오른쪽 클릭은 그 폴더에 **정확히** 열린 창이 있다고 알려졌을 때만 shell 에 묻고, 아니면
+바로 띄운다 — shell 은 이름으로만 고르므로, 창 없는 `~/personal/api` 를 누르면 `~/work/api`
+창이 올라오고 아무것도 안 뜬다(`TestRightClickOnAFolderWithoutAWindowDoesNotAskTheShell`).
+확장의 목록은 VS Code 창으로만 한정한다: 세션 버스의 누구나 부를 수 있어서, 모든 창 제목을
+내놓으면 GNOME 이 `Introspect` 로 막아 둔 것을 열어 주는 셈이다.
+
+이 스위치도 제로값이 꺼짐이다: `watchModel.focusWindow` 가 nil 이면 shell 을 부르지 않는다.
+`RunWatch` 와 TUI 의 `raiseEditorFor` 만 `focusShellWindow` 를 넘긴다.
 
 **옵션이 없는 것이 결정이다.** 처음에는 `@mux_panel_editor` 뒤에 두고 모든 클릭이
 에디터를 열게 했는데, 옵션이 막으려던 것은 "훑어보려고 누른 클릭에 창이 뜨는 것"

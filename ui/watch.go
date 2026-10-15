@@ -150,6 +150,12 @@ type watchModel struct {
 	// by hand from launching anything — the same reason exePath works that way.
 	editorBin string
 
+	// focusWindow raises the VS Code window already open on a folder and says
+	// whether it did (focusShellWindow). nil is off — every hand-built
+	// watchModel, so no test reaches the desktop — and with it off a raise
+	// falls back to `code <folder>`, which is what WSL needs anyway.
+	focusWindow func(dir string) focusResult
+
 	// ghostIdle is how long a differently-sized client must sit idle before this
 	// panel disconnects it, resolved once at startup like every other
 	// preference here. Zero disables the check — which is what every test gets,
@@ -241,6 +247,7 @@ func RunWatch() error {
 				minWindowWidth: minWidth,
 				showHeader:     header,
 				editorBin:      editorBin,
+				focusWindow:    focusShellWindow,
 				ghostIdle:      ghostIdle,
 				exePath:        exe,
 				// Taken here rather than on the first tick so the baseline is
@@ -320,7 +327,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// forwards the press to the pane when the application has mouse
 			// reporting on (`mouse_any_flag` is 1 here), so this needs nothing
 			// in anyone's tmux.conf.
-			return m, openSessionEditor(name, m.editorBin, m.editorDirFor(name))
+			return m, openSessionEditor(name, m.editorBin, m.editorDirFor(name), m.focusWindow)
 		}
 		return m, nil
 
@@ -884,7 +891,7 @@ type editorFailedMsg struct {
 // switchToSession moves the current tmux client. It stays a tea.Cmd rather than
 // quitting first, the way the TUI's attach must: switch-client returns normally
 // instead of replacing this process, so the panel survives the switch.
-func switchToSession(name, own string) tea.Cmd {
+func switchToSession(name, own, editorBin, targetDir string, focus func(string) focusResult) tea.Cmd {
 	return func() tea.Msg {
 		// Hand focus back before leaving, when there is any to hand back. The
 		// window we are about to leave would otherwise keep reporting the
@@ -905,14 +912,78 @@ func switchToSession(name, own string) tea.Cmd {
 			err = tmux.SwitchClient(name)
 		}
 
-		// The editor is left alone. Only a right click opens VS Code: a switch
-		// that also raised the project's window put an editor in front of the
-		// user on every pick, whether they wanted one or not.
+		// Then bring the target's own VS Code window forward too. The terminal
+		// and the editor are two views of one session, and moving only the
+		// terminal leaves the user reading one project while typing in another.
+		// Only a window that is already open on it — a click must not launch
+		// an editor for a session nobody has open. Best effort: it rides along
+		// with the switch and must not report the switch as broken.
+		//
+		// This used to *replace* the switch when such a window existed, to
+		// keep Windows Terminal out of a session whose window was sized to the
+		// editor. The window is sized to the larger client now (viewport.go),
+		// so there is nothing left to avoid, and the skip only meant clicking
+		// those rows moved nothing.
+		raiseOpenEditor(name, editorBin, targetDir, focus)
 
 		if err != nil {
 			return switchFailedMsg{session: name, err: err}
 		}
 		return nil
+	}
+}
+
+// vscodeWindowFor is the folder of the VS Code window to raise for a session,
+// or "" when none is open — in which case nothing is launched.
+//
+// Two ways a window is known to be open: its integrated terminal is attached
+// to this very session, or VS Code's own record of its windows lists the
+// folder (tmux.OpenVSCodeFolders). The first is the surer signal, so it goes
+// first; the second is what makes the click work when no terminal is open.
+//
+// No fallback to the project folder. A left click moves the user to a session;
+// opening an editor they did not have is the right click's job, and with
+// terminals closed the fallback opened a new window on every click.
+func vscodeWindowFor(name, editorBin, targetDir string) string {
+	if editorBin == "" || targetDir == "" {
+		return ""
+	}
+	if dir := tmux.VSCodeDirFor(targetDir, tmux.VSCodeClientDirs()[name]); dir != "" {
+		return dir
+	}
+	return tmux.VSCodeWindowFor(targetDir)
+}
+
+// editorOpenOn reports whether VS Code has a window open on exactly dir — the
+// right click's precondition for asking the shell. Exactly, not containing: a
+// right click on a subfolder of an open project opens that subfolder, as
+// `code <subfolder>` always did.
+func editorOpenOn(name, editorBin, dir string) bool {
+	return dir != "" && vscodeWindowFor(name, editorBin, dir) == strings.TrimRight(dir, "/")
+}
+
+// raiseOpenEditor brings forward the VS Code window already open on a session,
+// and does nothing when there is none. It is the one place a *switch* touches
+// the editor — the panel's left click, enter, and the TUI's pick all come
+// through here — so none of them can launch a window. Launching is the right
+// click's job (openSessionEditor); the TUI once launched on every pick because
+// it had its own copy of this without the "already open" half. Best effort: it
+// rides along with a switch and must not report the switch as broken.
+//
+// The window is raised through the shell first (focus), because on native
+// Wayland `code <folder>` leaves an open window where it is; `code` is the
+// fallback, and the only path on WSL. focus may be nil.
+func raiseOpenEditor(name, editorBin, targetDir string, focus func(string) focusResult) {
+	dir := vscodeWindowFor(name, editorBin, targetDir)
+	if dir == "" {
+		return
+	}
+	r := focusUnavailable
+	if focus != nil {
+		r = focus(dir)
+	}
+	if r == focusUnavailable {
+		_ = openEditor(editorBin, dir)
 	}
 }
 
@@ -929,7 +1000,23 @@ func keepBottomVisibleCmd(session string) tea.Cmd {
 // switchCmd builds the move for one session, so a left click and enter cannot
 // drift apart on which client they are allowed to move.
 func (m watchModel) switchCmd(name string) tea.Cmd {
-	return switchToSession(name, m.ownSession)
+	return switchToSession(name, m.ownSession, m.editorBin, m.sessionDir(name), m.focusWindow)
+}
+
+// sessionDir is the directory a session is *about*, which is what decides
+// which VS Code window owns it: the project tag when the session carries one,
+// else its current directory. The tag wins because the directory follows the
+// active pane and wanders — a session tagged for projects/api whose shell is
+// sitting in ~/wandered still belongs to the api window.
+func (m watchModel) sessionDir(name string) string {
+	s, ok := sessionByName(m.sessions, name)
+	if !ok {
+		return ""
+	}
+	if s.ProjectDir != "" {
+		return s.ProjectDir
+	}
+	return s.Directory
 }
 
 // openSessionEditor opens a session's project folder without moving the client.
@@ -939,11 +1026,22 @@ func (m watchModel) switchCmd(name string) tea.Cmd {
 // before forwarding the press, so after a right click the panel *is* the active
 // pane — and unlike a switch, nothing else afterwards would take the user out
 // of it.
-func openSessionEditor(name, bin, dir string) tea.Cmd {
+//
+// A window already open on exactly this folder is raised through the shell
+// first, for the reason raiseOpenEditor gives; launching is what happens
+// otherwise. The shell is only asked when the folder is known to be open
+// (editorOpenOn): it matches windows by base name, so asking for a folder with
+// no window could raise a same-named other project and launch nothing. That
+// check reads tmux and VS Code's record, which is why it runs here in the
+// command and not in Update. focus may be nil.
+func openSessionEditor(name, bin, dir string, focus func(string) focusResult) tea.Cmd {
 	return func() tea.Msg {
 		restoreFocus()
 
 		if bin == "" || dir == "" {
+			return nil
+		}
+		if focus != nil && editorOpenOn(name, bin, dir) && focus(dir) == focusRaised {
 			return nil
 		}
 		if err := openEditor(bin, dir); err != nil {
