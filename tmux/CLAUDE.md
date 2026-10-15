@@ -20,4 +20,4 @@
 | `repair.go`, `setup.go` | tmux-config.md |
 | `note.go` | note.md |
 | `session.go`, `types.go`, `window.go` | tui.md (`session.go` 는 tmux-config.md 의 `SessionProjectDir` 도) |
-| `viewport.go`, `vscodewindows.go` | 설계 문서 없음 — 파일 머리 주석이 정본 |
+| `viewport.go` | 설계 문서 없음 — 파일 머리 주석이 정본 |

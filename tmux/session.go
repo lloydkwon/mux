@@ -476,8 +476,8 @@ func VSCodeClientDirs() map[string][]string {
 // contains the session's directory is the owner — the rest are visitors, and
 // focusing one of those would pull the user into an unrelated project.
 //
-// Pure, so the rule lives in one place: the widget's JSON and the panel's click
-// both decide "which VS Code window is this session's" with these lines.
+// Pure, so the rule lives in one place: the widget's JSON decides "which VS
+// Code window is this session's" with these lines.
 func VSCodeDirFor(sessionDir string, candidates []string) string {
 	if sessionDir == "" {
 		return ""
@@ -489,7 +489,7 @@ func VSCodeDirFor(sessionDir string, candidates []string) string {
 		}
 		// A window opened on the home directory contains every project, so by
 		// the containment rule it would claim every session — click any row and
-		// that one window comes forward. Measured: a client with PWD=$HOME was
+		// that one window owns them all. Measured: a client with PWD=$HOME was
 		// attached while sessions lived under ~/dev/projects. Only an exact
 		// match counts for it.
 		if home != "" && dir == home {

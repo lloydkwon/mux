@@ -119,27 +119,17 @@ func rightPress(y int) tea.MouseMsg {
 	return tea.MouseMsg{Y: y, Button: tea.MouseButtonRight, Action: tea.MouseActionPress}
 }
 
-// withOpenVSCodeWindows tells the click rule which project folders VS Code has
-// a window open on, in place of reading the Windows profile.
-func withOpenVSCodeWindows(t *testing.T, dirs ...string) {
-	orig := tmux.OpenVSCodeFolders
-	tmux.OpenVSCodeFolders = func() []string { return dirs }
-	t.Cleanup(func() { tmux.OpenVSCodeFolders = orig })
-}
-
-// The two buttons are two different answers. A left click goes to the session:
-// it moves the terminal and raises the project's editor window *if one is
-// open* — the two are views of one thing, and arriving in one while reading
-// the other is the confusion the click exists to end. It never opens an editor
-// the user did not have: with no terminals attached that opened a new window
-// on every click. A right click is what opens one, and it must not move the
-// client, or it would take the user out of the terminal they asked to stay in.
+// The two buttons are two different answers. A left click goes to the session
+// and nothing else: it moves the terminal and never touches an editor, even
+// when the project already has a window open — the right click is the only
+// gesture that brings VS Code into it. A right click opens the folder and must
+// not move the client, or it would take the user out of the terminal they asked
+// to stay in.
 func TestLeftSwitchesAndRightOpensEditor(t *testing.T) {
-	t.Run("left switches and raises an open editor window", func(t *testing.T) {
+	t.Run("left switches and leaves the editor alone", func(t *testing.T) {
 		f := &fakeRunner{}
 		withFakeTmux(t, f)
 		calls := withFakeEditor(t, nil)
-		withOpenVSCodeWindows(t, "/home/u/projects/api")
 
 		m := editorTestModel("/usr/bin/code")
 		m.selected = "demo"
@@ -151,29 +141,8 @@ func TestLeftSwitchesAndRightOpensEditor(t *testing.T) {
 			t.Fatalf("unexpected message: %#v", msg)
 		}
 
-		if len(*calls) != 1 || !strings.HasPrefix((*calls)[0], "/usr/bin/code ") {
-			t.Errorf("editor calls = %v, want the open window raised once", *calls)
-		}
-		if len(f.runs) == 0 || !strings.Contains(f.runs[0], "switch-client") {
-			t.Errorf("tmux calls = %v, want a switch-client", f.runs)
-		}
-	})
-
-	t.Run("left switches and opens nothing when no window is open", func(t *testing.T) {
-		f := &fakeRunner{}
-		withFakeTmux(t, f)
-		calls := withFakeEditor(t, nil)
-		withOpenVSCodeWindows(t) // 없음
-
-		m := editorTestModel("/usr/bin/code")
-		m.selected = "demo"
-		_, cmd := m.Update(leftPress(firstSessionRow(m)))
-		if cmd == nil {
-			t.Fatal("the left click issued no command")
-		}
-		cmd()
 		if len(*calls) != 0 {
-			t.Errorf("a left click opened an editor: %v", *calls)
+			t.Errorf("a left click touched the editor: %v", *calls)
 		}
 		if len(f.runs) == 0 || !strings.Contains(f.runs[0], "switch-client") {
 			t.Errorf("tmux calls = %v, want a switch-client", f.runs)
@@ -184,7 +153,6 @@ func TestLeftSwitchesAndRightOpensEditor(t *testing.T) {
 		f := &fakeRunner{}
 		withFakeTmux(t, f)
 		calls := withFakeEditor(t, nil)
-		withOpenVSCodeWindows(t) // 열린 창이 없어도 우클릭은 연다
 
 		m := editorTestModel("/usr/bin/code")
 		_, cmd := m.Update(rightPress(firstSessionRow(m)))
@@ -208,13 +176,11 @@ func TestLeftSwitchesAndRightOpensEditor(t *testing.T) {
 }
 
 // The keyboard is the left click's twin, and `mux nav enter` arrives as this
-// exact key: it goes to the session the same way — terminal, and the editor
-// window when one is open.
-func TestEnterSwitchesAndRaisesEditor(t *testing.T) {
+// exact key: it goes to the session the same way — the terminal only.
+func TestEnterSwitchesWithoutEditor(t *testing.T) {
 	f := &fakeRunner{}
 	withFakeTmux(t, f)
 	calls := withFakeEditor(t, nil)
-	withOpenVSCodeWindows(t, "/home/u/projects/api")
 
 	m := editorTestModel("/usr/bin/code")
 	m.selected = "api"
@@ -224,9 +190,8 @@ func TestEnterSwitchesAndRaisesEditor(t *testing.T) {
 	}
 	cmd()
 
-	want := "/usr/bin/code /home/u/projects/api"
-	if len(*calls) != 1 || (*calls)[0] != want {
-		t.Errorf("editor calls = %v, want [%q]", *calls, want)
+	if len(*calls) != 0 {
+		t.Errorf("enter touched the editor: %v", *calls)
 	}
 	if len(f.runs) == 0 || !strings.Contains(f.runs[0], "switch-client") {
 		t.Errorf("tmux calls = %v, want a switch-client", f.runs)
