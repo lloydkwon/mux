@@ -17,8 +17,12 @@ import (
 //
 // 그래서 창은 GNOME Shell 안에서 올린다. dotfiles 의 window-focus@local 확장이 세션
 // 버스에 VS Code 창 목록(List)과 활성화(Activate)를 내놓고, 여기는 그 목록에서 폴더의
-// 창을 고른다. 고르는 규칙을 Go 에 둔 것은 테스트할 수 있어서다. 확장이 없거나(WSL,
-// 다른 데스크톱) 맞는 창이 없으면 false 이고, 부르는 쪽은 `code <폴더>` 로 물러선다.
+// 창을 고른다. 고르는 규칙을 Go 에 둔 것은 테스트할 수 있어서다. GNOME 자체가 없으면(WSL,
+// 다른 데스크톱) 부르는 쪽은 `code <폴더>` 로 물러선다.
+//
+// GNOME 은 있는데 확장만 없을 때는 물러서지 않는다. 화면이 잠기면 GNOME 이 확장을 끄는데,
+// 그때 `code` 로 물러섰더니 — 실측 1.04초, 그리고 Wayland 라 창은 올라오지도 않는다 —
+// 그동안 prefix+m 팝업이 빈 사각형으로 남았다(2026-10-16, 밖에서 ssh 로 쓰던 중).
 
 const (
 	windowFocusPath  = "/io/github/lloydkwon/WindowFocus"
@@ -41,11 +45,14 @@ const (
 type focusResult int
 
 const (
-	// focusUnavailable: the extension could not be reached (WSL, another
-	// desktop, not loaded yet). The caller falls back to `code`.
+	// focusUnavailable: there is no GNOME Shell to ask (WSL, another
+	// desktop). The caller falls back to `code`.
 	focusUnavailable focusResult = iota
 	// focusNoWindow: the shell answered, and no single VS Code window is on
-	// that folder — none, or several sharing its name.
+	// that folder — none, or several sharing its name. Also what a shell
+	// without the extension answers (locked screen, extension off): `code`
+	// cannot raise a window on Wayland either, so there is nothing to fall
+	// back to.
 	focusNoWindow
 	// focusRaised: the window came forward.
 	focusRaised
@@ -64,6 +71,12 @@ type shellWindow struct {
 func focusShellWindow(dir string) focusResult {
 	out, err := busctlCall("List")
 	if err != nil {
+		// Which failure it was is asked of the bus rather than read off the
+		// error text: that text comes from GLib inside the shell, which may
+		// translate it.
+		if gnomeShellRunning() {
+			return focusNoWindow
+		}
 		return focusUnavailable
 	}
 	id, ok := pickEditorWindow(parseWindowList(out), dir)
@@ -74,21 +87,42 @@ func focusShellWindow(dir string) focusResult {
 	if err != nil {
 		return focusUnavailable
 	}
-	if !parseActivateReply(out) {
+	if !parseBoolReply(out) {
 		// The window went between List and Activate.
 		return focusNoWindow
 	}
 	return focusRaised
 }
 
-// busctlCall calls a method on the extension's object. busctl rather than
-// gdbus because --json gives an answer that needs no GVariant text parser.
-func busctlCall(method string, args ...string) ([]byte, error) {
+// busctlCall calls a method on the extension's object. A var for the reason
+// openEditor is one: the real call reaches the developer's desktop.
+var busctlCall = callWindowFocus
+
+// callWindowFocus is busctlCall's real body. busctl rather than gdbus because
+// --json gives an answer that needs no GVariant text parser.
+func callWindowFocus(method string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), windowFocusTimeout)
 	defer cancel()
 	argv := append([]string{"--user", "--json=short", "call",
 		"org.gnome.Shell", windowFocusPath, windowFocusIface, method}, args...)
 	return exec.CommandContext(ctx, "busctl", argv...).Output()
+}
+
+// gnomeShellRunning reports whether GNOME Shell owns its name on the session
+// bus — asked only after the extension failed to answer, to tell "no GNOME"
+// from "GNOME without the extension". A var like busctlCall.
+var gnomeShellRunning = shellOwnsBusName
+
+// shellOwnsBusName is gnomeShellRunning's real body. Unanswerable reads as
+// "no", which keeps the `code` fallback: a desktop this cannot ask about is
+// the case the fallback is for.
+func shellOwnsBusName() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), windowFocusTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "busctl", "--user", "--json=short", "call",
+		"org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+		"NameHasOwner", "s", "org.gnome.Shell").Output()
+	return err == nil && parseBoolReply(out)
 }
 
 // parseWindowList reads List's reply: busctl's {"type":"s","data":["…"]}
@@ -108,9 +142,9 @@ func parseWindowList(out []byte) []shellWindow {
 	return wins
 }
 
-// parseActivateReply reads Activate's {"type":"b","data":[true]}. Pure for
-// testing.
-func parseActivateReply(out []byte) bool {
+// parseBoolReply reads a boolean answer — Activate's, NameHasOwner's — as
+// busctl prints it: {"type":"b","data":[true]}. Pure for testing.
+func parseBoolReply(out []byte) bool {
 	var reply struct {
 		Data []bool `json:"data"`
 	}

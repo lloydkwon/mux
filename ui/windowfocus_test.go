@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -56,14 +57,77 @@ func TestParseWindowList(t *testing.T) {
 	}
 }
 
-func TestParseActivateReply(t *testing.T) {
-	if !parseActivateReply([]byte(`{"type":"b","data":[true]}`)) {
+func TestParseBoolReply(t *testing.T) {
+	if !parseBoolReply([]byte(`{"type":"b","data":[true]}`)) {
 		t.Error("true reply read as false")
 	}
 	for _, bad := range []string{`{"type":"b","data":[false]}`, "", "junk", `{"type":"b","data":[]}`} {
-		if parseActivateReply([]byte(bad)) {
+		if parseBoolReply([]byte(bad)) {
 			t.Errorf("%q read as true", bad)
 		}
+	}
+}
+
+// withFakeBus stands in for the session bus: what List answers (an error means
+// the extension's object is not there) and whether GNOME Shell owns its name.
+func withFakeBus(t *testing.T, list string, listErr error, shellRunning bool) *[]string {
+	t.Helper()
+	var calls []string
+	prevCall, prevShell := busctlCall, gnomeShellRunning
+	busctlCall = func(method string, args ...string) ([]byte, error) {
+		calls = append(calls, method)
+		switch method {
+		case "List":
+			return []byte(list), listErr
+		case "Activate":
+			return []byte(`{"type":"b","data":[true]}`), nil
+		}
+		return nil, errors.New("unexpected method " + method)
+	}
+	gnomeShellRunning = func() bool { return shellRunning }
+	t.Cleanup(func() { busctlCall, gnomeShellRunning = prevCall, prevShell })
+	return &calls
+}
+
+// 화면이 잠기면 GNOME 은 확장을 끈다. 그때 List 는 «그런 객체가 없다»로 실패하는데,
+// 이것을 «물을 수 없다»로 읽으면 `code <폴더>` 로 물러서고 — 실측 1.04초 — 그동안
+// prefix+m 팝업이 빈 사각형으로 남았다(2026-10-16, 밖에서 ssh 로 쓰던 중). Wayland 에서는
+// `code` 로 창이 올라오지도 않으므로, GNOME 이 떠 있는데 확장만 없으면 «창 없음»이다.
+// GNOME 자체가 없을 때(WSL, 다른 데스크톱)만 `code` 가 대안이다.
+func TestFocusShellWindowWithoutExtension(t *testing.T) {
+	gone := errors.New("exit status 1")
+	list := `{"type":"s","data":["[{\"id\":7,\"title\":\"x - api - Visual Studio Code\"}]"]}`
+	cases := []struct {
+		name    string
+		list    string
+		listErr error
+		shell   bool
+		want    focusResult
+	}{
+		{"GNOME 은 있고 확장이 없다(잠금 화면)", "", gone, true, focusNoWindow},
+		{"GNOME 이 없다", "", gone, false, focusUnavailable},
+		{"확장이 답한다", list, nil, true, focusRaised},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			withFakeBus(t, c.list, c.listErr, c.shell)
+			if got := focusShellWindow("/home/u/projects/api"); got != c.want {
+				t.Errorf("got %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// 끝까지 이어 보면: 잠금 화면에서 팝업·왼쪽 클릭의 창 올리기는 `code` 를 부르지 않는다.
+func TestRaiseOpenEditorSkipsCodeWhenTheShellHasNoExtension(t *testing.T) {
+	withFakeTmux(t, &fakeRunner{})
+	calls := withFakeEditor(t, nil)
+	withOpenVSCodeWindows(t, "/home/u/projects/api")
+	withFakeBus(t, "", errors.New("exit status 1"), true)
+
+	raiseOpenEditor("api", "/usr/bin/code", "/home/u/projects/api", focusShellWindow)
+	if len(*calls) != 0 {
+		t.Errorf("ran the editor while GNOME had no extension to raise with: %v", *calls)
 	}
 }
 
