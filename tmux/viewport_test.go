@@ -1,6 +1,9 @@
 package tmux
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // VS Code 클라이언트가 여럿이면 가장 최근에 쓴 것에 맞춘다. 물러나던 시절에는 숨은
 // 터미널 탭 하나(80x30, 몇 시간째 유휴)가 붙어 있는 것만으로 fit 이 풀려, 큰 터미널이
@@ -30,9 +33,13 @@ func TestParseClients(t *testing.T) {
 		{"클라이언트 없음", "", vsClient{}, vsClient{}, false},
 		{"깨진 줄은 건너뛴다", "garbage\n200 120 24 /dev/pts/9\n", vsClient{120, 24, "/dev/pts/9"}, vsClient{}, true},
 		{"크기가 0이면 무시", "200 0 24 /dev/pts/9\n", vsClient{}, vsClient{}, false},
-		// 창은 사각형 하나라 축별로 가장 큰 값을 받아야 둘 다 들어간다.
-		{"다른 클라이언트 둘은 축별 최대", "100 269 40 /dev/pts/6\n101 200 69 /dev/pts/7\n200 120 24 /dev/pts/9\n",
-			vsClient{120, 24, "/dev/pts/9"}, vsClient{269, 69, ""}, true},
+		// 터미널이 둘이면 지금 쓰는 쪽(가장 최근)이다. 축별 최대를 쓰던 때는 집의
+		// kitty(273x64)가 붙은 세션에서 밖의 ssh(236x51) 화면이 위 13줄과 오른쪽이
+		// 잘렸다(2026-10-19).
+		{"터미널 둘이면 최근 것", "100 273 64 /dev/pts/0 1000\n101 236 51 /dev/pts/23 3000\n200 155 55 /dev/pts/27 2000\n",
+			vsClient{155, 55, "/dev/pts/27"}, vsClient{236, 51, ""}, true},
+		{"터미널 둘, 같은 초면 큰 것", "100 269 40 /dev/pts/6 1000\n101 200 69 /dev/pts/7 1000\n200 120 24 /dev/pts/9\n",
+			vsClient{120, 24, "/dev/pts/9"}, vsClient{200, 69, ""}, true},
 	}
 	for _, c := range cases {
 		vs, other, ok := parseClients(c.out, isVS)
@@ -53,10 +60,11 @@ func TestParseStatusLines(t *testing.T) {
 	}
 }
 
-// 창 = VS Code 폭 + 구분선 + 패널 폭, 높이 = VS Code 높이 - 상태줄.
+// 터미널이 있으면 창 = 그 터미널 크기 그대로, VS Code 만 있으면 VS Code 폭 + 구분선 +
+// 패널 폭 × VS Code 높이(높이는 상태줄을 뺀 값).
 //
-// 높이를 빼지 않으면 뷰포트가 세로로 밀려 프롬프트가 화면 밖으로 나간다 — 실측으로
-// 확인한 실패 모드라 여기서 못 박는다.
+// 지금 쓰는 터미널은 창 전체를 봐야 한다. 창이 터미널보다 높으면 위가 잘리고(뷰포트가
+// 바닥의 커서를 따라 내려간다), 넓으면 오른쪽 패널이 잘린다.
 func TestWindowFit(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -70,10 +78,15 @@ func TestWindowFit(t *testing.T) {
 		{"WT 가 더 크다", vsClient{width: 178, height: 49}, vsClient{width: 269, height: 68}, 60, 269, 68},
 		// VS Code 만 있으면 딱 맞춰 준다 — 패닝조차 없다.
 		{"VS Code 만", vsClient{width: 120, height: 23}, vsClient{}, 70, 191, 23},
-		// WT 가 작아도 작업 pane 은 VS Code 폭 이상이어야 한다. 이게 깨지면
-		// 뷰포트가 오른쪽 끝까지 밀려 패널이 보인다.
-		{"WT 가 작으면 바닥이 이긴다", vsClient{width: 178, height: 49}, vsClient{width: 200, height: 30}, 60, 239, 49},
-		{"축이 서로 엇갈릴 때", vsClient{width: 178, height: 60}, vsClient{width: 300, height: 40}, 60, 300, 60},
+		// 터미널이 VS Code + 패널보다 좁아도 창은 터미널을 넘지 않는다. VS Code 화면
+		// 오른쪽 끝에 패널 일부가 보이는 것이 대가다(2026-10-19 사용자 결정 — 패널
+		// 폭을 줄여 맞추던 것을 그만뒀다).
+		{"터미널이 좁아도 창은 터미널 것", vsClient{width: 178, height: 49}, vsClient{width: 200, height: 30}, 60, 200, 30},
+		{"축이 서로 엇갈릴 때", vsClient{width: 178, height: 60}, vsClient{width: 300, height: 40}, 60, 300, 40},
+		// 2026-10-15 의 사례 그대로: 밖에서 ssh(236x51)로 붙은 세션에 집의 VS Code
+		// 터미널(195x55)이 남아 있었다. 높이를 VS Code 에 맞춘 창(54줄)은 ssh 가 그릴 수
+		// 있는 50줄보다 4줄 높아서 패널의 위 네 줄이 잘렸다.
+		{"ssh 가 VS Code 보다 낮고 좁다", vsClient{width: 195, height: 54}, vsClient{width: 236, height: 50}, 57, 236, 50},
 	}
 	for _, c := range cases {
 		w, h := windowFit(c.vs, c.other, c.panelWidth)
@@ -83,13 +96,22 @@ func TestWindowFit(t *testing.T) {
 	}
 }
 
-// 작업 pane 이 VS Code 클라이언트보다 좁아지면 패널이 뷰포트에 들어온다 — 어떤
-// 조합에서도 그 일이 없어야 한다는 것을 성질로 못 박는다.
+// 두 성질을 모든 조합에서 못 박는다.
+//   - 터미널이 있으면 창은 그 터미널과 같다. 넘으면 터미널이 뷰포트를 얻어 잘린다.
+//   - 패널이 VS Code 화면 밖에 남는 것(작업 pane ≥ VS Code 폭)은 터미널이 없거나,
+//     VS Code + 구분선 + 패널이 들어갈 만큼 넓을 때다. 그보다 좁은 터미널에서는 VS Code 에
+//     패널이 보인다 — 패널 폭을 지키려고 고른 대가다.
 func TestWindowFitKeepsWorkPaneWideEnough(t *testing.T) {
 	for _, vsW := range []int{60, 120, 178, 300} {
 		for _, otherW := range []int{0, 80, 200, 269, 400} {
 			for _, panel := range []int{30, 60, 100} {
-				w, _ := windowFit(vsClient{width: vsW, height: 50}, vsClient{width: otherW, height: 50}, panel)
+				w, _ := windowFit(vsClient{width: vsW, height: 50}, vsClient{width: otherW, height: 40}, panel)
+				if otherW > 0 && w != otherW {
+					t.Fatalf("vs=%d other=%d panel=%d: 창 %d ≠ 터미널 %d", vsW, otherW, panel, w, otherW)
+				}
+				if otherW > 0 && otherW < vsW+paneDivider+panel {
+					continue
+				}
 				if work := w - paneDivider - panel; work < vsW {
 					t.Fatalf("vs=%d other=%d panel=%d: 작업 pane %d < VS Code %d",
 						vsW, otherW, panel, work, vsW)
@@ -130,27 +152,57 @@ func TestViewportAction(t *testing.T) {
 	}
 }
 
-// 창이 WT 보다 넓어지면 WT 도 뷰포트를 얻고, 커서가 숨겨지는 순간 입력창이 화면 밖으로
-// 나간다(실측). 패널은 WT 안에 들어가는 만큼만, 그마저 안 되면 물러난다.
-func TestFitPanelWidth(t *testing.T) {
+// 맞춘 창의 패널은 저장된 폭이다 — VS Code 화면에서 숨기려고 줄이지 않는다. 줄이던
+// 때는 밖에서 ssh(236칸)로 볼 때 집의 VS Code(195칸)가 붙은 세션만 패널이 40칸이었다
+// (2026-10-19). 상한은 패널이 스스로 지키는 창의 반(MaxPanelWidth) 하나뿐이고, 그
+// 반마저 바닥(MinPanelWidth)에 못 미치면 물러난다.
+func TestPanelWidthFor(t *testing.T) {
 	cases := []struct {
-		name      string
-		vs, other vsClient
-		want      int
-		got       int
-		ok        bool
+		name         string
+		window, want int
+		got          int
+		ok           bool
 	}{
-		{"넉넉하면 원하는 폭 그대로", vsClient{width: 174}, vsClient{width: 269}, 60, 60, true},
-		{"모자라면 남는 만큼", vsClient{width: 174}, vsClient{width: 269}, 107, 94, true},
-		{"바닥(MinPanelWidth)도 안 들어가면 물러난다", vsClient{width: 250}, vsClient{width: 269}, 60, 0, false},
-		{"WT 가 없으면 캡 없음", vsClient{width: 174}, vsClient{}, 107, 107, true},
+		{"넉넉하면 저장된 폭 그대로", 236, 57, 57, true},
+		{"VS Code 가 넓어도 줄이지 않는다", 200, 60, 60, true},
+		{"창의 반을 넘으면 반", 100, 57, 50, true},
+		{"반이 바닥에 못 미치면 물러난다", 40, 57, 0, false},
 	}
 	for _, c := range cases {
-		got, ok := fitPanelWidth(c.vs, c.other, c.want)
+		got, ok := panelWidthFor(c.window, c.want)
 		if got != c.got || ok != c.ok {
 			t.Errorf("%s: got %d,%v want %d,%v", c.name, got, ok, c.got, c.ok)
 		}
 	}
+}
+
+// 2026-10-19 의 사례를 끝까지: my-computer 에는 집의 kitty(273x64, 어제 이후 입력 없음)와
+// VS Code 터미널(155x55)이 붙어 있고, 밖의 ssh(236x51)가 방금 들어왔다. 창은 ssh 크기,
+// 패널은 저장된 폭 57 이어야 한다.
+func TestSyncFitsTheTerminalInUse(t *testing.T) {
+	isVS := isVSCodeClient
+	t.Cleanup(func() { isVSCodeClient = isVS })
+	isVSCodeClient = func(pid int) bool { return pid == 20 }
+
+	withMock(t, func(m *mockRunner) {
+		m.OnOutput([]byte("10 273 64 /dev/pts/0 1000\n20 155 55 /dev/pts/27 2000\n30 236 51 /dev/pts/23 3000\n"), nil,
+			"tmux", "list-clients", "-t", "=my-computer", "-F",
+			"#{client_pid} #{client_width} #{client_height} #{client_tty} #{client_activity}")
+		m.OnOutput([]byte("on\n"), nil, "tmux", "display-message", "-p", "-t", "=my-computer", "#{status}")
+		m.OnOutput([]byte("%13 215 zsh\n%14 57 /bin/mux watch\n"), nil,
+			"tmux", "list-panes", "-t", "@8", "-F", "#{pane_id} #{pane_start_command}")
+
+		ctx := panelCtx{window: "@8", session: "my-computer", width: 273, height: 63, fitted: true}
+		fitted, width := syncVSCodeViewport(ctx, 57)
+		want := []string{
+			"tmux set-option -w -t @8 " + vsFitOption + " 1",
+			"tmux resize-window -t @8 -x 236 -y 50",
+			"tmux resize-pane -t %14 -x 57",
+		}
+		if !fitted || width != 57 || strings.Join(m.runs, "\n") != strings.Join(want, "\n") {
+			t.Errorf("fitted=%v width=%d runs=%v, want 57 and %v", fitted, width, m.runs, want)
+		}
+	})
 }
 
 func TestParseClientList(t *testing.T) {

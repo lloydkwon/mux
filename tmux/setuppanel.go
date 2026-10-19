@@ -62,6 +62,12 @@ var navBinds = []struct {
 //   - after-new-window / after-new-session cover windows that did not exist yet.
 //   - client-resized / after-resize-window bring the panel back to a window that
 //     had grown too narrow to spare the columns.
+//   - client-active / client-detached are not about the panel being missing but
+//     about the window size mux fixes (viewport.go): that size is the terminal
+//     in use, so it has to follow when someone starts typing into another
+//     terminal on the session — back home, a keystroke in kitty while the ssh
+//     from outside is still attached — or when a terminal goes away. The sweep
+//     in runPanelAuto does the refitting; the ensure itself is idempotent.
 //
 // There is no recursion: the ensure runs split-window, which makes a pane rather
 // than a window, so it cannot re-trigger after-new-window.
@@ -70,6 +76,8 @@ var panelHooks = []string{
 	"after-new-session",
 	"after-select-window",
 	"client-attached",
+	"client-detached",
+	"client-active",
 	"client-session-changed",
 	"client-resized",
 	"after-resize-window",

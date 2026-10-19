@@ -5,22 +5,37 @@ import (
 	"strings"
 )
 
-// 창을 VS Code 클라이언트보다 넓게 고정해, 같은 세션을 보는 Windows Terminal 에만
-// 패널이 보이게 하는 장치.
+// VS Code 클라이언트가 붙은 창의 크기를 mux 가 직접 고정하는 장치. 목적은 둘이다:
+// 지금 쓰고 있는 터미널은 창 전체를 보고, VS Code 화면에서는 패널이 빠진다.
 //
 // tmux 에는 "이 클라이언트에게만 숨기기"가 없다 — pane 은 창 소유라 같은 창을 보는
 // 클라이언트는 같은 것을 본다. 대신 실측(tmux 3.4)으로 확인한 성질이 하나 있다:
 // 창보다 작은 클라이언트는 창을 잘라 보는 게 아니라 **활성 pane 을 따라가는 뷰포트**를
 // 얻는다(상태줄에 [x,y] 오프셋이 뜬다). 그래서 창을
 //
-//	창 폭 = VS Code 폭 + 구분선 1 + 패널 폭
+//	터미널이 있으면    창 = 가장 최근에 쓴 터미널의 크기 그대로
+//	VS Code 만 있으면  창 = (VS Code 폭 + 구분선 1 + 패널 폭) × VS Code 높이
 //
-// 으로 고정하면, 작업 pane 이 활성인 한 오른쪽 끝의 패널은 VS Code 화면에 절대
-// 들어오지 않는다. 창보다 큰 Windows Terminal 은 창 전체를 보므로 패널이 보인다.
+// 로 고정한다. 터미널이 VS Code 폭 + 구분선 + 패널 폭 이상이면 작업 pane 이 VS Code
+// 보다 넓으므로, 작업 pane 이 활성인 한 오른쪽 끝의 패널은 VS Code 화면에 들어오지 않는다.
+//
+// 터미널이 그보다 좁으면 VS Code 화면 오른쪽 끝에 패널 일부가 보인다. 이것은 고른 대가다.
+// 예전에는 패널을 줄여 둘 다 맞췄는데, 그러면 «패널은 어디서나 마지막으로 드래그한 폭
+// 하나»(docs/design/panel-width.md)가 깨졌다: 밖에서 ssh(236칸)로 볼 때 집의 VS Code
+// (195칸)가 붙은 세션만 패널이 40칸이었다. 2026-10-19 사용자 결정으로 패널 폭이 이긴다.
+//
+// «가장 최근에 쓴» 터미널이다, «가장 큰» 이 아니다. 축마다 가장 큰 값을 쓰던 때는 집의
+// kitty(273x64)가 붙은 세션에서 밖의 ssh(236x51) 화면이 위 13줄과 오른쪽이 잘렸다
+// (2026-10-19). 쓰지 않는 터미널은 남는 칸이 점으로 차거나 뷰포트로 본다. 쓰는 터미널이
+// 바뀌면 client-active 훅이, 터미널이 떠나면 client-detached 훅이 다시 맞춘다.
 //
 // 높이도 반드시 맞춰야 한다. 창이 클라이언트가 그릴 수 있는 높이보다 높으면 뷰포트가
 // 세로로도 움직여 프롬프트가 화면 밖으로 나간다 — 실측에서 재현됐다. 클라이언트의
-// 높이에서 상태줄 줄 수를 뺀 것이 창에 허락된 높이다.
+// 높이에서 상태줄 줄 수를 뺀 것이 창에 허락된 높이다. 높이는 패널을 숨기는 데 아무 역할이
+// 없으므로 터미널이 있으면 터미널의 것이다. VS Code 를 바닥으로 두었더니, 밖의 ssh(236x51)
+// 에 집의 VS Code(195x55)가 겹친 세션에서 창이 54줄이 되어 ssh 화면의 위 네 줄이 잘렸다
+// (2026-10-15). VS Code 가 더 크면 아래에 ··· 줄이 남을 뿐이고, 더 작으면 KeepBottomVisible 이
+// 바닥을 붙잡는 뷰포트로 본다.
 const (
 	// vsFitOption marks a window whose size mux fixed, so the release path can
 	// tell "we set this" from "the user set window-size themselves".
@@ -40,7 +55,7 @@ type vsClient struct {
 }
 
 // sessionClients reports the VS Code client the window is fitted to, and the
-// largest of everything else attached to it.
+// terminal in use among everything else attached to it (see parseClients).
 //
 // With several VS Code clients the most recently active one wins. Two of them
 // can disagree about size and there is only one window, so one has to lose —
@@ -52,9 +67,9 @@ type vsClient struct {
 // smaller one gets a viewport that follows the cursor, a larger one sees the
 // panel.
 //
-// The largest other client is what the window is really sized for — see
-// windowFit. Both come from one list-clients because they are only ever wanted
-// together, on a path tmux runs after every resize.
+// The terminal is what the window is really sized for — see windowFit. Both
+// come from one list-clients because they are only ever wanted together, on a
+// path tmux runs after every resize.
 func sessionClients(session string) (vs, other vsClient, okVS bool) {
 	if session == "" {
 		return vsClient{}, vsClient{}, false
@@ -106,72 +121,72 @@ func parseClientList(out string, isVS func(pid int) bool) []clientInfo {
 	return list
 }
 
-// parseClients splits list-clients output into the VS Code client to fit — the
-// most recently active one — and the largest non-VS Code client. Pure for
-// testing.
+// parseClients splits list-clients output into the VS Code client to fit and
+// the terminal the window is for — each the most recently active of its kind.
+// Pure for testing.
 //
-// "Largest" is per axis rather than per client: two terminals of different
-// shapes both have to fit, and a window is one rectangle.
+// The terminal is the one in use, not the largest. Taking the largest per axis
+// sized the window to a kitty left attached at home (273x64) while the user
+// typed into a 236x51 ssh from outside, which lost the ssh its top thirteen
+// rows and its right edge (2026-10-19). One terminal has to lose when two
+// differ, and the one nobody is typing into is the cheap loser.
 func parseClients(out string, isVS func(pid int) bool) (vs, other vsClient, okVS bool) {
-	var best *clientInfo
+	var bestVS, bestTerm *clientInfo
 	list := parseClientList(out, isVS)
 	for i := range list {
 		c := &list[i]
 		if c.vscode {
-			if best == nil || preferVSCodeClient(*c, *best) {
-				best = c
+			if bestVS == nil || preferClient(*c, *bestVS) {
+				bestVS = c
 			}
 			continue
 		}
-		other.width = maxInt(other.width, c.width)
-		other.height = maxInt(other.height, c.height)
+		if bestTerm == nil || preferClient(*c, *bestTerm) {
+			bestTerm = c
+		}
 	}
-	if best == nil {
+	if bestTerm != nil {
+		other = vsClient{width: bestTerm.width, height: bestTerm.height}
+	}
+	if bestVS == nil {
 		return vsClient{}, other, false
 	}
-	return vsClient{width: best.width, height: best.height, tty: best.tty}, other, true
+	return vsClient{width: bestVS.width, height: bestVS.height, tty: bestVS.tty}, other, true
 }
 
-// preferVSCodeClient reports whether a is the VS Code client to fit rather than
-// b: the more recently active, and on a tie the larger. Activity is in whole
-// seconds, so two terminals attached together tie, and a hidden terminal tab
-// sits at a small default size while the one in view fills the editor.
-func preferVSCodeClient(a, b clientInfo) bool {
+// preferClient reports whether a is the client to go by rather than b: the
+// more recently active, and on a tie the larger. Activity is in whole seconds,
+// so two terminals attached together tie, and a hidden terminal tab sits at a
+// small default size while the one in view fills the editor.
+func preferClient(a, b clientInfo) bool {
 	if a.activity != b.activity {
 		return a.activity > b.activity
 	}
 	return a.width*a.height > b.width*b.height
 }
 
-// fitPanelWidth is the panel width the fit may use: the wanted one when it
-// fits beside the VS Code client inside the largest other client, narrower
-// when it does not, nothing when even the floor would not fit.
+// panelWidthFor is the width the panel is held at in a fitted window of the
+// given width: the saved one, capped at half the window like everywhere else
+// (MaxPanelWidth), and nothing when even that half is below MinPanelWidth.
+// Pure for testing.
 //
-// The window must not outgrow Windows Terminal. Measured: a 107-column panel
-// beside a 174-column VS Code client made a 282-column window on a 269-column
-// WT, so WT got a viewport of its own — and with Claude's cursor hidden that
-// viewport snapped to the top-left, input box off screen, keystrokes going
-// somewhere the user could not see. Shrinking the panel keeps WT whole; when
-// not even MinPanelWidth fits, the fit backs out rather than pan WT.
-func fitPanelWidth(vs, other vsClient, want int) (int, bool) {
-	if other.width == 0 {
-		return want, true
+// The fit no longer narrows the panel to keep it off a VS Code screen. It used
+// to, and that made the panel the one thing that is supposed to be one width
+// everywhere a different width per session: from a 236-column ssh, the session
+// a 195-column VS Code client was on had a 40-column panel and every other one
+// had 57 (2026-10-19). The user chose the width.
+//
+// The cap is applied here because the panel process leaves a fitted window's
+// widths to this file — pinPanelWidth is what holds it.
+func panelWidthFor(windowWidth, want int) (int, bool) {
+	w := want
+	if limit := MaxPanelWidth(windowWidth); w > limit {
+		w = limit
 	}
-	room := other.width - vs.width - paneDivider
-	if room >= want {
-		return want, true
+	if w < MinPanelWidth {
+		return 0, false
 	}
-	if room >= MinPanelWidth {
-		return room, true
-	}
-	return 0, false
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
+	return w, true
 }
 
 // statusLines is how many rows the status line takes from a client, read from
@@ -209,26 +224,34 @@ func parseStatusLines(v string) int {
 	return n
 }
 
-// windowFit is the window size that keeps the panel off a VS Code client's
-// screen. Pure so the arithmetic is testable without a server.
+// windowFit is the window size mux fixes: the terminal in use exactly, or —
+// with only VS Code attached — that client plus the panel. Pure so the
+// arithmetic is testable without a server.
 //
-//	폭  = max(VS Code 아닌 가장 큰 클라이언트, VS Code + 구분선 + 패널)
-//	높이 = max(VS Code 아닌 가장 큰 클라이언트, VS Code)
+//	터미널이 있으면    폭 × 높이 = 터미널
+//	VS Code 만 있으면  폭 = VS Code + 구분선 + 패널, 높이 = VS Code
 //
-// The first term is why a Windows Terminal on the same session still sees its
-// whole screen: sizing the window to the editor instead left the rest of WT
-// filled with tmux's dots. The second term is the floor that makes the panel
-// invisible — it keeps the work pane at least as wide as the VS Code client, so
-// that client's viewport never has to reach the window's right edge to keep its
-// cursor in view. (A client smaller than the window does not get a cropped
-// window but a viewport that follows the active pane's cursor; measured.)
+// The terminal gets its own size on both axes because a window larger than a
+// client is not cropped for it but panned: the client gets a viewport that
+// follows the active pane's cursor (measured), and with Claude's cursor at the
+// bottom — tty.c, tty_window_offset1 — that costs the top rows, while a window
+// too wide pans the panel off the right edge. A larger terminal used to win
+// the width (WT beside VS Code): it still does, since the one in use is the
+// one sized for.
 //
-// Heights arrive already net of the status line, so no axis needs the panel's
-// width and the height is a plain max.
+// The VS Code client is the one that adapts. When the terminal is at least VS
+// Code + divider + panel wide, the work pane is wider than the editor's view
+// and its viewport never has to reach the panel to follow the cursor. When the
+// terminal is narrower, part of the panel shows on the editor's right edge —
+// the price of keeping the panel at its one saved width (see panelWidthFor).
+//
+// "No terminal" is other.width == 0. Heights arrive already net of the status
+// line.
 func windowFit(vs, other vsClient, panelWidth int) (width, height int) {
-	width = maxInt(other.width, vs.width+paneDivider+panelWidth)
-	height = maxInt(other.height, vs.height)
-	return width, height
+	if other.width > 0 {
+		return other.width, other.height
+	}
+	return vs.width + paneDivider + panelWidth, vs.height
 }
 
 // syncVSCodeViewport fixes this window's size to hide the panel from the VS
@@ -236,13 +259,13 @@ func windowFit(vs, other vsClient, panelWidth int) (width, height int) {
 // whether the window is now fixed.
 //
 // Called from the panel's own hook path, so it runs on client-attached,
-// client-resized and client-session-changed — every event that can change who
-// is looking or how big they are.
+// client-detached, client-active, client-resized and client-session-changed —
+// every event that can change who is looking or how big they are.
 //
 // The width returned is the one the panel must have in this window — the
-// wanted width, or less when only less fits beside the VS Code client inside
-// Windows Terminal. The caller opens the panel at exactly that, or the fit and
-// the freshly opened panel disagree on the first frame.
+// saved width, or half the window when that is less (panelWidthFor). The
+// caller opens the panel at exactly that, or the fit and the freshly opened
+// panel disagree on the first frame.
 func syncVSCodeViewport(ctx panelCtx, panelWidth int) (fitted bool, width int) {
 	window, session := ctx.window, ctx.session
 	c, other, ok := sessionClients(session)
@@ -250,18 +273,14 @@ func syncVSCodeViewport(ctx panelCtx, panelWidth int) (fitted bool, width int) {
 		releaseWindowFit(window)
 		return false, panelWidth
 	}
-	panelWidth, ok = fitPanelWidth(c, other, panelWidth)
-	if !ok {
-		releaseWindowFit(window)
-		return false, panelWidth
-	}
 
-	// A panel wider than the whole VS Code terminal would take more than half
-	// the fixed window, which the panel itself refuses to stay at — it clamps to
-	// half on its first frame and the work pane ends up wider than the client.
-	// Back out instead of fighting it; that terminal is too narrow for this
-	// arrangement.
-	if panelWidth >= c.width {
+	// With only VS Code attached, a panel wider than the whole VS Code terminal
+	// would take more than half the fixed window, which the panel itself
+	// refuses to stay at — it clamps to half on its first frame and the work
+	// pane ends up wider than the client. Back out instead of fighting it; that
+	// terminal is too narrow for this arrangement. With a terminal the window is
+	// the terminal's and panelWidthFor caps the panel at half of it.
+	if other.width == 0 && panelWidth >= c.width {
 		releaseWindowFit(window)
 		return false, panelWidth
 	}
@@ -275,6 +294,10 @@ func syncVSCodeViewport(ctx panelCtx, panelWidth int) (fitted bool, width int) {
 
 	width, height := windowFit(c, other, panelWidth)
 	if height < 1 {
+		releaseWindowFit(window)
+		return false, panelWidth
+	}
+	if panelWidth, ok = panelWidthFor(width, panelWidth); !ok {
 		releaseWindowFit(window)
 		return false, panelWidth
 	}

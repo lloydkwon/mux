@@ -343,6 +343,72 @@ else
 	echo "  SKIP  script(1) 이 없어 pty 를 못 붙였습니다"
 fi
 
+# ── 14. 쓰는 터미널이 바뀔 때 ────────────────────────────────────────────────
+# tmux/viewport.go 는 창을 «가장 최근에 쓴 터미널» 크기로 고정하고, tmux.conf 는
+# 그 밖의 창에 window-size latest 를 쓴다. 다시 맞추는 계기는 tmux/setuppanel.go 의
+# client-active·client-detached 훅이다. 하나라도 안 돌면 밖에서 ssh 로 쓰다 집에
+# 돌아와 kitty 에 입력해도 창이 ssh 크기에 머문다.
+#
+# 클라이언트 둘을 script(1) 로 붙이고, 각자의 표준입력(FIFO)에 글자를 써서 «그
+# 클라이언트에서 입력했다»를 만든다.
+echo
+echo "쓰는 터미널 따라가기 (tmux/viewport.go, tmux/setuppanel.go)"
+
+if command -v script >/dev/null 2>&1 && command -v mkfifo >/dev/null 2>&1; then
+	AT=$(mktemp -d)
+	mkfifo "$AT/in1" "$AT/in2"
+	sleep 60 >"$AT/in1" &
+	HOLD1=$!
+	sleep 60 >"$AT/in2" &
+	HOLD2=$!
+	t set -g window-size latest
+	t set-hook -g client-active "run-shell 'echo active #{client_tty} >> $AT/log'"
+	t set-hook -g client-detached "run-shell 'echo detached #{pane_id} >> $AT/log'"
+
+	SHELL=/bin/sh script -qfc "stty rows 40 cols 200; exec $TMUX_BIN -L $SOCKET -f /dev/null attach-session -t a" \
+		/dev/null <"$AT/in1" >/dev/null 2>&1 &
+	BIG=$!
+	sleep 0.5
+	SHELL=/bin/sh script -qfc "stty rows 25 cols 120; exec $TMUX_BIN -L $SOCKET -f /dev/null attach-session -t a" \
+		/dev/null <"$AT/in2" >/dev/null 2>&1 &
+	SMALL=$!
+	for _ in $(seq 1 30); do
+		[ "$(t list-clients -F x 2>/dev/null | wc -l)" -ge 2 ] && break
+		sleep 0.1
+	done
+	TTY_BIG=$(t list-clients -F '#{client_height} #{client_tty}' | awk '$1==40{print $2}')
+	TTY_SMALL=$(t list-clients -F '#{client_height} #{client_tty}' | awk '$1==25{print $2}')
+	: >"$AT/log"
+
+	printf 'x' >"$AT/in1"
+	sleep 0.5
+	ok "latest: 창이 방금 입력한 큰 클라이언트 크기 (200x39)" "200x39" \
+		"$(t display -p -t a '#{window_width}x#{window_height}')"
+	printf 'y' >"$AT/in2"
+	sleep 0.5
+	ok "latest: 작은 쪽에서 입력하면 그 크기 (120x24)" "120x24" \
+		"$(t display -p -t a '#{window_width}x#{window_height}')"
+	printf 'z' >"$AT/in2"
+	sleep 0.5
+	# 바뀔 때만 돈다 — 같은 클라이언트가 계속 입력해도 한 줄씩 쌓이지 않는다.
+	ok "client-active 는 최근 클라이언트가 바뀔 때마다 돈다" \
+		"active $TTY_BIG|active $TTY_SMALL" "$(paste -sd'|' "$AT/log")"
+
+	# 끊긴 터미널: 클라이언트 프로세스를 죽인다(ssh 연결이 끊긴 것과 같은 모양).
+	kill "$(t list-clients -F '#{client_tty} #{client_pid}' | awk -v t="$TTY_SMALL" '$1==t{print $2}')" 2>/dev/null
+	sleep 0.7
+	okc "client-detached 는 프로세스가 죽어도 돈다, #{pane_id} 도 펼쳐진다" "detached %" \
+		"$(command grep detached "$AT/log")"
+	ok "남은 클라이언트가 최근이 되며 client-active 가 한 번 더 돈다" "active $TTY_BIG" \
+		"$(command grep active "$AT/log" | tail -1)"
+
+	kill "$BIG" "$SMALL" "$HOLD1" "$HOLD2" 2>/dev/null || true
+	wait "$BIG" "$SMALL" "$HOLD1" "$HOLD2" 2>/dev/null || true
+	rm -rf "$AT"
+else
+	echo "  SKIP  script(1) 이나 mkfifo 가 없어 클라이언트를 붙이지 못했습니다"
+fi
+
 echo
 if [ "$FAILED" -eq 0 ]; then
 	echo "$CHECKED 개 전부 통과 — $VERSION 에서 mux 의 가정이 유지됩니다."

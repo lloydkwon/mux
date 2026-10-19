@@ -471,7 +471,7 @@ const defaultBorderWidth = 80
 
 // runPanelAuto opens the panel, and on the hook path never reports a failure.
 //
-// `--auto` is what the seven panelHooks run, `client-resized` among them. Those
+// `--auto` is what the nine panelHooks run, `client-resized` among them. Those
 // fire constantly, and a failing run-shell paints the status line of *every*
 // attached client every time — so one thing going wrong once goes wrong loudly
 // and forever.
