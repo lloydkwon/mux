@@ -2,6 +2,8 @@ package tmux
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -143,4 +145,59 @@ func TestProjectScope(t *testing.T) {
 			t.Errorf("ProjectScope() = (%q, %v) on a failed lookup, want empty and false", dir, open)
 		}
 	})
+}
+
+// IntelliJ 터미널도 한 프로젝트를 연 편집기 창이라, VS Code 처럼 좁혀 연다.
+func TestProjectScopeNarrowsInIntelliJ(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		m.OnOutput([]byte("412|/home/u/proj\n"), nil, "tmux", "display-message", "-p",
+			"#{client_pid}|#{@project_dir}")
+		old := clientEnvHas
+		clientEnvHas = func(pid int, marker string) bool { return marker == jetbrainsEnvMarker }
+		defer func() { clientEnvHas = old }()
+
+		if dir, open := ProjectScope(); dir != "/home/u/proj" || !open {
+			t.Errorf("ProjectScope() = (%q, %v), want the tag and narrowed", dir, open)
+		}
+	})
+}
+
+// isEditorClient 와 isVSCodeClient 의 진짜 몸체를 /proc 로 본다. 둘은 일부러 다르다:
+// 편집기 터미널(VS Code·IntelliJ)은 창 맞춤·전환·유령 판단에서 똑같이 대하지만, VS Code
+// «창»을 올리는 VSCodeClientDirs 에 IntelliJ 터미널의 폴더가 섞이면 엉뚱한 창을 찾는다.
+func TestEditorClientMarkers(t *testing.T) {
+	if _, err := os.Stat("/proc/self/environ"); err != nil {
+		t.Skip("no /proc here")
+	}
+	for _, tc := range []struct {
+		env            string
+		editor, vscode bool
+	}{
+		{"TERM_PROGRAM=vscode", true, true},
+		{"TERMINAL_EMULATOR=JetBrains-JediTerm", true, false},
+		{"KITTY_WINDOW_ID=1", false, false},
+	} {
+		cmd := exec.Command("sleep", "5")
+		cmd.Env = []string{tc.env}
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		pid := cmd.Process.Pid
+		// Start 는 vfork 가 풀리는 순간 돌아오는데, 그때는 새 이미지의 환경 영역이 아직 비어
+		// 있을 수 있다(실측: 바로 읽으면 표식이 없었다). 찰 때까지 잠깐 기다린다.
+		for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+			if b, _ := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid)); len(b) > 0 {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		gotEditor, gotVSCode := isEditorClient(pid), isVSCodeClient(pid)
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+
+		if gotEditor != tc.editor || gotVSCode != tc.vscode {
+			t.Errorf("%s: editor=%v vscode=%v, want editor=%v vscode=%v",
+				tc.env, gotEditor, gotVSCode, tc.editor, tc.vscode)
+		}
+	}
 }

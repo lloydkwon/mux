@@ -102,7 +102,11 @@ Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale a
   `ListSessions` 의 «exit status 삼키기»는 복제하지 않는다. (herdr.md)
 - **VS Code 를 띄우는 것은 패널의 오른쪽 클릭뿐**, 왼쪽 클릭·`enter`·TUI 선택은 이미 열린 창만
   앞으로 낸다 — 셋 다 `raiseOpenEditor` 를 거친다(`TestRaiseOpenEditorNeverLaunches`). 네이티브
-  Wayland 에서 창을 올리는 것은 `code` 가 아니라 GNOME 확장(`ui/windowfocus.go`)이다. (panel.md)
+  Wayland 에서 창을 올리는 것은 `code` 가 아니라 GNOME 확장(`ui/windowfocus.go`)이다.
+  오른쪽 클릭의 편집기는 `@mux_editor` 가 고르고, IntelliJ(`idea`)는 `startEditor` 가 아니라
+  `startDetached` 로 띄운다 — 기다리면 신뢰 대화상자에 묶이고, 타임아웃이 IDE 를 죽인다
+  (`TestStartDetachedLeavesALongLaunchRunning`). IntelliJ 터미널(JediTerm)도 «VS Code 클라이언트»다
+  — 판별은 `isEditorClient`, VS Code 창을 찾는 `VSCodeClientDirs` 만 좁은 `isVSCodeClient`. (panel.md)
 - **`--claude` 입양은 `--fork-session` 을 쓰지 않고, 순차로, 초 경계를 기다리며** 돈다. 끝나면
   `ResetClaudeRunCache()`. (claude-mode.md)
 - **짝 합치기**: `break-pane` 금지, pane 하나뿐인 검토 세션은 거부, `join-pane -d`. (pair.md)

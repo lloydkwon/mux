@@ -64,7 +64,7 @@ func ProjectScope() (dir string, vscode bool) {
 	if err != nil || pid <= 0 {
 		return "", false
 	}
-	return dir, clientEnvHas(pid, vscodeEnvMarker)
+	return dir, clientIsEditor(pid)
 }
 
 // SessionProjectDir reports projectDirOption for a named session. Empty when
@@ -350,9 +350,22 @@ func SwitchClient(name string) error {
 	return runner.Run("tmux", "switch-client", "-t", "="+name)
 }
 
+// isEditorClient reports whether a tmux client process is an editor's
+// integrated terminal — VS Code's or a JetBrains IDE's (jetbrainsEnvMarker).
+// Replaceable in tests.
+//
+// 이 패키지가 «VS Code 클라이언트»라고 부르는 것 — 창 맞춤(viewport.go), 전환이 건드리지
+// 않는 클라이언트, 유령 예외 — 은 전부 이것이다. 한 프로젝트를 연 편집기 창이라는 점이
+// 같기 때문이다. 예외는 VS Code 의 «창»을 찾는 VSCodeClientDirs 하나다(isVSCodeClient).
+var isEditorClient = func(pid int) bool {
+	return procEnvHas(pid, vscodeEnvMarker) || procEnvHas(pid, jetbrainsEnvMarker)
+}
+
 // isVSCodeClient reports whether a tmux client process is a VS Code integrated
-// terminal. Replaceable in tests.
-var isVSCodeClient = func(pid int) bool { return procEnvHas(pid, "TERM_PROGRAM=vscode") }
+// terminal and nothing else. Only VSCodeClientDirs wants this narrow answer:
+// its folders are used to raise a VS Code window, and an IntelliJ terminal's
+// folder has no VS Code window to raise.
+var isVSCodeClient = func(pid int) bool { return procEnvHas(pid, vscodeEnvMarker) }
 
 // hasWTEnv reports whether a process carries Windows Terminal's own marker.
 // Replaceable in tests.
@@ -364,13 +377,13 @@ var hasWTEnv = func(pid int) bool { return procEnvHasPrefix(pid, "WT_SESSION=") 
 // Both halves are needed. A VS Code window opened from Windows Terminal
 // inherits WT_SESSION, so the marker alone names VS Code clients too — and
 // those are exactly the ones SwitchWTClient must never move.
-var isWTClient = func(pid int) bool { return hasWTEnv(pid) && !isVSCodeClient(pid) }
+var isWTClient = func(pid int) bool { return hasWTEnv(pid) && !isEditorClient(pid) }
 
-// isTerminalClient reports whether a tmux client is anything but a VS Code
+// isTerminalClient reports whether a tmux client is anything but an editor's
 // integrated terminal — SwitchWTClient's fallback when no Windows Terminal is
-// attached. A func rather than a var: it is defined by isVSCodeClient, which
+// attached. A func rather than a var: it is defined by isEditorClient, which
 // tests already replace.
-func isTerminalClient(pid int) bool { return !isVSCodeClient(pid) }
+func isTerminalClient(pid int) bool { return !isEditorClient(pid) }
 
 // SwitchWTClient points the most recently active Windows Terminal client at
 // the named session (exact match, see SwitchClient for the "=" rationale).
@@ -402,7 +415,7 @@ func SwitchWTClient(name string) error {
 }
 
 // SessionHasVSCodeClient reports whether any VS Code integrated terminal is
-// attached to the named session.
+// attached to the named session — JetBrains IDE 의 것도 센다(isEditorClient).
 //
 // It is the guard on an unqualified switch-client: that command moves "the
 // current client", which for a command run from a pane is whichever client is
@@ -420,7 +433,7 @@ func SessionHasVSCodeClient(session string) bool {
 	if err != nil {
 		return false
 	}
-	return anyVSCodeClient(string(out), isVSCodeClient)
+	return anyVSCodeClient(string(out), isEditorClient)
 }
 
 // anyVSCodeClient reports whether any pid in list-clients output is a VS Code

@@ -372,6 +372,19 @@ func SessionForPane(target string) (string, error) {
 // shell it starts, and so into a tmux client started from one.
 const vscodeEnvMarker = "TERM_PROGRAM=vscode"
 
+// jetbrainsEnvMarker 는 JetBrains IDE(IntelliJ 등)의 통합 터미널이 남기는 표식이다.
+// TERM_PROGRAM 은 남기지 않는다. 이 패키지에서 «VS Code 클라이언트»라고 부르는 것 —
+// 한 프로젝트를 연 편집기 창의 통합 터미널 — 에 2026-10-21 부터 이것도 든다. 패널의
+// 오른쪽 클릭을 IntelliJ 로 열게 되면서, 그 터미널을 VS Code 의 것과 똑같이 대해야 했다:
+// 패널을 그 화면에서 빼고, 왼쪽 클릭이 끌고 가지 않고, 유령으로 끊지 않는다.
+const jetbrainsEnvMarker = "TERMINAL_EMULATOR=JetBrains-JediTerm"
+
+// clientIsEditor 는 클라이언트 프로세스가 편집기(VS Code·JetBrains)의 통합 터미널인지
+// 본다. clientEnvHas 를 거치므로 테스트가 바꿔 칠 수 있다.
+func clientIsEditor(pid int) bool {
+	return clientEnvHas(pid, vscodeEnvMarker) || clientEnvHas(pid, jetbrainsEnvMarker)
+}
+
 // DefaultMinWindowWidth is the narrowest window worth putting a panel in.
 //
 // This is how "small screen" is decided, and it covers what environment cannot.
@@ -442,11 +455,32 @@ func PanelHeaderEnabled() bool {
 	}
 }
 
+// editorOption 은 패널의 오른쪽 클릭이 세션을 어느 편집기로 열지 고른다. 없으면 VS Code.
+// 클릭이 편집기를 «여느냐»를 정하는 스위치가 아니다 — 그건(`@mux_panel_editor`) 오른쪽
+// 버튼 자체가 opt-in 이라 지웠다. 이건 «무엇으로» 여느냐만 말한다. docs/design/panel.md.
+const editorOption = "@mux_editor"
+
+// EditorChoice 는 @mux_editor 의 값을 앞뒤 공백만 깎아 돌려준다. 없거나 tmux 가 답하지
+// 않으면 "". 여기서 해석하지 않는다: 어떤 이름이 편집기인지, 모르는 값을 사람에게
+// 알리는 것은 ui 의 몫이다.
+//
+// 패널의 다른 설정과 달리 시작할 때 한 번이 아니라 오른쪽 클릭마다 읽는다.
+// `tmux set -g @mux_editor idea` 가 이미 떠 있는 패널에도 바로 닿아야 하고, 클릭 한
+// 번에 show-options 한 번은 비용이랄 것이 없다.
+func EditorChoice() string {
+	out, err := runner.Output("tmux", "show-options", "-gqv", editorOption)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // clientEnvHas is the /proc lookup, replaceable in tests.
 var clientEnvHas = procEnvHas
 
 // SessionOnlyInVSCode reports whether every client attached to session is a
-// VS Code integrated terminal.
+// VS Code integrated terminal — 또는 JetBrains IDE 의 것(clientIsEditor). 이름은
+// IntelliJ 를 쓰기 전에 지은 그대로다.
 //
 // False when no client is attached: a session created detached has nobody to
 // judge by, and defaulting to "skip" there would silently deny a panel to every
@@ -468,7 +502,7 @@ func SessionOnlyInVSCode(session string) bool {
 			continue
 		}
 		seen = true
-		if !clientEnvHas(pid, vscodeEnvMarker) {
+		if !clientIsEditor(pid) {
 			return false
 		}
 	}

@@ -102,6 +102,28 @@ INACTIVE`), `List` 는 «그런 객체가 없다»로 실패한다. 이것을 «
 않는다. 그래서 제스처가 opt-in 이고, 옵션은 지웠다. 되돌리고 싶어지면 그게 무엇을
 막아 주는지부터 물을 것.
 
+**`@mux_editor` 는 그 옵션이 돌아온 것이 아니다**(2026-10-21). 지운 옵션은 클릭이 편집기를
+*여느냐*를 막았고, 이것은 *무엇으로* 여느냐만 고른다 — 없거나 `code` 면 VS Code, `idea` 면
+IntelliJ IDEA. 제스처가 opt-in 이라는 결정은 그대로다. 오른쪽 클릭마다 `tmux.EditorChoice`
+로 읽으므로 `tmux set -g @mux_editor idea` 가 이미 떠 있는 패널에도 바로 닿는다. 고른
+편집기를 못 찾거나 모르는 값이면 VS Code 로 물러서지 않고 로그에 남긴다 — 물러서면 설정이
+먹었는지 알 길이 없다(`TestRightClickReportsAnEditorItCannotRun`). 왼쪽 클릭·`enter`·TUI 는
+이 값을 보지 않는다. 그쪽의 «이미 열린 창 올리기»는 VS Code 창만 안다
+(`TestLeftClickIgnoresTheEditorChoice`); IntelliJ 창 올리기는 써 본 뒤의 일로 남겨 두었다.
+
+**IntelliJ 의 터미널은 VS Code 의 것과 같은 «편집기 클라이언트»다**(2026-10-21). IntelliJ 로 연
+프로젝트의 터미널이 그 세션에 붙으면(아래 dotfiles), 그 tmux 클라이언트는 한 프로젝트를 보는
+편집기 창이라는 점에서 VS Code 터미널과 다를 것이 없다. 그래서 같은 대접을 받는다: 창 맞춤이
+패널을 그 화면에서 빼고(`tmux/viewport.go`), 왼쪽 클릭의 전환이 끌고 가지 않고(`SwitchWTClient`),
+유령 클라이언트로 끊지 않고(`isOwnClient`), `--auto` 가 그 터미널만 보는 세션에 패널을 열지 않고,
+TUI 는 프로젝트로 좁혀 연다. 판별은 `isEditorClient` 하나다. 표식은 `TERMINAL_EMULATOR=JetBrains-JediTerm`
+이다(JediTerm 은 `TERM_PROGRAM` 을 남기지 않는다). 예외는 `VSCodeClientDirs` 하나다: 그 폴더로
+VS Code **창**을 찾아 올리므로 좁은 `isVSCodeClient` 를 쓴다(`TestEditorClientMarkers`).
+
+터미널을 세션에 붙이는 것은 mux 가 아니라 dotfiles 의 몫이다. VS Code 의 짝은 이렇다.
+- IntelliJ 의 셸 경로 = `tmux-project`: `options/terminal-local.xml` 의 `shellPath`
+- `tmux-autoterm` 확장 자리에는 IntelliJ 시작 스크립트(`extensions/com.intellij/startup/`)를 둔다. 프로젝트가 열릴 때마다 돌아서, 그 폴더의 세션이 있으면(`tmux-project --has`) Terminal 도구 창을 연다.
+
 **tmux 설정에 더할 것이 없다는 것은 실측이다.** tmux 기본 `MouseDown3Pane` 은
 `if-shell "#{||:#{mouse_any_flag},…}" { select-pane -t = ; send-keys -M }
 { display-menu … }` 이고, 패널 pane 의 `mouse_any_flag` 는 1이다(Bubble Tea 가 마우스
@@ -136,10 +158,14 @@ mux 는 `mouse` 를 켜지 않는다(`MouseEnabled` 주석). 대신 패널이 �
 `handleKey`·`cmd/mux` 를 다 고치고 사용자가 `mux setup-panel` 을 다시 돌려야 하므로,
 그 값을 치를 이유가 생기기 전까지는 두지 않는다.
 
-**`editorBin` 하나가 유일한 스위치다.** `RunWatch` 가 시작할 때 `findEditor()` 로 한 번
-채우고, 비어 있으면 오른쪽 클릭이 no-op 이다. 제로값이 off 이므로 `watchModel{...}` 을
-손으로 만드는 기존 테스트들이 아무것도 실행하지 않는다 — `exePath` 가 자가 재시작을
-끄는 것과 같은 방식이고, 이게 `go test ./ui` 를 개발자의 데스크톱에서 떼어 놓는다.
+**스위치는 `editorBin`·`ideaBin`·`editorChoice` 셋이고, 셋 다 제로값이 off 다.** `RunWatch` 가
+시작할 때 `findEditor()`·`findIntelliJ()` 로 두 경로를 한 번 채우고, `editorChoice` 에
+`tmux.EditorChoice` 를 넘긴다. VS Code 경로는 `editorBin` 이 비어 있으면 no-op 이고(예전
+그대로), IntelliJ 를 골랐는데 `ideaBin` 이 비어 있으면 보고한다. 그래서 관문은 `editorDirFor`
+가 아니라 `openSessionEditor` 의 각 분기에 있다 — 폴더 단계에서 막으면 그 보고가 닿지
+못한다(`TestEditorDirDoesNotDependOnAnEditor`). `editorChoice` 가 nil 이면 묻지 않고 VS Code 다. 그래서 `watchModel{...}` 을 손으로 만드는 기존 테스트들이
+아무것도 실행하지 않고 tmux 에도 묻지 않는다 — `exePath` 가 자가 재시작을 끄는 것과 같은
+방식이고, 이게 `go test ./ui` 를 개발자의 데스크톱에서 떼어 놓는다.
 
 **폴더는 `ProjectDir` 우선, 없으면 `Directory`.** `types.go` 가 이미 이유를 적어 뒀다 —
 `Directory` 는 활성 pane 을 따라 움직이고 AI 의 cwd 로 덮이기까지 하지만 `@project_dir`
@@ -160,6 +186,36 @@ WSL 세션과 함께 죽는데 tmux 서버는 그보다 오래 살므로, 그 �
 `tea.Cmd` 의 고루틴 안이므로 기다리는 대가는 이 커맨드의 메시지가 늦는 것뿐이다.
 타임아웃(10초)은 멈춘 셤이 고루틴을 영영 붙잡는 것에 대한 상한이지 정상 동작의 일부가
 아니다.
+
+**IntelliJ 는 그 반대여야 한다** (`startDetached`). `idea` 는 `code` 같은 «넘기고 돌아오는»
+런처가 아니다. 2026-10-21 이 기계(Toolbox 2026.2.3, XWayland)에서 오른쪽 클릭과 같은
+조건(TMUX 를 뺀 env, setsid, 표준 입출력 막음)으로 재 보니:
+- 떠 있는 IntelliJ 에 처음 여는 폴더를 넘기면 «Trust and Open Project?» 대화상자가 **현재 창
+  뒤에** 뜨고(`_NET_WM_STATE_DEMANDS_ATTENTION`), 명령은 그걸 닫을 때까지 131초 동안 돌아오지
+  않았다(닫은 뒤 종료 코드 1).
+- 꺼져 있으면 `bin/idea` 프로세스가 곧 IDE 본체다 — JVM 이 런처 프로세스 안에서 돈다
+  (떠 있던 `idea` 프로세스 하나가 1.4GB 를 쥐고 있었다).
+
+그래서 `startEditor` 로 띄우면 앞의 경우는 10초 뒤 «실행 실패»를, 뒤의 경우는 **IDE 를
+SIGKILL** 한다. `startDetached` 는 context 없이 띄우고 2초(`detachGrace`)만 지켜본다 — 그 안에
+실패로 끝나면 보고하고, 아니면 손을 뗀다. DISPLAY 없는 콜드 스타트는 0.39초 만에 종료 코드
+3 으로 끝났다(별도 config·system 경로로 띄워 실측) — 2초면 넉넉하다. `Wait` 는 고루틴이
+맡아 좀비를 거둔다. stderr 는 받지 않는다: 버퍼는 며칠 사는 IDE 의 출력을 패널 메모리에
+쌓고, 파이프는 IDE 의 stderr 를 패널의 수명에 묶는다. 이유는 IDE 로그(`idea.log`)에 있다.
+`TestStartDetachedLeavesALongLaunchRunning` 이 «유예가 지나도 죽이지 않는다»를 지킨다.
+숨은 신뢰 대화상자는 mux 가 고칠 수 없다 — IntelliJ 의 Trusted Locations 에 프로젝트 상위
+폴더를 넣어 두는 것이 답이다.
+
+**편집기의 화면·입력기 변수는 데스크톱 세션에서 온다** (`editorEnv`, `ui/editor.go`). 패널이 띄운
+편집기는 패널의 환경을 물려받고, 그 환경은 패널이 생길 때의 tmux 서버 환경이다 — 패널은 며칠
+산다. 2026-10-21: 12:56 에 생긴 my-mux 패널에는 그 뒤 dotfiles 의 `environment.d` 에 더한
+`XMODIFIERS=@im=ibus` 가 없었고, 그 패널이 콜드 스타트한 IntelliJ(X11 툴킷, XIM 으로만 ibus 에
+붙는다)는 터미널에 한글이 한 글자도 안 들어갔다. GNOME 메뉴로 띄운 앱이 받는 값(systemd 사용자
+매니저·gnome-shell 의 환경)에는 있었다. 그래서 `desktopEnvVars`(화면·D-Bus·입력기)만
+`systemctl --user show-environment` 의 값으로 덮고 나머지는 패널 것을 둔다 — WSL 의 `code` 셤은
+패널의 `WSL_*` 가 있어야 돌고, systemd 가 없으면 패널 환경 그대로다
+(`TestWithDesktopEnv`, `TestStartDetachedPassesTheDesktopInputMethod`). VS Code 도 같은 길을
+타지만, 이미 떠 있으면 `code` 가 넘기기만 하므로 이 차이는 콜드 스타트에서만 보인다.
 
 `Setsid` 는 패널 pane 이 닫힐 때 반쯤 뜬 에디터가 같이 죽지 않게 한다 — tmux 는 pane 의
 프로세스 그룹에 신호를 보내고, 셤이 진짜 애플리케이션에 넘기기 전까지는 아직 우리

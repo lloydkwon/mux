@@ -64,7 +64,7 @@ func ListClients() ([]Client, error) {
 // isOwnClient reports whether a client process is one of the user's own
 // terminals. Replaceable in tests.
 var isOwnClient = func(pid int) bool {
-	return isVSCodeClient(pid) || hasWTEnv(pid) || hasTerminalEnv(pid)
+	return isEditorClient(pid) || hasWTEnv(pid) || hasTerminalEnv(pid)
 }
 
 // terminalEnvPrefixes are what a local GUI terminal emulator leaves in the

@@ -39,15 +39,21 @@ func withFakeTmux(t *testing.T, f *fakeRunner) {
 }
 
 // withFakeEditor replaces the launcher and records what it was asked to open.
+// 기다리지 않는 실행(openDetached)도 같은 목록에 "detached " 를 붙여 적는다 — 그래서
+// «아무것도 띄우지 않는다»를 세는 테스트는 IntelliJ 실행까지 함께 센다.
 func withFakeEditor(t *testing.T, err error) *[]string {
 	t.Helper()
 	var calls []string
-	prev := openEditor
+	prev, prevDetached := openEditor, openDetached
 	openEditor = func(bin, dir string) error {
 		calls = append(calls, bin+" "+dir)
 		return err
 	}
-	t.Cleanup(func() { openEditor = prev })
+	openDetached = func(bin, dir string) error {
+		calls = append(calls, "detached "+bin+" "+dir)
+		return err
+	}
+	t.Cleanup(func() { openEditor, openDetached = prev, prevDetached })
 	return &calls
 }
 
@@ -82,12 +88,13 @@ func TestEditorDirPrefersProjectDir(t *testing.T) {
 	}
 }
 
-// editorBin is the only switch. Empty means the option is off or no editor was
-// found, and both must reach the same place: nothing opens.
-func TestEditorDirIsEmptyWithoutBin(t *testing.T) {
+// 폴더는 편집기와 무관하다. 편집기가 없을 때 무엇을 할지(VS Code 는 조용히, 고른
+// IntelliJ 가 없으면 보고)는 openSessionEditor 가 정한다 — 여기서 ""를 내면 그 보고가
+// 닿지 못한다.
+func TestEditorDirDoesNotDependOnAnEditor(t *testing.T) {
 	m := editorTestModel("")
-	if got := m.editorDirFor("api"); got != "" {
-		t.Errorf("editorDirFor = %q with no editor, want empty", got)
+	if got := m.editorDirFor("api"); got != "/home/u/projects/api" {
+		t.Errorf("editorDirFor = %q with no editor, want the project folder", got)
 	}
 }
 

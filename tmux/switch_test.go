@@ -34,12 +34,12 @@ func TestMostRecentWTClient(t *testing.T) {
 // WT 판별: WT_SESSION 만으로는 부족하다 — WT 에서 띄운 VS Code 가 그 값을 물려받으므로
 // 그 클라이언트까지 WT 로 세면 SwitchWTClient 가 VS Code 창을 끌고 간다.
 func TestIsWTClientExcludesVSCode(t *testing.T) {
-	origWT, origVS := hasWTEnv, isVSCodeClient
-	t.Cleanup(func() { hasWTEnv, isVSCodeClient = origWT, origVS })
+	origWT, origVS := hasWTEnv, isEditorClient
+	t.Cleanup(func() { hasWTEnv, isEditorClient = origWT, origVS })
 
 	// 100: 순수 WT, 200: WT_SESSION 을 물려받은 VS Code, 300: 둘 다 아님
 	hasWTEnv = func(pid int) bool { return pid == 100 || pid == 200 }
-	isVSCodeClient = func(pid int) bool { return pid == 200 }
+	isEditorClient = func(pid int) bool { return pid == 200 }
 
 	cases := map[int]bool{100: true, 200: false, 300: false}
 	for pid, want := range cases {
@@ -53,8 +53,8 @@ func TestIsWTClientExcludesVSCode(t *testing.T) {
 // 네이티브 Linux 에는 WT 가 없다 — WezTerm 같은 터미널을 못 찾아 패널 클릭이 전부
 // "no tmux client attached from Windows Terminal" 로 실패했다(2026-10-14 실측).
 func TestSwitchWTClientFallsBackToNonVSCodeTerminal(t *testing.T) {
-	origWT, origVS := hasWTEnv, isVSCodeClient
-	t.Cleanup(func() { hasWTEnv, isVSCodeClient = origWT, origVS })
+	origWT, origVS := hasWTEnv, isEditorClient
+	t.Cleanup(func() { hasWTEnv, isEditorClient = origWT, origVS })
 
 	listArgs := []string{"list-clients", "-F", "#{client_pid} #{client_activity} #{client_name}"}
 	// 100: WezTerm(가장 오래됨), 200: VS Code(가장 최근), 300: WezTerm, 400: WT
@@ -74,7 +74,7 @@ func TestSwitchWTClientFallsBackToNonVSCodeTerminal(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			hasWTEnv = func(pid int) bool { return c.wt[pid] }
-			isVSCodeClient = func(pid int) bool { return pid == 200 }
+			isEditorClient = func(pid int) bool { return pid == 200 }
 			withMock(t, func(m *mockRunner) {
 				m.OnOutput([]byte(c.out), nil, "tmux", listArgs...)
 				err := SwitchWTClient("target")

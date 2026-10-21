@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -144,11 +146,21 @@ type watchModel struct {
 	// once at startup. Empty means there is none to run, which is the whole
 	// switch — there is no option, because the gesture is the opt-in: a right
 	// click is not something anyone presses by accident, which is exactly what an
-	// option would have been protecting them from.
+	// option would have been protecting them from. (@mux_editor 는 그 스위치가 아니다 —
+	// 무엇으로 열지만 고른다. ideaBin, editorChoice.)
 	//
 	// The zero value being off is what keeps every test that builds a watchModel
 	// by hand from launching anything — the same reason exePath works that way.
 	editorBin string
+
+	// ideaBin 은 IntelliJ 의 런처로, 시작할 때 findIntelliJ 로 한 번 채운다. "" 이면
+	// @mux_editor=idea 여도 띄울 것이 없다 — editorBin 과 같은 제로값 관문이다.
+	ideaBin string
+
+	// editorChoice 는 @mux_editor 를 읽는다(tmux.EditorChoice). 오른쪽 클릭마다 tea.Cmd
+	// 안에서 부른다. nil 이면 묻지 않고 VS Code — 손으로 만든 watchModel 은 전부 nil
+	// 이므로 테스트가 개발자의 서버에 묻지 않는다.
+	editorChoice func() string
 
 	// focusWindow raises the VS Code window already open on a folder and says
 	// whether it did (focusShellWindow). nil is off — every hand-built
@@ -236,6 +248,8 @@ func RunWatch() error {
 	// which is the same answer an "off" option would have given and costs no
 	// configuration to reach.
 	editorBin := findEditor()
+	// 같은 이유로 무조건 찾는다. 찾아도 @mux_editor=idea 가 아니면 쓰이지 않는다.
+	ideaBin := findIntelliJ()
 	// A preference, read once for the same reason minWidth is: it does not
 	// change between ticks, and asking every two seconds costs a show-options
 	// per panel per tick to be told the same number.
@@ -257,6 +271,8 @@ func RunWatch() error {
 				minWindowWidth: minWidth,
 				showHeader:     header,
 				editorBin:      editorBin,
+				ideaBin:        ideaBin,
+				editorChoice:   tmux.EditorChoice,
 				focusWindow:    focusShellWindow,
 				ghostIdle:      ghostIdle,
 				probeMouse:     tmux.MouseEnabled,
@@ -341,7 +357,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// forwards the press to the pane when the application has mouse
 			// reporting on (`mouse_any_flag` is 1 here), so this needs nothing
 			// in anyone's tmux.conf.
-			return m, openSessionEditor(name, m.editorBin, m.editorDirFor(name), m.focusWindow)
+			return m, openSessionEditor(name, m.editorDirFor(name), m.editorSetup())
 		}
 		return m, nil
 
@@ -361,7 +377,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// switch itself succeeded, so the row is already where the user asked to
 		// be — this only says the editor did not follow.
 		m.local = pushEvents(m.local, []aiEvent{{
-			at: time.Now(), session: msg.session, text: "⚠ VS Code 실행 실패: " + msg.err.Error(),
+			at: time.Now(), session: msg.session, text: "⚠ " + msg.editor + " 실행 실패: " + msg.err.Error(),
 		}})
 		m.events = combineEvents(m.shared, m.local)
 		return m, nil
@@ -909,6 +925,7 @@ type switchFailedMsg struct {
 
 type editorFailedMsg struct {
 	session string
+	editor  string // 로그에 쓰는 이름: "VS Code", "IntelliJ", 모르는 값이면 "편집기"
 	err     error
 }
 
@@ -1058,25 +1075,76 @@ func (m watchModel) sessionDir(name string) string {
 // no window could raise a same-named other project and launch nothing. That
 // check reads tmux and VS Code's record, which is why it runs here in the
 // command and not in Update. focus may be nil.
-func openSessionEditor(name, bin, dir string, focus func(string) focusResult) tea.Cmd {
+//
+// 어느 편집기인지는 여기서 @mux_editor 를 읽어 정한다(ed.choose). tmux 를 묻는 일이라
+// Update 가 아니라 이 커맨드 안이다. IntelliJ 를 고르면 VS Code 창 올리기는 묻지 않고
+// 이미 열린 프로젝트도 IntelliJ 에 맡긴다. 그 창이 앞으로 나오는지는 재 보지 않았다 —
+// 처음 여는 폴더의 신뢰 대화상자는 GNOME 에서 현재 창 뒤에 떴다(2026-10-21).
+//
+// 편집기가 하나도 없어도 여기까지 온다. VS Code 경로는 bin 이 없으면 조용히 끝나고(예전
+// 그대로), IntelliJ 를 골랐는데 없거나 모르는 값이면 보고한다 — 관문을 editorDirFor 에
+// 두면 그 보고가 사라진다.
+func openSessionEditor(name, dir string, ed editorSetup) tea.Cmd {
 	return func() tea.Msg {
 		restoreFocus()
 
-		if bin == "" || dir == "" {
+		if dir == "" {
 			return nil
 		}
-		if focus != nil && editorOpenOn(name, bin, dir) && focus(dir) == focusRaised {
+		choice := ""
+		if ed.choose != nil {
+			choice = ed.choose()
+		}
+		switch choice {
+		case "", choiceVSCode:
+			return openInVSCode(name, ed.code, dir, ed.focus)
+		case choiceIntelliJ:
+			if ed.idea == "" {
+				return editorFailedMsg{session: name, editor: "IntelliJ", err: errIntelliJMissing}
+			}
+			if err := openDetached(ed.idea, dir); err != nil {
+				return editorFailedMsg{session: name, editor: "IntelliJ", err: err}
+			}
 			return nil
+		default:
+			return editorFailedMsg{session: name, editor: "편집기",
+				err: fmt.Errorf("알 수 없는 @mux_editor 값 %q (code 또는 idea)", choice)}
 		}
-		if err := openEditor(bin, dir); err != nil {
-			return editorFailedMsg{session: name, err: err}
-		}
-		return nil
 	}
 }
 
-// editorDirFor is the folder to open for a session, or "" when there is nothing
-// to open — no editor was found, or the panel does not know that session.
+// errIntelliJMissing 은 @mux_editor=idea 인데 런처를 못 찾았을 때다. 조용히 VS Code 로
+// 물러서지 않는다 — 그러면 설정이 먹었는지 알 길이 없다.
+var errIntelliJMissing = errors.New("idea 를 찾지 못함 (PATH, JetBrains Toolbox, snap)")
+
+// openInVSCode 는 오른쪽 클릭의 VS Code 경로다. bin 이 "" 이면 아무것도 하지 않는다.
+func openInVSCode(name, bin, dir string, focus func(string) focusResult) tea.Msg {
+	if bin == "" {
+		return nil
+	}
+	if focus != nil && editorOpenOn(name, bin, dir) && focus(dir) == focusRaised {
+		return nil
+	}
+	if err := openEditor(bin, dir); err != nil {
+		return editorFailedMsg{session: name, editor: "VS Code", err: err}
+	}
+	return nil
+}
+
+// editorSetup 은 오른쪽 클릭이 편집기를 고르고 띄우는 데 필요한 것을 묶는다.
+type editorSetup struct {
+	code, idea string                   // 런처 경로, "" 이면 없음
+	choose     func() string            // @mux_editor, nil 이면 VS Code
+	focus      func(string) focusResult // VS Code 창 올리기, nil 이면 끔
+}
+
+func (m watchModel) editorSetup() editorSetup {
+	return editorSetup{code: m.editorBin, idea: m.ideaBin, choose: m.editorChoice, focus: m.focusWindow}
+}
+
+// editorDirFor is the folder to open for a session, or "" when the panel does
+// not know that session. 편집기가 있는지는 여기서 보지 않는다 — openSessionEditor 가
+// 고른 편집기마다 따로 본다.
 //
 // ProjectDir first: types.go says why, and it is the whole reason that field
 // exists. Directory follows the active pane and is overwritten by the AI's own
@@ -1085,9 +1153,6 @@ func openSessionEditor(name, bin, dir string, focus func(string) focusResult) te
 //
 // Costs no tmux call: listFormat already carries both, so m.sessions has them.
 func (m watchModel) editorDirFor(name string) string {
-	if m.editorBin == "" {
-		return ""
-	}
 	s, ok := sessionByName(m.sessions, name)
 	if !ok {
 		return ""

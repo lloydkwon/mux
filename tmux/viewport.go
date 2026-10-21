@@ -36,6 +36,11 @@ import (
 // 에 집의 VS Code(195x55)가 겹친 세션에서 창이 54줄이 되어 ssh 화면의 위 네 줄이 잘렸다
 // (2026-10-15). VS Code 가 더 크면 아래에 ··· 줄이 남을 뿐이고, 더 작으면 KeepBottomVisible 이
 // 바닥을 붙잡는 뷰포트로 본다.
+//
+// 이 파일의 «VS Code» 는 편집기의 통합 터미널이다 — 2026-10-21 부터 JetBrains IDE(IntelliJ)의
+// 터미널도 든다(isEditorClient, 표식은 jetbrainsEnvMarker). 패널의 오른쪽 클릭이 IntelliJ 로
+// 열게 되면서 그 터미널도 한 프로젝트를 보는 편집기 창이 됐고, 패널을 그 화면에서 빼고 창을
+// 쓰는 터미널에 맞춰야 하는 이유가 VS Code 와 같다.
 const (
 	// vsFitOption marks a window whose size mux fixed, so the release path can
 	// tell "we set this" from "the user set window-size themselves".
@@ -79,7 +84,7 @@ func sessionClients(session string) (vs, other vsClient, okVS bool) {
 	if err != nil {
 		return vsClient{}, vsClient{}, false
 	}
-	return parseClients(string(out), isVSCodeClient)
+	return parseClients(string(out), isEditorClient)
 }
 
 // clientInfo is one attached client as list-clients reports it.
@@ -460,7 +465,7 @@ func KeepBottomVisible(session string) {
 	if err != nil {
 		return
 	}
-	clients := parseClientList(string(out), isVSCodeClient)
+	clients := parseClientList(string(out), isEditorClient)
 	if len(clients) == 0 {
 		return
 	}

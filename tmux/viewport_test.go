@@ -180,9 +180,9 @@ func TestPanelWidthFor(t *testing.T) {
 // VS Code 터미널(155x55)이 붙어 있고, 밖의 ssh(236x51)가 방금 들어왔다. 창은 ssh 크기,
 // 패널은 저장된 폭 57 이어야 한다.
 func TestSyncFitsTheTerminalInUse(t *testing.T) {
-	isVS := isVSCodeClient
-	t.Cleanup(func() { isVSCodeClient = isVS })
-	isVSCodeClient = func(pid int) bool { return pid == 20 }
+	isVS := isEditorClient
+	t.Cleanup(func() { isEditorClient = isVS })
+	isEditorClient = func(pid int) bool { return pid == 20 }
 
 	withMock(t, func(m *mockRunner) {
 		m.OnOutput([]byte("10 273 64 /dev/pts/0 1000\n20 155 55 /dev/pts/27 2000\n30 236 51 /dev/pts/23 3000\n"), nil,
@@ -255,9 +255,9 @@ func TestSyncMarksARightSizedUnfittedWindow(t *testing.T) {
 		m.OnOutput([]byte("%5 193 zsh\n%6 45 /bin/mux watch\n"), nil,
 			"tmux", "list-panes", "-t", "@2", "-F", "#{pane_id} #{pane_width} #{pane_start_command}")
 	}
-	origVS := isVSCodeClient
-	t.Cleanup(func() { isVSCodeClient = origVS })
-	isVSCodeClient = func(pid int) bool { return pid == 10 || pid == 11 }
+	origVS := isEditorClient
+	t.Cleanup(func() { isEditorClient = origVS })
+	isEditorClient = func(pid int) bool { return pid == 10 || pid == 11 }
 
 	// tmux 가 이미 239x56 으로 키워 둔 창 — 목표와 같다.
 	ctx := panelCtx{window: "@2", session: "water", width: 239, height: 56}

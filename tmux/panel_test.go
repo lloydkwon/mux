@@ -487,25 +487,32 @@ func TestSessionOnlyInVSCode(t *testing.T) {
 	tests := []struct {
 		name    string
 		clients string
-		vscode  map[int]bool
+		markers map[int]string // pid → 그 클라이언트 환경에 있는 편집기 표식
 		want    bool
 	}{
 		{
 			name:    "every client is VS Code",
 			clients: "16\n20\n",
-			vscode:  map[int]bool{16: true, 20: true},
+			markers: map[int]string{16: vscodeEnvMarker, 20: vscodeEnvMarker},
 			want:    true,
 		},
 		{
 			name:    "one client is a real terminal",
 			clients: "16\n27\n",
-			vscode:  map[int]bool{16: true},
+			markers: map[int]string{16: vscodeEnvMarker},
 			want:    false,
+		},
+		{
+			// IntelliJ 의 통합 터미널도 편집기다 — 패널이 필요 없는 화면이라는 점이 같다.
+			name:    "an IntelliJ terminal counts as an editor",
+			clients: "16\n30\n",
+			markers: map[int]string{16: vscodeEnvMarker, 30: jetbrainsEnvMarker},
+			want:    true,
 		},
 		{
 			name:    "nothing attached is not evidence",
 			clients: "",
-			vscode:  nil,
+			markers: nil,
 			want:    false,
 		},
 	}
@@ -516,10 +523,10 @@ func TestSessionOnlyInVSCode(t *testing.T) {
 				m.OnOutput([]byte(tc.clients), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
 				old := clientEnvHas
 				clientEnvHas = func(pid int, marker string) bool {
-					if marker != vscodeEnvMarker {
-						t.Errorf("looked for %q, want %q", marker, vscodeEnvMarker)
+					if marker != vscodeEnvMarker && marker != jetbrainsEnvMarker {
+						t.Errorf("looked for %q, want an editor marker", marker)
 					}
-					return tc.vscode[pid]
+					return tc.markers[pid] == marker
 				}
 				defer func() { clientEnvHas = old }()
 
@@ -1122,6 +1129,34 @@ func TestPanelHeaderEnabledOnError(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
 		if PanelHeaderEnabled() {
 			t.Error("an unanswered show-options turned the header on")
+		}
+	})
+}
+
+// 값은 해석하지 않고 그대로 넘긴다 — 무엇이 알려진 편집기인지는 ui 가 정하고,
+// 모르는 값을 사람에게 보고하는 것도 ui 다. 여기서는 공백만 깎는다.
+func TestEditorChoice(t *testing.T) {
+	for _, tc := range []struct{ value, want string }{
+		{"", ""},
+		{"idea", "idea"},
+		{" idea \n", "idea"},
+		{"code", "code"},
+		{"banana", "banana"},
+	} {
+		withMock(t, func(m *mockRunner) {
+			m.OnOutput([]byte(tc.value), nil, "tmux", "show-options", "-gqv", editorOption)
+			if got := EditorChoice(); got != tc.want {
+				t.Errorf("value %q: EditorChoice = %q, want %q", tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+// 답하지 않는 서버는 «설정 없음» — 오른쪽 클릭은 기본 편집기로 간다.
+func TestEditorChoiceOnError(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		if got := EditorChoice(); got != "" {
+			t.Errorf("EditorChoice = %q on an unanswered show-options, want empty", got)
 		}
 	})
 }
