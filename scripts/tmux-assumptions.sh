@@ -251,8 +251,10 @@ if command -v script >/dev/null 2>&1; then
 	ok "붙은 세션 이름이 실린다" "a" "$(printf '%s' "$CLINE" | cut -d'|' -f4)"
 	# 로케일 문자열이 아니라 유닉스 초여야 한다. 파싱에 실패하면 parseClientLine 이
 	# 그 줄을 버리므로 조용히 «유령이 하나도 없다» 가 된다.
+	# 반복 {9,} 은 쓰지 않는다 — mawk 1.3.4 는 그것을 몰라 값과 상관없이 «no» 였다
+	# (2026-10-20 이 기계의 awk 가 gawk 에서 mawk 로 바뀐 뒤 드러났다).
 	ok "client_activity 가 유닉스 초" "yes" \
-		"$(printf '%s' "$CLINE" | awk -F'|' '{print ($5 ~ /^[0-9]{9,}$/) ? "yes" : "no"}')"
+		"$(printf '%s' "$CLINE" | awk -F'|' '{print ($5 ~ /^[0-9]+$/ && length($5) >= 9) ? "yes" : "no"}')"
 	ok "그리고 최근이다 (10분 안)" "yes" \
 		"$(printf '%s' "$CLINE" | awk -F'|' -v n="$(date +%s)" \
 			'{print (n - $5 < 600) ? "yes" : "no"}')"
