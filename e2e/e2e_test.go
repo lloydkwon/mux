@@ -265,6 +265,20 @@ type client struct {
 
 func attach(t *testing.T, session string, cols, rows int, vscode bool) *client {
 	t.Helper()
+	marker := "WT_SESSION=e2e-fake-wt"
+	if vscode {
+		marker = "TERM_PROGRAM=vscode"
+	}
+	return attachAs(t, session, cols, rows, marker)
+}
+
+// IntelliJ 의 통합 터미널이 남기는 표식(tmux.jetbrainsEnvMarker). mux 는 이것을 VS Code
+// 터미널과 같은 편집기 클라이언트로 본다.
+const jetbrainsMarker = "TERMINAL_EMULATOR=JetBrains-JediTerm"
+
+// attachAs 는 attach 와 같되 클라이언트 환경의 표식(marker)을 직접 고른다.
+func attachAs(t *testing.T, session string, cols, rows int, marker string) *client {
+	t.Helper()
 	size := fmt.Sprintf("%dx%d", cols, rows)
 	// script(1) runs the command through $SHELL -c. Under zsh a bare `=name`
 	// is the equals expansion and "name not found" goes to the pty, never to
@@ -275,16 +289,13 @@ func attach(t *testing.T, session string, cols, rows int, vscode bool) *client {
 	env := []string{"TERM=xterm-256color", "SHELL=/bin/sh"}
 	for _, kv := range os.Environ() {
 		if strings.HasPrefix(kv, "TERM_PROGRAM=") || strings.HasPrefix(kv, "WT_SESSION=") ||
+			strings.HasPrefix(kv, "TERMINAL_EMULATOR=") ||
 			strings.HasPrefix(kv, "TERM=") || strings.HasPrefix(kv, "TMUX=") || strings.HasPrefix(kv, "SHELL=") {
 			continue
 		}
 		env = append(env, kv)
 	}
-	if vscode {
-		env = append(env, "TERM_PROGRAM=vscode")
-	} else {
-		env = append(env, "WT_SESSION=e2e-fake-wt")
-	}
+	env = append(env, marker)
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
@@ -408,6 +419,11 @@ func TestVSCodeClientNeverSeesPanel(t *testing.T) {
 
 // 2. 창은 Windows Terminal 보다 커지지 않는다. 커지면 WT 도 뷰포트를 얻고, Claude 가 커서를
 // 숨기는 순간 왼쪽 위로 튀어 입력창이 사라진다(실측: 패널 107 + VS Code 174 = 282 > WT 269).
+//
+// 패널은 저장 폭 그대로다(창의 반이 상한). 예전에는 VS Code 화면을 피하려고 99(= 220 − 120 − 1)
+// 로 줄였는데, 그러면 «패널은 어디서나 한 폭»이 세션마다 다른 폭이 됐다. 2026-10-19 사용자
+// 결정으로 폭이 이긴다 — VS Code 오른쪽 끝에 패널 일부가 보이는 것이 대가다(aee4d94). 이
+// 시나리오는 그 결정 뒤에도 99 를 기대한 채 남아 있다가 10-21 에 실패로 드러났다.
 func TestWindowNeverOutgrowsWT(t *testing.T) {
 	savePanelWidth(t, 107) // 오염됐던 값 그대로 — 그래도 창은 WT 안에 있어야 한다
 	newSession(t, "e2e-cap")
@@ -416,15 +432,15 @@ func TestWindowNeverOutgrowsWT(t *testing.T) {
 
 	// 정착까지 기다린다 — 붙은 직후엔 패널이 먼저 열리고 fit 이 뒤따른다.
 	w := eventuallyWindow(t, "e2e-cap", "창이 WT 크기로 고정·정착", 8*time.Second, func(w window) bool {
-		return w.fit == "1" && w.width == 220 && w.height == 49 && w.work >= 120
+		return w.fit == "1" && w.width == 220 && w.height == 49 && w.panel == 107
 	})
-	if w.panel != 99 {
-		t.Errorf("패널 %d칸, want 99 (= 220 − 120 − 1: WT 안에 들어가는 최대)", w.panel)
-	}
-	// 그리고 그대로 머문다 — 패널 프로세스가 자기 폭으로 되돌리려 하면 여기서 어긋난다.
+	// 그리고 그대로 머문다 — 두 주인이 다투면 여기서 어긋난다.
 	time.Sleep(4 * time.Second)
-	if w2 := readWindow(t, "e2e-cap"); w2.width != 220 || w2.work < 120 || w2.panel != 99 {
-		t.Errorf("4초 뒤 창 %dx%d 작업 %d 패널 %d — 정착 상태가 흔들린다", w2.width, w2.height, w2.work, w2.panel)
+	if w2 := readWindow(t, "e2e-cap"); w2.width != 220 || w2.height != 49 || w2.panel != w.panel {
+		t.Errorf("4초 뒤 창 %dx%d 패널 %d — 정착 상태가 흔들린다", w2.width, w2.height, w2.panel)
+	}
+	if s := savedPanelWidth(t); s != 107 {
+		t.Errorf("저장 폭 %d, want 107 — fit 의 고정을 드래그로 저장했다", s)
 	}
 }
 
@@ -633,6 +649,120 @@ func TestSavedPanelWidthSurvivesFit(t *testing.T) {
 
 	if got := savedPanelWidth(t); got != 60 {
 		t.Errorf("저장된 패널 폭 %d, want 60 — fit 의 비례 배분을 드래그로 오인했다", got)
+	}
+}
+
+// panelPane 은 창의 패널 pane id 다. 없으면 테스트를 멈춘다.
+func panelPane(t *testing.T, windowID string) string {
+	t.Helper()
+	out := tm(t, "list-panes", "-t", windowID, "-F", "#{pane_id} #{pane_start_command}")
+	for _, line := range strings.Split(out, "\n") {
+		if id, cmd, ok := strings.Cut(line, " "); ok && strings.Contains(cmd, "mux watch") {
+			return id
+		}
+	}
+	t.Fatalf("패널 pane 을 못 찾았다:\n%s", out)
+	return ""
+}
+
+// 6b. 맞춤 창에서 드래그한 폭도 «패널은 어디서나 한 폭»이다 — 저장되고, 다른 세션의 패널이
+// 따라가고, 훅이 돌아도 되돌아가지 않는다. 2026-10-21 실측: IntelliJ 터미널이 붙어 맞춤 창이 된
+// my-mux 에서 드래그하자 panel.json 이 쓰이지 않았고(14:48 이후 그대로), 다른 세션은 그대로,
+// my-mux 는 다음 훅에 72 로 돌아갔다. 맞춤 창의 패널이 폭에서 손을 떼던 예외 때문이다.
+func TestDragInFittedWindowReachesEveryPanel(t *testing.T) {
+	savePanelWidth(t, 60)
+	newSession(t, "e2e-drag-a")
+	newSession(t, "e2e-drag-b")
+	attach(t, "e2e-drag-b", 200, 45, false)
+	eventuallyWindow(t, "e2e-drag-b", "B 정착", 8*time.Second, func(w window) bool {
+		return w.width == 200 && w.panel == 60
+	})
+	time.Sleep(time.Second) // TestTerminalVisitFitsAnUnfittedSession 이 피하는 붙기 경합을 피한다
+	attachAs(t, "e2e-drag-a", 150, 30, jetbrainsMarker)
+	attach(t, "e2e-drag-a", 220, 50, false)
+	a := eventuallyWindow(t, "e2e-drag-a", "A 맞춤·정착", 8*time.Second, func(w window) bool {
+		return w.fit == "1" && w.width == 220 && w.panel == 60
+	})
+
+	tm(t, "resize-pane", "-t", panelPane(t, a.id), "-x", "80") // 창 폭은 그대로 — 테두리 드래그와 같다
+
+	eventually(t, "드래그가 저장됨", 6*time.Second, func() bool { return savedPanelWidth(t) == 80 })
+	eventuallyWindow(t, "e2e-drag-b", "다른 세션의 패널이 따라감", 6*time.Second, func(w window) bool {
+		return w.panel == 80
+	})
+	if w := readWindow(t, "e2e-drag-a"); w.panel != 80 {
+		t.Errorf("드래그한 창의 패널 %d, want 80", w.panel)
+	}
+	panelAuto(t, "e2e-drag-a") // 훅이 돌아도
+	if w := readWindow(t, "e2e-drag-a"); w.panel != 80 || w.fit != "1" {
+		t.Errorf("훅 뒤 패널 %d fit=%q, want 80 그대로", w.panel, w.fit)
+	}
+}
+
+// 6c. 보통 창에서 드래그한 폭을 맞춤 창의 패널도 훅 없이 따라간다. VS Code 만 붙은 창은 창 폭이
+// 패널 폭에 달려 있으므로(VS Code + 1 + 패널) 창까지 다시 맞춰져, VS Code 는 여전히 패널을 보지
+// 않는다.
+func TestDragInPlainWindowReachesFittedPanel(t *testing.T) {
+	savePanelWidth(t, 60)
+	newSession(t, "e2e-fol-p")
+	newSession(t, "e2e-fol-f")
+	newSession(t, "e2e-fol-v")
+	attach(t, "e2e-fol-p", 210, 48, false)
+	p := eventuallyWindow(t, "e2e-fol-p", "보통 창 정착", 8*time.Second, func(w window) bool {
+		return w.width == 210 && w.panel == 60
+	})
+	time.Sleep(time.Second)
+	attachAs(t, "e2e-fol-f", 160, 40, jetbrainsMarker)
+	attach(t, "e2e-fol-f", 230, 52, false)
+	eventuallyWindow(t, "e2e-fol-f", "터미널 있는 맞춤 창 정착", 8*time.Second, func(w window) bool {
+		return w.fit == "1" && w.width == 230 && w.panel == 60
+	})
+	time.Sleep(time.Second)
+	attach(t, "e2e-fol-v", 120, 24, true)
+	eventuallyWindow(t, "e2e-fol-v", "VS Code 만 붙은 맞춤 창 정착", 8*time.Second, func(w window) bool {
+		return w.fit == "1" && w.panel == 60 && w.work == 120
+	})
+
+	tm(t, "resize-pane", "-t", panelPane(t, p.id), "-x", "80")
+	eventually(t, "드래그가 저장됨", 6*time.Second, func() bool { return savedPanelWidth(t) == 80 })
+
+	// 여기서부터 훅은 부르지 않는다 — 패널 스스로 따라가야 한다.
+	eventuallyWindow(t, "e2e-fol-f", "맞춤 창의 패널이 따라감", 6*time.Second, func(w window) bool {
+		return w.panel == 80 && w.width == 230
+	})
+	v := eventuallyWindow(t, "e2e-fol-v", "VS Code 창도 새 폭으로 다시 맞춤", 6*time.Second, func(w window) bool {
+		return w.panel == 80 && w.work == 120
+	})
+	if v.width != 120+1+80 || v.panelLeft < 121 {
+		t.Errorf("VS Code 창 %d칸, 패널이 %d열에서 시작 — want 201칸, 121열 이후", v.width, v.panelLeft)
+	}
+}
+
+// 6d. 마우스 드래그는 한 번이 아니라 여러 번의 크기 변화로 온다. 맞춤 창에서 그때마다 fit 을
+// 다시 돌리면 끌고 있는 테두리를 지난 폭으로 당긴다(코드 검토, 2026-10-22). 여러 단계로 끌어도
+// 마지막 폭이 남고 저장되며, VS Code 만 붙은 창은 그 뒤 새 폭으로 다시 맞춰 작업 pane 이 VS Code
+// 폭 그대로여야 한다.
+func TestStepwiseDragInVSCodeOnlyWindow(t *testing.T) {
+	savePanelWidth(t, 60)
+	newSession(t, "e2e-step")
+	attach(t, "e2e-step", 130, 30, true)
+	w := eventuallyWindow(t, "e2e-step", "VS Code 만 붙은 맞춤 창 정착", 8*time.Second, func(w window) bool {
+		return w.fit == "1" && w.panel == 60 && w.work == 130
+	})
+	panel := panelPane(t, w.id)
+	for width := 62; width <= 76; width += 2 {
+		tm(t, "resize-pane", "-t", panel, "-x", strconv.Itoa(width))
+		time.Sleep(120 * time.Millisecond)
+	}
+	if got := readWindow(t, "e2e-step"); got.panel != 76 {
+		t.Errorf("끄는 동안 패널이 %d 로 당겨졌다, want 76", got.panel)
+	}
+	eventually(t, "드래그가 저장됨", 6*time.Second, func() bool { return savedPanelWidth(t) == 76 })
+	got := eventuallyWindow(t, "e2e-step", "새 폭으로 다시 맞춤", 6*time.Second, func(w window) bool {
+		return w.panel == 76 && w.work == 130 && w.width == 130+1+76
+	})
+	if got.panelLeft < 131 {
+		t.Errorf("패널이 %d열에서 시작 — VS Code(130칸) 화면 안이다", got.panelLeft)
 	}
 }
 

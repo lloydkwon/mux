@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -355,7 +356,7 @@ func TestWatchHoldsWidthAgainstRelayout(t *testing.T) {
 	//
 	// Window unchanged, pane changed: a border drag. Adopt and remember it.
 	m.winWidth, m.targetWidth, m.winPanes = 250, 40, 2
-	dragged, cmd := m.applyResizeWith(60, 250, 2, false)
+	dragged, cmd := m.applyResizeWith(60, 250, 2, false, 0)
 	if cmd == nil {
 		t.Error("a drag did not schedule a save")
 	}
@@ -364,7 +365,7 @@ func TestWatchHoldsWidthAgainstRelayout(t *testing.T) {
 	}
 
 	// Window changed and the pane drifted: tmux re-laid it out, so undo it.
-	relaid, cmd := dragged.applyResizeWith(66, 300, 2, false)
+	relaid, cmd := dragged.applyResizeWith(66, 300, 2, false, 0)
 	if cmd == nil {
 		t.Error("a re-layout was not corrected")
 	}
@@ -376,7 +377,7 @@ func TestWatchHoldsWidthAgainstRelayout(t *testing.T) {
 	}
 
 	// The correction lands: same window, pane back on target, nothing to undo.
-	settled, _ := relaid.applyResizeWith(60, 300, 2, false)
+	settled, _ := relaid.applyResizeWith(60, 300, 2, false, 0)
 	if settled.targetWidth != 60 {
 		t.Errorf("target = %d once settled, want 60", settled.targetWidth)
 	}
@@ -388,7 +389,7 @@ func TestWatchWidthIgnoresSqueeze(t *testing.T) {
 	m := watchTestModel(40, 20)
 	m.winWidth, m.targetWidth, m.winPanes = 150, 60, 2
 
-	squeezed, _ := m.applyResizeWith(1, 150, 2, false) // same window: would read as a drag
+	squeezed, _ := m.applyResizeWith(1, 150, 2, false, 0) // same window: would read as a drag
 	if squeezed.targetWidth != 60 {
 		t.Errorf("target = %d, want the squeeze rejected and 60 kept", squeezed.targetWidth)
 	}
@@ -410,7 +411,7 @@ func quits(cmd tea.Cmd) bool {
 func TestWatchQuitsWhenWindowGetsNarrow(t *testing.T) {
 	// Opened by hand in a 54-column window: stays.
 	m := watchTestModel(40, 20)
-	narrowFirst, cmd := m.applyResizeWith(40, 54, 2, false)
+	narrowFirst, cmd := m.applyResizeWith(40, 54, 2, false, 0)
 	if quits(cmd) {
 		t.Error("quit on the first size — a hand-opened panel should stay")
 	}
@@ -424,17 +425,17 @@ func TestWatchQuitsWhenWindowGetsNarrow(t *testing.T) {
 	// switch.
 	wide := watchTestModel(48, 20)
 	wide.winWidth, wide.targetWidth, wide.winPanes = 269, 48, 2
-	once, cmd := wide.applyResizeWith(48, 54, 2, false)
+	once, cmd := wide.applyResizeWith(48, 54, 2, false, 0)
 	if quits(cmd) {
 		t.Error("quit on a single narrow reading")
 	}
-	if _, cmd := once.applyResizeWith(48, 54, 2, false); !quits(cmd) {
+	if _, cmd := once.applyResizeWith(48, 54, 2, false, 0); !quits(cmd) {
 		t.Error("did not quit after the window stayed narrow")
 	}
 
 	// Still wide enough: hold the width as before, do not leave. Expressed
 	// against the bar itself so it follows when the threshold moves.
-	if _, cmd := wide.applyResizeWith(52, wide.minWidth(), 2, false); quits(cmd) {
+	if _, cmd := wide.applyResizeWith(52, wide.minWidth(), 2, false, 0); quits(cmd) {
 		t.Error("quit on a window that is exactly the minimum")
 	}
 }
@@ -454,14 +455,14 @@ func TestWatchMinWidthFallsBackToTheDefault(t *testing.T) {
 	m := watchTestModel(48, 20)
 	m.minWindowWidth = 96
 	m.winWidth, m.targetWidth, m.winPanes = 269, 48, 2
-	if _, cmd := m.applyResizeWith(48, 100, 2, false); quits(cmd) {
+	if _, cmd := m.applyResizeWith(48, 100, 2, false, 0); quits(cmd) {
 		t.Error("quit at 100 columns with the bar set to 96")
 	}
-	narrow, cmd := m.applyResizeWith(48, 90, 2, false)
+	narrow, cmd := m.applyResizeWith(48, 90, 2, false, 0)
 	if quits(cmd) {
 		t.Error("quit on a single reading at 90 columns")
 	}
-	if _, cmd := narrow.applyResizeWith(48, 90, 2, false); !quits(cmd) {
+	if _, cmd := narrow.applyResizeWith(48, 90, 2, false, 0); !quits(cmd) {
 		t.Error("did not quit at 90 columns with the bar set to 96")
 	}
 }
@@ -566,7 +567,7 @@ func TestWatchWidthRejectsRunawayGrowth(t *testing.T) {
 	m := watchTestModel(48, 20)
 	m.winWidth, m.targetWidth, m.winPanes = 237, 48, 2
 
-	grown, cmd := m.applyResizeWith(188, 237, 2, false)
+	grown, cmd := m.applyResizeWith(188, 237, 2, false, 0)
 	if grown.targetWidth != 48 {
 		t.Errorf("target = %d, want the runaway rejected and 48 kept", grown.targetWidth)
 	}
@@ -576,13 +577,13 @@ func TestWatchWidthRejectsRunawayGrowth(t *testing.T) {
 
 	// Exactly half is still the user's to take — the ceiling is a limit, not a
 	// margin below it.
-	half, _ := m.applyResizeWith(118, 237, 2, false)
+	half, _ := m.applyResizeWith(118, 237, 2, false, 0)
 	if half.targetWidth != 118 {
 		t.Errorf("target = %d, want half the window adopted", half.targetWidth)
 	}
 
 	// One column over is not.
-	over, _ := m.applyResizeWith(119, 237, 2, false)
+	over, _ := m.applyResizeWith(119, 237, 2, false, 0)
 	if over.targetWidth != 48 {
 		t.Errorf("target = %d, want a width past half rejected", over.targetWidth)
 	}
@@ -593,7 +594,7 @@ func TestWatchWidthRejectsRunawayGrowth(t *testing.T) {
 func TestWatchWidthCorrectsAnOversizeFirstSize(t *testing.T) {
 	m := watchTestModel(188, 20)
 
-	corrected, cmd := m.applyResizeWith(188, 237, 2, false)
+	corrected, cmd := m.applyResizeWith(188, 237, 2, false, 0)
 	if corrected.targetWidth != 118 {
 		t.Errorf("target = %d, want it clamped to half the window", corrected.targetWidth)
 	}
@@ -602,7 +603,7 @@ func TestWatchWidthCorrectsAnOversizeFirstSize(t *testing.T) {
 	}
 
 	// An ordinary first size is still adopted as-is.
-	normal, cmd := watchTestModel(48, 20).applyResizeWith(48, 237, 2, false)
+	normal, cmd := watchTestModel(48, 20).applyResizeWith(48, 237, 2, false, 0)
 	if normal.targetWidth != 48 {
 		t.Errorf("target = %d, want the opening width adopted", normal.targetWidth)
 	}
@@ -617,7 +618,7 @@ func TestWatchWidthStillIgnoresSqueezeWithCeiling(t *testing.T) {
 	m := watchTestModel(48, 20)
 	m.winWidth, m.targetWidth, m.winPanes = 237, 48, 2
 
-	squeezed, cmd := m.applyResizeWith(1, 237, 2, false)
+	squeezed, cmd := m.applyResizeWith(1, 237, 2, false, 0)
 	if squeezed.targetWidth != 48 {
 		t.Errorf("target = %d, want the squeeze rejected", squeezed.targetWidth)
 	}
@@ -636,15 +637,15 @@ func TestWatchNeedsTwoNarrowReadingsInARow(t *testing.T) {
 	m.winWidth, m.targetWidth, m.winPanes = 269, 48, 2
 
 	// Narrow, then wide again: the tally resets and the panel stays.
-	narrow, cmd := m.applyResizeWith(48, 54, 2, false)
+	narrow, cmd := m.applyResizeWith(48, 54, 2, false, 0)
 	if quits(cmd) {
 		t.Fatal("quit on the first narrow reading")
 	}
-	recovered, cmd := narrow.applyResizeWith(48, 269, 2, false)
+	recovered, cmd := narrow.applyResizeWith(48, 269, 2, false, 0)
 	if quits(cmd) {
 		t.Fatal("quit on a wide reading")
 	}
-	if _, cmd := recovered.applyResizeWith(48, 54, 2, false); quits(cmd) {
+	if _, cmd := recovered.applyResizeWith(48, 54, 2, false, 0); quits(cmd) {
 		t.Error("a wide reading did not clear the count — one narrow reading quit again")
 	}
 }
@@ -655,11 +656,11 @@ func TestWatchIgnoresANonWidth(t *testing.T) {
 	m := watchTestModel(48, 20)
 	m.winWidth, m.targetWidth, m.winPanes = 269, 48, 2
 
-	zeroed, cmd := m.applyResizeWith(48, 0, 2, false)
+	zeroed, cmd := m.applyResizeWith(48, 0, 2, false, 0)
 	if quits(cmd) {
 		t.Fatal("quit on a zero width")
 	}
-	if _, cmd := zeroed.applyResizeWith(48, 0, 2, false); quits(cmd) {
+	if _, cmd := zeroed.applyResizeWith(48, 0, 2, false, 0); quits(cmd) {
 		t.Error("two zero widths quit — a non-width must not count toward leaving")
 	}
 }
@@ -796,7 +797,7 @@ func TestWatchWidthRejectsAWidthHandedOverByAClosingPane(t *testing.T) {
 	m := watchTestModel(36, 20)
 	m.winWidth, m.targetWidth, m.winPanes = 237, 36, 3
 
-	grown, cmd := m.applyResizeWith(118, 237, 2, false) // a pane went away
+	grown, cmd := m.applyResizeWith(118, 237, 2, false, 0) // a pane went away
 	if grown.targetWidth != 36 {
 		t.Errorf("target = %d, want 36 kept — the columns were tmux's doing", grown.targetWidth)
 	}
@@ -813,7 +814,7 @@ func TestWatchWidthIgnoresAResizeFromASplit(t *testing.T) {
 	m := watchTestModel(36, 20)
 	m.winWidth, m.targetWidth, m.winPanes = 237, 36, 2
 
-	split, cmd := m.applyResizeWith(60, 237, 3, false)
+	split, cmd := m.applyResizeWith(60, 237, 3, false, 0)
 	if split.targetWidth != 36 {
 		t.Errorf("target = %d, want the split ignored", split.targetWidth)
 	}
@@ -829,7 +830,7 @@ func TestWatchWidthStillAcceptsADragAtTheSamePaneCount(t *testing.T) {
 	m := watchTestModel(36, 20)
 	m.winWidth, m.targetWidth, m.winPanes = 237, 36, 2
 
-	dragged, cmd := m.applyResizeWith(118, 237, 2, false)
+	dragged, cmd := m.applyResizeWith(118, 237, 2, false, 0)
 	if dragged.targetWidth != 118 {
 		t.Errorf("target = %d, want the drag adopted", dragged.targetWidth)
 	}
@@ -886,7 +887,7 @@ func TestAdoptSavedWidthClampsWithoutWritingBack(t *testing.T) {
 
 	// 그 리사이즈가 돌아오면 "같은 창, 다른 pane" 이라 드래그 분기로 들어간다.
 	// 우리가 맞춘 폭 그대로이므로 기억할 것이 없어야 한다.
-	settled, cmd := clamped.applyResizeWith(45, 90, 2, false)
+	settled, cmd := clamped.applyResizeWith(45, 90, 2, false, 0)
 	if cmd != nil {
 		t.Error("landing on the width we asked for was remembered as a drag")
 	}
@@ -976,7 +977,7 @@ func TestFirstSizeClampDoesNotWriteBack(t *testing.T) {
 
 	// 149칸 창에 100칸으로 열렸다 — 천장은 74.
 	m := watchModel{}
-	clamped, cmd := m.applyResizeWith(100, 149, 2, false)
+	clamped, cmd := m.applyResizeWith(100, 149, 2, false, 0)
 	if clamped.targetWidth != 74 {
 		t.Errorf("target = %d, want the ceiling 74", clamped.targetWidth)
 	}
@@ -1190,28 +1191,154 @@ func TestWatchReanchorsWhenASecondClientArrives(t *testing.T) {
 	}
 }
 
-// A fitted window is one mux grew to hide the panel from a VS Code client, and
-// tmux hands the new columns out proportionally — which looks exactly like the
-// user dragging the border. Remembering that width fed the next fit, which
-// grew the window further: 60 → 107 in one afternoon, until every fitted window
-// was wider than Windows Terminal. In a fitted window the width is the fit's.
-func TestWatchFittedWindowWidthIsNotADrag(t *testing.T) {
-	m := watchTestModel(60, 20)
-	m.winWidth, m.winPanes, m.targetWidth = 269, 2, 60
+// withRefit replaces the fit sweep and records the widths it was asked for.
+func withRefit(t *testing.T) *[]int {
+	t.Helper()
+	var got []int
+	prev := refitOwnWindow
+	refitOwnWindow = func(w int) { got = append(got, w) }
+	t.Cleanup(func() { refitOwnWindow = prev })
+	return &got
+}
 
-	// Same window width, wider pane: a drag in an ordinary window …
-	got, cmd := m.applyResizeWith(107, 269, 2, false)
-	if got.targetWidth != 107 || cmd == nil {
-		t.Fatalf("plain window: target %d, want the drag adopted (107) and remembered", got.targetWidth)
+// runCmds executes cmd and every command a tea.Batch carries.
+func runCmds(cmd tea.Cmd) {
+	if cmd == nil {
+		return
 	}
-	// … and none of this panel's business in a fitted one: the fit owns the
-	// width and will pin it on the next hook. No remembering, no restoring.
-	got, cmd = m.applyResizeWith(107, 269, 2, true)
-	if got.targetWidth != 60 {
-		t.Errorf("fitted window: target %d, want 60 held", got.targetWidth)
+	if batch, ok := cmd().(tea.BatchMsg); ok {
+		for _, c := range batch {
+			runCmds(c)
+		}
 	}
-	if cmd != nil {
-		t.Error("fitted window: the panel touched the width, want it left to the fit")
+}
+
+// 맞춤 창(VS Code·IntelliJ 터미널이 붙은 창)에서도 «패널은 어디서나 한 폭»이다. 예전에는
+// 맞춤 창의 패널이 폭에서 손을 떼서, 드래그가 저장되지 않고 다음 훅에 되돌아갔다
+// (2026-10-21, IntelliJ 가 붙은 my-mux). 손을 떼던 이유 — fit 이 패널을 따로 줄이던 것 —
+// 는 10-19 에 사라졌다. 남은 위험은 fit 의 고정과 비례 배분을 드래그로 오해하는 것이라
+// 그 둘을 같이 못 박는다.
+func TestWatchFittedWindowFollowsTheOneWidth(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		saved, target         int
+		prevWin               int // 이전 읽기의 창 폭, 0 이면 269
+		pane, win, panes      int
+		wantTarget, wantSaved int
+		wantRefit             []int
+	}{
+		// 드래그 이벤트마다 맞추면 끄는 중인 테두리를 당긴다 — 저장만 하고, 맞추기는 다음 틱.
+		{name: "드래그는 저장만 한다", saved: 60, target: 60,
+			pane: 80, win: 269, panes: 2, wantTarget: 80, wantSaved: 80},
+		{name: "fit 의 고정은 드래그가 아니다", saved: 60, target: 52,
+			pane: 60, win: 269, panes: 2, wantTarget: 60, wantSaved: 60},
+		{name: "창의 반에 깎인 고정도 드래그가 아니다", saved: 72, target: 72, prevWin: 130,
+			pane: 65, win: 130, panes: 2, wantTarget: 65, wantSaved: 72},
+		{name: "창 폭이 바뀐 비례 배분은 기록만", saved: 60, target: 60,
+			pane: 107, win: 300, panes: 2, wantTarget: 60, wantSaved: 60},
+		{name: "창의 반을 넘으면 fit 으로 되돌린다", saved: 60, target: 60,
+			pane: 164, win: 269, panes: 2, wantTarget: 60, wantSaved: 60, wantRefit: []int{60}},
+		{name: "옆 pane 이 죽어 넓어지면 fit 으로 되돌린다", saved: 60, target: 60,
+			pane: 100, win: 269, panes: 3, wantTarget: 60, wantSaved: 60, wantRefit: []int{60}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			if err := tmux.SavePanelWidth(tc.saved); err != nil {
+				t.Fatal(err)
+			}
+			refits := withRefit(t)
+			m := watchTestModel(60, 20)
+			m.winWidth, m.winPanes, m.targetWidth = 269, 2, tc.target
+			if tc.prevWin > 0 {
+				m.winWidth = tc.prevWin
+			}
+
+			got, cmd := m.applyResizeWith(tc.pane, tc.win, tc.panes, true, tc.saved)
+			runCmds(cmd)
+
+			if got.targetWidth != tc.wantTarget {
+				t.Errorf("target %d, want %d", got.targetWidth, tc.wantTarget)
+			}
+			if s := tmux.SavedPanelWidth(); s != tc.wantSaved {
+				t.Errorf("saved %d, want %d", s, tc.wantSaved)
+			}
+			if fmt.Sprint(*refits) != fmt.Sprint(tc.wantRefit) {
+				t.Errorf("refit %v, want %v", *refits, tc.wantRefit)
+			}
+		})
+	}
+}
+
+// 맞춤 창에서 드래그한 뒤 첫 틱에 자기 창을 그 폭으로 다시 맞춘다 — VS Code 만 붙은 창은 창 폭이
+// 패널 폭에 달려 있어서, 이게 없으면 작업 pane 이 VS Code 보다 좁은 채 남는다.
+func TestFittedDragRefitsOnTheNextTick(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := tmux.SavePanelWidth(60); err != nil {
+		t.Fatal(err)
+	}
+	refits := withRefit(t)
+	m := watchTestModel(60, 20)
+	m.winWidth, m.winPanes, m.targetWidth, m.fitted = 269, 2, 60, true
+
+	dragged, cmd := m.applyResizeWith(80, 269, 2, true, 60)
+	runCmds(cmd)
+	if len(*refits) != 0 || !dragged.refitPending {
+		t.Fatalf("refit %v pending=%v, want nothing yet and a pending refit", *refits, dragged.refitPending)
+	}
+	ticked, cmd := dragged.adoptSavedWidthWith(tmux.SavedPanelWidth(), 269)
+	runCmds(cmd)
+	if fmt.Sprint(*refits) != "[80]" || ticked.refitPending {
+		t.Errorf("refit %v pending=%v, want [80] once", *refits, ticked.refitPending)
+	}
+	if _, cmd := ticked.adoptSavedWidthWith(tmux.SavedPanelWidth(), 269); cmd != nil {
+		t.Error("the tick after kept refitting")
+	}
+}
+
+// m.fitted 는 resize 이벤트 때 읽은 값이라, 크기 변화 없이 맞춤 창이 된 창에서는 낡는다. 틱이
+// 따라갈 폭이 생겼을 때 probeFitted 로 다시 묻고, 맞춤 창이면 resize-pane 이 아니라 fit 으로 간다.
+func TestAdoptSavedWidthReprobesFitted(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := tmux.SavePanelWidth(80); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRunner{}
+	withFakeTmux(t, f)
+	refits := withRefit(t)
+
+	m := watchModel{winWidth: 269, winPanes: 2, targetWidth: 60, probeFitted: func() bool { return true }}
+	got, cmd := m.adoptSavedWidth()
+	runCmds(cmd)
+	if !got.fitted || fmt.Sprint(*refits) != "[80]" {
+		t.Errorf("fitted=%v refit=%v, want the probe believed and [80]", got.fitted, *refits)
+	}
+	for _, r := range f.runs {
+		if strings.Contains(r, "resize-pane") {
+			t.Errorf("resized the pane itself in a fitted window: %v", f.runs)
+		}
+	}
+}
+
+// 맞춤 창의 패널도 다른 곳에서 드래그한 폭을 따라간다. 다만 resize-pane 이 아니라 fit 을 다시
+// 돌려서다 — VS Code 만 붙은 창은 창 폭이 패널 폭에 달려 있다.
+func TestAdoptSavedWidthInAFittedWindowRefits(t *testing.T) {
+	f := &fakeRunner{}
+	withFakeTmux(t, f)
+	refits := withRefit(t)
+
+	m := watchModel{winWidth: 269, winPanes: 2, targetWidth: 60, fitted: true}
+	got, cmd := m.adoptSavedWidthWith(80, 269)
+	runCmds(cmd)
+	if got.targetWidth != 80 {
+		t.Errorf("target %d, want 80", got.targetWidth)
+	}
+	if fmt.Sprint(*refits) != "[80]" {
+		t.Errorf("refit %v, want [80]", *refits)
+	}
+	for _, r := range f.runs {
+		if strings.Contains(r, "resize-pane") {
+			t.Errorf("a fitted window's panel resized itself: %v", f.runs)
+		}
 	}
 }
 

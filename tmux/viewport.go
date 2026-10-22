@@ -409,8 +409,32 @@ func releaseWindowFit(window string) {
 // One list-windows for the sweep. Windows tmux never fixed are skipped without
 // a second call, so the usual case costs exactly that one.
 func SyncFittedWindows(panelWidth int) {
-	out, err := runner.Output("tmux", "list-windows", "-a", "-F",
-		"#{window_id} #{session_name} #{"+vsFitOption+"} #{window_width} #{window_height}")
+	out, err := runner.Output("tmux", "list-windows", "-a", "-F", fittedWindowFormat)
+	if err != nil {
+		return
+	}
+	for _, ctx := range parseFittedWindows(string(out)) {
+		syncVSCodeViewport(ctx, panelWidth)
+	}
+}
+
+// fittedWindowFormat is one window's line for parseFittedWindows.
+const fittedWindowFormat = "#{window_id} #{session_name} #{" + vsFitOption + "} #{window_width} #{window_height}"
+
+// SyncFittedWindowOf re-runs the fit on the one window pane is in, when mux
+// fixed it. It is the panel's hand on its own fitted window (ui/watch.go): a
+// panel correcting its width after a drag elsewhere, or after a pane came or
+// went beside it. Only its own window — the others have panels of their own,
+// and sweeping them all from every panel would reach into a window whose
+// border the user is dragging at that moment.
+//
+// An empty pane is refused: display-message without -t answers for the active
+// pane, which is the user's, not the panel's.
+func SyncFittedWindowOf(pane string, panelWidth int) {
+	if pane == "" {
+		return
+	}
+	out, err := runner.Output("tmux", "display-message", "-p", "-t", pane, fittedWindowFormat)
 	if err != nil {
 		return
 	}
@@ -519,11 +543,11 @@ func viewportAction(cursorFlag string) (pin, track bool) {
 }
 
 // WindowFitted reports whether mux fixed this window's size (see
-// syncVSCodeViewport). The panel asks before treating a width change as the
-// user dragging its border: growing a fitted window hands the new columns out
-// proportionally, and that widening looked exactly like a drag — measured as
-// the saved panel width creeping from 60 to 107 in one afternoon, which then
-// pushed every fitted window past Windows Terminal's width.
+// syncVSCodeViewport). The panel asks so that it corrects its width through the
+// fit rather than resize-pane — a VS Code-only window's width is derived from
+// the panel's — and so that the fit's own pin is not read as a drag
+// (ui/watch.go applyFittedResize). It once made the panel stand down entirely,
+// which left drags in fitted windows unsaved (2026-10-21).
 func WindowFitted(target string) bool {
 	args := []string{"show-options", "-wqv"}
 	if target != "" {

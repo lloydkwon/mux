@@ -299,3 +299,33 @@ func TestSyncMarksARightSizedUnfittedWindow(t *testing.T) {
 		})
 	})
 }
+
+// 패널이 자기 창 하나만 다시 맞춘다. 다른 맞춤 창은 그 창의 패널이 맡는다 — 전부 훑으면 사용자가
+// 지금 끌고 있는 창의 테두리까지 건드린다. 빈 pane 은 거절한다: -t 없는 display-message 는 활성
+// pane(사용자가 일하는 곳)을 가리킨다.
+func TestSyncFittedWindowOf(t *testing.T) {
+	isVS := isEditorClient
+	t.Cleanup(func() { isEditorClient = isVS })
+	isEditorClient = func(pid int) bool { return pid == 20 }
+
+	withMock(t, func(m *mockRunner) {
+		m.OnOutput([]byte("@8 my-computer 1 236 50\n"), nil, "tmux", "display-message", "-p", "-t", "%14", fittedWindowFormat)
+		m.OnOutput([]byte("20 155 55 /dev/pts/27 1000\n30 236 51 /dev/pts/23 3000\n"), nil,
+			"tmux", "list-clients", "-t", "=my-computer", "-F",
+			"#{client_pid} #{client_width} #{client_height} #{client_tty} #{client_activity}")
+		m.OnOutput([]byte("on\n"), nil, "tmux", "display-message", "-p", "-t", "=my-computer", "#{status}")
+		m.OnOutput([]byte("%13 178 zsh\n%14 57 /bin/mux watch\n"), nil,
+			"tmux", "list-panes", "-t", "@8", "-F", "#{pane_id} #{pane_width} #{pane_start_command}")
+
+		SyncFittedWindowOf("%14", 80)
+		if strings.Join(m.runs, "\n") != "tmux resize-pane -t %14 -x 80" {
+			t.Errorf("runs %v, want only this window's panel pinned to 80", m.runs)
+		}
+	})
+	withMock(t, func(m *mockRunner) {
+		SyncFittedWindowOf("", 80)
+		if len(m.runs) != 0 {
+			t.Errorf("an empty pane reached tmux: %v", m.runs)
+		}
+	})
+}

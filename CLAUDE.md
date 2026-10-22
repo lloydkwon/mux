@@ -17,6 +17,7 @@ Push over SSH — the `gh` OAuth token lacks the `workflow` scope, so HTTPS push
 ```bash
 make build                       # → ./mux, injects version via -ldflags
 make test                        # go test ./...
+make e2e                         # 격리된 진짜 tmux 위의 사용자 가시 동작 (~2분). 패널 폭·창 맞춤·클라이언트 판별·훅을 건드렸으면 커밋 전에 반드시
 make install PREFIX=~/.local     # installs to $PREFIX/bin
 
 go test ./ui -run TestFlattenMenu -v    # single test
@@ -34,7 +35,7 @@ make herdr-check                # herdr 의 응답 모양이 그대로인지 (he
 ./mux --claude                  # 돌고 있는 클로드 «대화» 목록; enter 로 가거나 여기서 이어간다
 ```
 
-CI (`.github/workflows/ci.yml`) runs test + build + arm64 cross-build + `scripts/tmux-assumptions.sh`.
+CI (`.github/workflows/ci.yml`) runs test + build + arm64 cross-build + `scripts/tmux-assumptions.sh` + `make e2e`.
 
 **`scripts/tmux-assumptions.sh` is the only thing that tests tmux itself.** Every unit test mocks the runner, which is what makes them fast and hermetic — and also means tmux can change underneath mux without a single test failing. The script starts a private server (`-L`, `-f /dev/null`, so the developer's own sessions and hooks are never touched) and asserts the behaviours the code depends on: the `tmux -V` string `getTmuxVersion` parses, `listFormat`'s field count, that `#{@user_option}` resolves a session option through a pane target, that `-l N` on `split-window` gives exactly N columns, that `list-panes` remembers `pane_start_command` (the panel's only marker), that a batched `capture-pane ; display-message ; capture-pane` emits one separator, and that `run-shell` and `after-new-session` expand `#{pane_id}`. **Add a line here whenever a comment says "measured" or "verified"** — otherwise that one assumption is the one that breaks silently on the next upgrade. `make tmux-check` runs it; `TMUX_BIN=/path/to/tmux` points it at a candidate binary instead of PATH.
 
@@ -110,6 +111,12 @@ Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale a
 - **`--claude` 입양은 `--fork-session` 을 쓰지 않고, 순차로, 초 경계를 기다리며** 돈다. 끝나면
   `ResetClaudeRunCache()`. (claude-mode.md)
 - **짝 합치기**: `break-pane` 금지, pane 하나뿐인 검토 세션은 거부, `join-pane -d`. (pair.md)
+- **패널 폭은 맞춤 창에서도 하나다.** VS Code·IntelliJ 터미널이 붙은 맞춤 창의 패널도 드래그를
+  기억하고 저장 폭을 따른다. 고치는 손만 다르다 — resize-pane 이 아니라 자기 창의 fit 을 다시
+  돌리고(`refitOwnWindow`, `applyFittedResize`), 드래그 직후가 아니라 다음 틱에 한다(이벤트마다
+  맞추면 끄는 테두리를 당긴다, e2e `TestStepwiseDragInVSCodeOnlyWindow`). 사용자 결정으로 원칙을 바꾸면 e2e 시나리오도 같은 커밋에서
+  고친다(aee4d94 가 `TestWindowNeverOutgrowsWT` 를 깨뜨린 채 들어갔다). (panel-width.md,
+  e2e `TestDragInFittedWindowReachesEveryPanel`)
 - **패널의 모든 tmux 호출은 `selfPane()` 을 지목한다.** `restoreFocus` 의 `PaneActive` 가드,
   클램프한 폭은 저장하지 않는다(`TestFirstSizeClampDoesNotWriteBack`), `M-Enter` 는 바인딩하지
   않는다(`TestPanelBlockLeavesAltEnterAlone`). (panel.md, panel-width.md)

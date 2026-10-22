@@ -198,12 +198,26 @@ type watchModel struct {
 	// wherever it was last left, pointing at some other session.
 	ownClients int
 
-	// fitted is whether mux fixed this window's size to hide the panel from a
-	// VS Code client, as of the last resize event. In that state the panel's
-	// width is the fit's, and every writer here stands down: the drag
-	// heuristic, the re-layout restore, and the saved-width adoption. Read
-	// beside the other I/O in applyResize so the pure paths need no server.
+	// fitted is whether mux fixed this window's size to hide the panel from an
+	// editor's terminal (VS Code, IntelliJ), as of the last resize event — or
+	// the last time adoptSavedWidth had something to change. The panel follows
+	// the one width there too; what changes is the hand that corrects it: the
+	// fit (refitCmd) rather than resize-pane, because a VS Code-only window's
+	// width is derived from the panel's. See applyFittedResize. Read beside the
+	// other I/O so the pure paths need no server.
 	fitted bool
+
+	// probeFitted asks tmux whether this pane's window is fitted, for the tick
+	// that has a width to adopt. nil never asks — every hand-built watchModel —
+	// the same zero-value gate resolveOwn uses, so `go test ./ui` stays off the
+	// developer's server. RunWatch sets it.
+	probeFitted func() bool
+
+	// refitPending is a drag in a fitted window not yet followed by a refit.
+	// The refit waits for the next tick rather than riding with the drag: a
+	// mouse drag arrives as a run of resize events, and pinning the border on
+	// each one pulled it back under the pointer (review, 2026-10-22).
+	refitPending bool
 }
 
 // minWidth is the bar this pane leaves below. The same number decides whether a
@@ -268,6 +282,7 @@ func RunWatch() error {
 				// Only the real panel gets a resolver; a watchModel built by
 				// hand has none and never asks tmux anything.
 				resolveOwn:     resolveOwnSession,
+				probeFitted:    func() bool { return tmux.WindowFitted(selfPane()) },
 				minWindowWidth: minWidth,
 				showHeader:     header,
 				editorBin:      editorBin,
@@ -695,32 +710,30 @@ func (m watchModel) applyResize(paneWidth int) (tea.Model, tea.Cmd) {
 	if livePane > 0 {
 		paneWidth = livePane
 	}
-	// Read here, beside the other I/O, and handed in as a value: the pure
+	// Read here, beside the other I/O, and handed in as values: the pure
 	// half below is what the tests drive, and it must not touch a server.
 	m.fitted = tmux.WindowFitted(selfPane())
-	m, cmd := m.applyResizeWith(paneWidth, winWidth, winPanes, m.fitted)
+	saved := 0
+	if m.fitted {
+		// fit 이 고정하는 것과 같은 값 — 파일이 없으면 기본 폭이다(SavedPanelWidth 의 0 이 아니라).
+		saved = tmux.DesiredPanelWidth()
+	}
+	m, cmd := m.applyResizeWith(paneWidth, winWidth, winPanes, m.fitted, saved)
 	return m, cmd
 }
 
 // applyResizeWith is applyResize with every reading supplied. fitted says mux
-// fixed this window's size to hide the panel from a VS Code client, in which
-// case the panel's width belongs to that fit and a change to it is not a drag.
-func (m watchModel) applyResizeWith(paneWidth, winWidth, winPanes int, fitted bool) (watchModel, tea.Cmd) {
+// fixed this window's size (viewport.go), and saved is the one remembered width
+// — read only for a fitted window, where applyFittedResize needs it.
+func (m watchModel) applyResizeWith(paneWidth, winWidth, winPanes int, fitted bool, saved int) (watchModel, tea.Cmd) {
 	// A window wide enough clears the tally: only *consecutive* narrow readings
 	// mean the window really shrank.
 	if winWidth >= m.minWidth() {
 		m.narrowSamples = 0
 	}
 
-	// A fitted window's width belongs to the fit (viewport.go): it sizes the
-	// window and pins the panel on every hook. Anything this panel did to the
-	// width there would be a second writer — measured as the two alternating
-	// (99 from the fit, the panel's own target back) and as a proportional
-	// widening saved as a "drag", 60 → 107 in an afternoon. Take note of the
-	// window's shape for the narrow-window rule and touch nothing else.
 	if fitted {
-		m.winWidth, m.winPanes = winWidth, winPanes
-		return m, nil
+		return m.applyFittedResize(paneWidth, winWidth, winPanes, saved)
 	}
 
 	switch {
@@ -824,6 +837,87 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth, winPanes int, fitted bo
 	}
 }
 
+// applyFittedResize is applyResizeWith for a window mux fixed the size of — the
+// one a VS Code or IntelliJ terminal is attached to (tmux/viewport.go).
+//
+// 맞춤 창도 «패널은 어디서나 한 폭»이다. 다른 점은 고치는 손 하나다: VS Code 만 붙은 창은
+// 창 폭이 곧 VS Code + 1 + 패널이라, 패널 폭을 resize-pane 으로만 바꾸면 작업 pane 이
+// VS Code 보다 좁아진다. 그래서 여기서는 폭을 직접 고치지 않고 fit 을 다시 돌린다(refitCmd)
+// — 창 크기와 패널 고정을 fit 이 한 번에 한다.
+//
+// 예전에는 맞춤 창이면 패널이 폭에서 완전히 손을 뗐다(b54d4c3, 09-23). 그때 fit 은 패널을
+// WT 안에 맞추려고 따로 줄였고(fitPanelWidth), 두 주인의 목표가 달라 99 ↔ 107 로 번갈았다.
+// 10-19(aee4d94)에 fitPanelWidth 가 사라져 fit 도 «저장 폭, 창의 반이 상한»을 쓰게 됐는데 —
+// 패널의 adoptSavedWidthWith 와 같은 공식 — 예외만 남았다. 그 결과가 2026-10-21 의 버그다:
+// IntelliJ 터미널이 붙은 my-mux 에서 드래그한 폭이 저장되지 않았고, 다른 세션은 따라오지
+// 않았고, my-mux 자신도 다음 훅에 72 로 돌아갔다. e2e TestDragInFittedWindowReachesEveryPanel.
+//
+// 드래그를 가리는 규칙은 보통 창과 같고, 가드가 하나 더 있다: fit 이 고정한 값(expected)도
+// 드래그가 아니다. fit 은 훅에서 이 패널 모르게 resize-pane 을 하고, 창의 반에 걸려 깎인
+// 값을 드래그로 저장하면 창 하나의 사정이 모든 패널을 좁힌다.
+func (m watchModel) applyFittedResize(paneWidth, winWidth, winPanes, saved int) (watchModel, tea.Cmd) {
+	switch {
+	case winWidth <= 0:
+		return m, nil
+	case m.winWidth == 0, winWidth != m.winWidth:
+		// 첫 읽기, fit 의 resize-window. 사람의 뜻이 아니고, 고정은 그 resize 가 부른 훅에서
+		// fit 이 한다. 60→107 오염(창이 커지며 비례 배분된 폭을 드래그로 읽음)이 이 경로였으므로
+		// 여기서는 기록만 한다.
+		m.winWidth, m.winPanes = winWidth, winPanes
+		if m.targetWidth == 0 && paneWidth >= notifyMinWidth && paneWidth <= maxPanelWidth(winWidth) {
+			m.targetWidth = paneWidth
+		}
+		return m, nil
+	case winPanes != m.winPanes:
+		// 옆에 pane 이 생기거나 죽었다 — tmux 가 그 칸을 패널에 줬을 수 있다. 보통 창처럼 되돌리되
+		// 손은 fit 이다. pane 이 생기고 죽는 것에는 훅이 없어서, 여기서 안 하면 다른 클라이언트가
+		// 움직일 때까지 그대로다.
+		m.winPanes = winPanes
+		if m.targetWidth > 0 && paneWidth != m.targetWidth {
+			return m, refitCmd(saved)
+		}
+		return m, nil
+	case paneWidth < notifyMinWidth, paneWidth > maxPanelWidth(winWidth):
+		// 같은 창에서 패널만 렌더할 수 없을 만큼 좁아졌거나 창의 반을 넘었다 — 의도가 아니다
+		// (실측: 239칸 창이 74/164 로 갈라진 채 머묾). fit 으로 되돌린다.
+		return m, refitCmd(saved)
+	}
+	expected := saved
+	if expected > maxPanelWidth(winWidth) {
+		expected = maxPanelWidth(winWidth)
+	}
+	if paneWidth == m.targetWidth || paneWidth == expected {
+		// 우리나 fit 이 맞춘 폭이다.
+		m.targetWidth = paneWidth
+		return m, nil
+	}
+	// 사람이 테두리를 끌었다: 저장해 모든 패널이 따라오게 한다. 이 창을 새 폭으로 다시 맞추는
+	// 것(VS Code 만 붙은 창이면 창 크기까지)은 다음 틱에 한다(refitPending) — 드래그 이벤트마다
+	// 고정하면 끌고 있는 테두리를 지난 폭으로 당긴다. 저장이 끝난 뒤에 맞추게 되는 것도 덤이다:
+	// 맞춤이 부른 훅은 저장 폭을 디스크에서 읽는다.
+	m.targetWidth = paneWidth
+	m.refitPending = true
+	return m, rememberPanelWidth(paneWidth)
+}
+
+// refitOwnWindow re-runs the fit on this panel's own window at a panel width —
+// only its own: every fitted window has a panel that follows the one width by
+// itself, and sweeping them all reached into the window being dragged. A var
+// for the reason openEditor is one: the real call reaches the developer's tmux.
+var refitOwnWindow = func(width int) { tmux.SyncFittedWindowOf(selfPane(), width) }
+
+// refitCmd runs refitOwnWindow as a command — it shells out, and Update is
+// driven directly by tests.
+func refitCmd(width int) tea.Cmd {
+	if width <= 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		refitOwnWindow(width)
+		return nil
+	}
+}
+
 // adoptSavedWidth follows the width last dragged in *any* panel, so one manual
 // decision reaches every open one instead of only the session it was made in.
 //
@@ -838,12 +932,6 @@ func (m watchModel) applyResizeWith(paneWidth, winWidth, winPanes int, fitted bo
 // and the guard doing it is in applyResizeWith: a resize landing on the width we
 // already wanted is not a drag and remembers nothing.
 func (m watchModel) adoptSavedWidth() (watchModel, tea.Cmd) {
-	// A fitted window's width is the fit's — see applyResizeWith. Adopting the
-	// saved width here put the panel back to 107 every two seconds against a
-	// fit that had capped it at 99 to keep the window inside Windows Terminal.
-	if m.fitted {
-		return m, nil
-	}
 	saved := tmux.SavedPanelWidth()
 	winWidth := m.winWidth
 
@@ -864,6 +952,16 @@ func (m watchModel) adoptSavedWidth() (watchModel, tea.Cmd) {
 			m.winWidth = w
 		}
 	}
+	next, cmd := m.adoptSavedWidthWith(saved, winWidth)
+	if cmd == nil {
+		return next, nil
+	}
+	// 맞춤 창도 따라간다 — 다만 fit 을 통해서다(adoptSavedWidthWith). 맞춤 여부는 바꿀 것이
+	// 생겼을 때만 다시 묻는다: 크기가 이미 맞는 창은 resize 이벤트 없이 맞춤 상태가 되므로
+	// m.fitted 가 낡을 수 있고, 평소 틱에 tmux 를 부르지 않으려면 이때뿐이다.
+	if m.probeFitted != nil {
+		m.fitted = m.probeFitted()
+	}
 	return m.adoptSavedWidthWith(saved, winWidth)
 }
 
@@ -872,6 +970,14 @@ func (m watchModel) adoptSavedWidth() (watchModel, tea.Cmd) {
 // the same reason: `ui` has no mock runner, so a pure function is the only way
 // to test this without resizing the developer's own panel.
 func (m watchModel) adoptSavedWidthWith(saved, winWidth int) (watchModel, tea.Cmd) {
+	if m.refitPending {
+		// 지난 틱 사이에 이 맞춤 창에서 드래그가 있었다 — 이제 창을 그 폭으로 다시 맞춘다.
+		// 저장 폭도 그 값이라 아래의 따라가기는 할 일이 없다.
+		m.refitPending = false
+		if m.fitted {
+			return m, refitCmd(m.targetWidth)
+		}
+	}
 	if saved <= 0 {
 		return m, nil
 	}
@@ -883,6 +989,11 @@ func (m watchModel) adoptSavedWidthWith(saved, winWidth int) (watchModel, tea.Cm
 		return m, nil
 	}
 	m.targetWidth = want
+	if m.fitted {
+		// 맞춤 창의 폭은 fit 이 고친다 — applyFittedResize 의 이유. 창의 반 상한도 fit 이
+		// 같은 공식으로 건다(panelWidthFor).
+		return m, refitCmd(saved)
+	}
 	return m, restorePanelWidth(want)
 }
 
