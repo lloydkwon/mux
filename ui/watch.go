@@ -168,6 +168,12 @@ type watchModel struct {
 	// falls back to `code <folder>`, which is what WSL needs anyway.
 	focusWindow func(dir string) focusResult
 
+	// focusIdea raises the IntelliJ window open on a project folder
+	// (focusShellIntelliJ), used when @mux_editor is idea. nil is off, like
+	// focusWindow — and with it off nothing is raised, since IntelliJ has no
+	// launcher that only raises.
+	focusIdea func(dir string) focusResult
+
 	// ghostIdle is how long a differently-sized client must sit idle before this
 	// panel disconnects it, resolved once at startup like every other
 	// preference here. Zero disables the check — which is what every test gets,
@@ -289,6 +295,7 @@ func RunWatch() error {
 				ideaBin:        ideaBin,
 				editorChoice:   tmux.EditorChoice,
 				focusWindow:    focusShellWindow,
+				focusIdea:      focusShellIntelliJ,
 				ghostIdle:      ghostIdle,
 				probeMouse:     tmux.MouseEnabled,
 				exePath:        exe,
@@ -1043,7 +1050,7 @@ type editorFailedMsg struct {
 // switchToSession moves the current tmux client. It stays a tea.Cmd rather than
 // quitting first, the way the TUI's attach must: switch-client returns normally
 // instead of replacing this process, so the panel survives the switch.
-func switchToSession(name, own, editorBin, targetDir string, focus func(string) focusResult) tea.Cmd {
+func switchToSession(name, own, targetDir string, ed editorSetup) tea.Cmd {
 	return func() tea.Msg {
 		// Hand focus back before leaving, when there is any to hand back. The
 		// window we are about to leave would otherwise keep reporting the
@@ -1076,7 +1083,10 @@ func switchToSession(name, own, editorBin, targetDir string, focus func(string) 
 		// editor. The window is sized to the larger client now (viewport.go),
 		// so there is nothing left to avoid, and the skip only meant clicking
 		// those rows moved nothing.
-		raiseOpenEditor(name, editorBin, targetDir, focus)
+		//
+		// Which editor's window is @mux_editor's (raiseChosenEditor) — the same
+		// choice the right click launches with.
+		raiseChosenEditor(name, targetDir, ed)
 
 		if err != nil {
 			return switchFailedMsg{session: name, err: err}
@@ -1152,7 +1162,7 @@ func keepBottomVisibleCmd(session string) tea.Cmd {
 // switchCmd builds the move for one session, so a left click and enter cannot
 // drift apart on which client they are allowed to move.
 func (m watchModel) switchCmd(name string) tea.Cmd {
-	return switchToSession(name, m.ownSession, m.editorBin, m.sessionDir(name), m.focusWindow)
+	return switchToSession(name, m.ownSession, m.sessionDir(name), m.editorSetup())
 }
 
 // sessionDir is the directory a session is *about*, which is what decides
@@ -1210,6 +1220,12 @@ func openSessionEditor(name, dir string, ed editorSetup) tea.Cmd {
 		case "", choiceVSCode:
 			return openInVSCode(name, ed.code, dir, ed.focus)
 		case choiceIntelliJ:
+			// 그 폴더에 «정확히» 열린 프로젝트가 있으면 창을 올리고 끝낸다 — VS Code 의
+			// editorOpenOn 과 같은 규칙. 하위 폴더는 띄운다(IntelliJ 가 그 폴더를 연다).
+			if ed.focusIdea != nil && intellijWindowFor(name, dir) == strings.TrimRight(dir, "/") &&
+				ed.focusIdea(dir) == focusRaised {
+				return nil
+			}
 			if ed.idea == "" {
 				return editorFailedMsg{session: name, editor: "IntelliJ", err: errIntelliJMissing}
 			}
@@ -1247,10 +1263,62 @@ type editorSetup struct {
 	code, idea string                   // 런처 경로, "" 이면 없음
 	choose     func() string            // @mux_editor, nil 이면 VS Code
 	focus      func(string) focusResult // VS Code 창 올리기, nil 이면 끔
+	focusIdea  func(string) focusResult // IntelliJ 창 올리기, nil 이면 끔
 }
 
 func (m watchModel) editorSetup() editorSetup {
-	return editorSetup{code: m.editorBin, idea: m.ideaBin, choose: m.editorChoice, focus: m.focusWindow}
+	return editorSetup{code: m.editorBin, idea: m.ideaBin, choose: m.editorChoice,
+		focus: m.focusWindow, focusIdea: m.focusIdea}
+}
+
+// chosen is @mux_editor as ed reads it; "" when there is nothing to ask.
+func (ed editorSetup) chosen() string {
+	if ed.choose == nil {
+		return ""
+	}
+	return ed.choose()
+}
+
+// raiseChosenEditor is the switch's half of the editor: it brings forward the
+// window @mux_editor's editor already has open on the session, and launches
+// nothing. idea raises an IntelliJ project window; anything else is VS Code as
+// it always was — a value the right click would report as unknown still gets
+// the old behaviour here, where nothing is reported.
+func raiseChosenEditor(name, targetDir string, ed editorSetup) {
+	if ed.chosen() == choiceIntelliJ {
+		raiseOpenIntelliJ(name, targetDir, ed.focusIdea)
+		return
+	}
+	raiseOpenEditor(name, ed.code, targetDir, ed.focus)
+}
+
+// raiseOpenIntelliJ brings forward the IntelliJ window open on a session's
+// project, and does nothing when there is none. No fallback: IntelliJ's
+// launcher opens a project rather than merely raising one, and opening is the
+// right click's job. focus may be nil.
+func raiseOpenIntelliJ(name, targetDir string, focus func(string) focusResult) {
+	if focus == nil {
+		return
+	}
+	if dir := intellijWindowFor(name, targetDir); dir != "" {
+		focus(dir)
+	}
+}
+
+// intellijWindowFor is the folder of the IntelliJ project to raise for a
+// session, or "" when none is open — vscodeWindowFor's IntelliJ half. An
+// IntelliJ terminal attached to the session names its project surely; IntelliJ's
+// record of open projects covers a session with no such terminal. The window is
+// chosen by that folder's base name, which is why the folder must be one that is
+// known to be open.
+func intellijWindowFor(name, targetDir string) string {
+	if targetDir == "" {
+		return ""
+	}
+	if dir := tmux.VSCodeDirFor(targetDir, tmux.IntelliJClientDirs()[name]); dir != "" {
+		return dir
+	}
+	return tmux.IntelliJWindowFor(targetDir)
 }
 
 // editorDirFor is the folder to open for a session, or "" when the panel does

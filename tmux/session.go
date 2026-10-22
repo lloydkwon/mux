@@ -481,6 +481,40 @@ func VSCodeClientDirs() map[string][]string {
 	return dirs
 }
 
+// isJetBrainsClient reports whether a tmux client process is a JetBrains IDE's
+// integrated terminal. Replaceable in tests.
+var isJetBrainsClient = func(pid int) bool { return procEnvHas(pid, jetbrainsEnvMarker) }
+
+// clientPWD is the folder a client process was started in. Replaceable in tests.
+var clientPWD = func(pid int) string { return procEnvValue(pid, "PWD") }
+
+// IntelliJClientDirs is VSCodeClientDirs for IntelliJ: each session's folders
+// of the IntelliJ terminals attached to it. IntelliJ starts its terminal at the
+// project root (measured: the JediTerm client's PWD was the project folder), so
+// this names the open IntelliJ project even before its record says so.
+func IntelliJClientDirs() map[string][]string {
+	out, err := runner.Output("tmux", "list-clients", "-F",
+		"#{client_pid} #{client_session}")
+	if err != nil {
+		return nil
+	}
+	dirs := make(map[string][]string)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil || !isJetBrainsClient(pid) {
+			continue
+		}
+		if dir := clientPWD(pid); dir != "" {
+			dirs[fields[1]] = append(dirs[fields[1]], dir)
+		}
+	}
+	return dirs
+}
+
 // VSCodeDirFor picks the VS Code window that owns a session from the folders of
 // every VS Code client attached to it, or "" when none of them do.
 //

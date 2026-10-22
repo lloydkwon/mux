@@ -255,3 +255,68 @@ func TestRightClickOnAFolderWithoutAWindowDoesNotAskTheShell(t *testing.T) {
 		t.Errorf("editor calls = %v, want a launch", *calls)
 	}
 }
+
+// IntelliJ 창 제목은 «프로젝트이름 – 무엇»이다(구분자 en dash, 실측 2026-10-21: `mux – Claude Code`,
+// `matchingByJev – Local`). 첫 토막만 본다 — 뒤 토막은 열린 파일·도구 창이라 그 이름이 프로젝트와
+// 같아도 프로젝트가 아니다. 같음 비교라 mux 를 찾다 my-mux 를 올리지 않고, 같은 이름 둘이면 답하지
+// 않는다. VS Code 창(app 이 vscode 이거나 비어 있음)은 제목이 무엇이든 보지 않는다.
+func TestPickIntelliJWindow(t *testing.T) {
+	wins := []shellWindow{
+		{ID: 1, Title: "mux – Claude Code", App: "idea"},
+		{ID: 2, Title: "my-mux – watch.go", App: "idea"},
+		{ID: 3, Title: "matchingByJev", App: "idea"},
+		{ID: 4, Title: "web – mux", App: "idea"}, // 뒤 토막의 mux 는 프로젝트가 아니다
+		{ID: 5, Title: "dup – a", App: "idea"},
+		{ID: 6, Title: "dup – b", App: "idea"},
+		{ID: 7, Title: "api – x", App: "vscode"},
+		{ID: 8, Title: "api – y"}, // 옛 확장: app 없음 = vscode
+	}
+	for _, c := range []struct {
+		dir    string
+		want   uint64
+		wantOK bool
+	}{
+		{"/home/u/dev/projects/my/mux", 1, true},
+		{"/home/u/dev/projects/my/my-mux/", 2, true},
+		{"/srv/work/matchingByJev", 3, true},
+		{"/home/u/a/dup", 0, false},
+		{"/home/u/api", 0, false},
+		{"", 0, false},
+	} {
+		got, ok := pickIntelliJWindow(wins, c.dir)
+		if ok != c.wantOK || got != c.want {
+			t.Errorf("%q → (%d, %v), want (%d, %v)", c.dir, got, ok, c.want, c.wantOK)
+		}
+	}
+}
+
+// VS Code 규칙은 IntelliJ 창을 보지 않는다 — 제목이 우연히 VS Code 모양이어도.
+func TestPickEditorWindowIgnoresIntelliJ(t *testing.T) {
+	wins := []shellWindow{{ID: 9, Title: "x - mux - Visual Studio Code", App: "idea"}}
+	if _, ok := pickEditorWindow(wins, "/p/mux"); ok {
+		t.Error("an IntelliJ window was picked by the VS Code rule")
+	}
+}
+
+func TestParseWindowListReadsApp(t *testing.T) {
+	out := `{"type":"s","data":["[{\"id\":7,\"title\":\"mux – Chat\",\"app\":\"idea\"}]"]}`
+	got := parseWindowList([]byte(out))
+	if len(got) != 1 || got[0].App != "idea" {
+		t.Errorf("got %+v", got)
+	}
+}
+
+// IntelliJ 도 같은 shell 경로로 올린다 — 목록에서 고르고 Activate.
+func TestFocusShellIntelliJ(t *testing.T) {
+	list := `{"type":"s","data":["[{\"id\":5,\"title\":\"x - mux - Visual Studio Code\",\"app\":\"vscode\"},{\"id\":6,\"title\":\"mux – Chat\",\"app\":\"idea\"}]"]}`
+	calls := withFakeBus(t, list, nil, true)
+	if r := focusShellIntelliJ("/p/mux"); r != focusRaised {
+		t.Errorf("focusShellIntelliJ = %v, want raised", r)
+	}
+	if len(*calls) != 2 || (*calls)[1] != "Activate" {
+		t.Errorf("bus calls %v, want List then Activate", *calls)
+	}
+	if r := focusShellIntelliJ("/p/web"); r != focusNoWindow {
+		t.Errorf("no IntelliJ window on web: %v, want no window", r)
+	}
+}

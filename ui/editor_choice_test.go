@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lloydkwon/mux/tmux"
 )
 
 // writeFakeScript 는 dir 안에 실행 가능한 셸 스크립트 name 을 만든다.
@@ -190,20 +192,81 @@ func TestRightClickDefaultsToVSCode(t *testing.T) {
 	}
 }
 
-// 고르는 것은 오른쪽 클릭의 편집기뿐이다. 왼쪽 클릭은 전환하고 이미 열린 VS Code 창만
-// 올린다 — IntelliJ 를 띄우지 않는다.
-func TestLeftClickIgnoresTheEditorChoice(t *testing.T) {
+// withOpenIntelliJProjects tells the raise rule which projects IntelliJ has open,
+// in place of reading its record.
+func withOpenIntelliJProjects(t *testing.T, dirs ...string) {
+	orig := tmux.OpenIntelliJProjects
+	tmux.OpenIntelliJProjects = func() []string { return dirs }
+	t.Cleanup(func() { tmux.OpenIntelliJProjects = orig })
+}
+
+// 창 올리기도 @mux_editor 를 따른다(2026-10-21, 사용자가 VS Code 대신 IntelliJ 를 쓰기로 함).
+// idea 면 왼쪽 클릭은 그 프로젝트가 열린 IntelliJ 창을 올리고, VS Code 창은 건드리지 않으며,
+// 아무것도 띄우지 않는다.
+func TestLeftClickRaisesTheChosenEditor(t *testing.T) {
 	withFakeTmux(t, &fakeRunner{})
 	calls := withFakeEditor(t, nil)
 	withOpenVSCodeWindows(t, "/home/u/projects/api")
+	withOpenIntelliJProjects(t, "/home/u/projects/api")
+	var vsAsked, ideaAsked []string
 
 	m := intellijTestModel("idea")
+	m.focusWindow = fakeFocus(focusRaised, &vsAsked)
+	m.focusIdea = fakeFocus(focusRaised, &ideaAsked)
 	m.selected = "demo"
 	_, cmd := m.Update(leftPress(firstSessionRow(m)))
 	cmd()
-	want := "/usr/bin/code /home/u/projects/api"
-	if len(*calls) != 1 || (*calls)[0] != want {
-		t.Errorf("editor calls = %v, want only the VS Code raise [%q]", *calls, want)
+
+	if len(ideaAsked) != 1 || ideaAsked[0] != "/home/u/projects/api" {
+		t.Errorf("IntelliJ raise asked %v, want the project folder once", ideaAsked)
+	}
+	if len(vsAsked) != 0 {
+		t.Errorf("a VS Code window was raised with IntelliJ chosen: %v", vsAsked)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("a left click launched an editor: %v", *calls)
+	}
+}
+
+// IntelliJ 에 그 프로젝트가 열려 있지 않으면 왼쪽 클릭은 아무 창도 올리지 않는다 — 창은 이름으로만
+// 고르므로, 열린 것이 확인되지 않은 폴더를 물으면 같은 이름의 다른 프로젝트가 올라온다.
+func TestLeftClickRaisesNoIntelliJWindowThatIsNotOpen(t *testing.T) {
+	withFakeTmux(t, &fakeRunner{})
+	calls := withFakeEditor(t, nil)
+	withOpenIntelliJProjects(t, "/home/u/work/api") // 같은 이름, 다른 폴더
+	var ideaAsked []string
+
+	m := intellijTestModel("idea")
+	m.focusIdea = fakeFocus(focusRaised, &ideaAsked)
+	m.selected = "demo"
+	_, cmd := m.Update(leftPress(firstSessionRow(m)))
+	cmd()
+	if len(ideaAsked) != 0 || len(*calls) != 0 {
+		t.Errorf("asked %v, launched %v — want nothing", ideaAsked, *calls)
+	}
+}
+
+// 오른쪽 클릭도 이미 열린 IntelliJ 프로젝트면 그 창을 올리고 끝낸다. 올라오지 않으면 띄운다.
+func TestRightClickRaisesAnOpenIntelliJProjectFirst(t *testing.T) {
+	withFakeTmux(t, &fakeRunner{})
+	calls := withFakeEditor(t, nil)
+	withOpenIntelliJProjects(t, "/home/u/projects/api")
+	var asked []string
+
+	m := intellijTestModel("idea")
+	m.focusIdea = fakeFocus(focusRaised, &asked)
+	_, cmd := m.Update(rightPress(firstSessionRow(m)))
+	cmd()
+	if len(asked) != 1 || len(*calls) != 0 {
+		t.Errorf("asked %v, launched %v — want raised, nothing launched", asked, *calls)
+	}
+
+	asked = nil
+	m.focusIdea = fakeFocus(focusNoWindow, &asked)
+	_, cmd = m.Update(rightPress(firstSessionRow(m)))
+	cmd()
+	if len(*calls) != 1 || !strings.HasPrefix((*calls)[0], "detached ") {
+		t.Errorf("launched %v, want the IntelliJ launch fallback", *calls)
 	}
 }
 

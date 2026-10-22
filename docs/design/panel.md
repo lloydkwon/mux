@@ -107,9 +107,25 @@ INACTIVE`), `List` 는 «그런 객체가 없다»로 실패한다. 이것을 «
 IntelliJ IDEA. 제스처가 opt-in 이라는 결정은 그대로다. 오른쪽 클릭마다 `tmux.EditorChoice`
 로 읽으므로 `tmux set -g @mux_editor idea` 가 이미 떠 있는 패널에도 바로 닿는다. 고른
 편집기를 못 찾거나 모르는 값이면 VS Code 로 물러서지 않고 로그에 남긴다 — 물러서면 설정이
-먹었는지 알 길이 없다(`TestRightClickReportsAnEditorItCannotRun`). 왼쪽 클릭·`enter`·TUI 는
-이 값을 보지 않는다. 그쪽의 «이미 열린 창 올리기»는 VS Code 창만 안다
-(`TestLeftClickIgnoresTheEditorChoice`); IntelliJ 창 올리기는 써 본 뒤의 일로 남겨 두었다.
+먹었는지 알 길이 없다(`TestRightClickReportsAnEditorItCannotRun`).
+
+**창 올리기도 `@mux_editor` 를 따른다**(2026-10-22, 사용자가 VS Code 대신 IntelliJ 를 쓰기로 함).
+왼쪽 클릭·`enter`·TUI 의 선택은 `raiseChosenEditor` 를 거친다: `idea` 면 그 세션의 프로젝트가 열린
+IntelliJ 창을 올리고(VS Code 창은 건드리지 않는다), 그 밖은 예전 그대로 VS Code 다. 띄우는 것은
+여전히 오른쪽 클릭뿐이다 — IntelliJ 쪽에는 `code` 같은 물러설 곳도 없다(`idea` 는 올리는 게 아니라
+여는 런처다). `TestLeftClickRaisesTheChosenEditor`.
+- **창 고르기:** 확장이 IntelliJ 창(WM_CLASS `jetbrains-idea`)에 `app: "idea"` 를 달아 내놓는다.
+  IntelliJ 제목은 «프로젝트이름 – 앞에 있는 것»(en dash, 실측 `mux – Claude Code`)이라 첫 토막만
+  같음으로 본다(`pickIntelliJWindow`). VS Code 규칙은 IntelliJ 창을 보지 않는다.
+- **열린 것이 확인된 폴더만 묻는다:** 창은 이름으로만 고를 수 있어서, 그 세션의 IntelliJ 터미널
+  (JediTerm 클라이언트의 `PWD`, `IntelliJClientDirs`)이나 IntelliJ 의 최근 프로젝트 기록에서
+  `opened="true"` 인 폴더(`tmux/intellijprojects.go`)가 세션 폴더를 소유할 때만 묻는다 — 아니면 같은
+  이름의 다른 프로젝트 창이 올라온다(`TestLeftClickRaisesNoIntelliJWindowThatIsNotOpen`). 그 기록은
+  IntelliJ 를 끈 뒤에도 «다시 열 프로젝트»로 남을 수 있어 `idea` 프로세스가 떠 있을 때만 믿는다.
+- **오른쪽 클릭**도 그 폴더에 정확히 열린 프로젝트면 창을 올리고 끝낸다. 올라오지 않으면 띄운다
+  (`TestRightClickRaisesAnOpenIntelliJProjectFirst`).
+- 확장 코드를 바꾸면 GNOME Shell 이 다시 읽어야 한다(X11: Alt+F2 → `r`, Wayland: 다시 로그인).
+  확장과 mux 중 어느 쪽이 먼저 바뀌어도 깨지지 않는다 — `app` 이 없으면 VS Code 로 읽는다.
 
 **IntelliJ 의 터미널은 VS Code 의 것과 같은 «편집기 클라이언트»다**(2026-10-21). IntelliJ 로 연
 프로젝트의 터미널이 그 세션에 붙으면(아래 dotfiles), 그 tmux 클라이언트는 한 프로젝트를 보는

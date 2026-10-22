@@ -58,17 +58,42 @@ const (
 	focusRaised
 )
 
-// shellWindow is one VS Code window as the extension lists it.
+// shellWindow is one editor window as the extension lists it. App is "vscode"
+// or "idea"; an extension older than IntelliJ support sends none, which means
+// VS Code — the only kind it listed.
 type shellWindow struct {
 	ID    uint64 `json:"id"`
 	Title string `json:"title"`
+	App   string `json:"app"`
 }
+
+const (
+	appVSCode   = "vscode"
+	appIntelliJ = "idea"
+
+	// intellijTitleSep is what IntelliJ puts between its title's parts: an en
+	// dash with spaces (measured: "mux – Claude Code").
+	intellijTitleSep = " – "
+)
 
 // focusShellWindow raises the VS Code window open on dir through the GNOME
 // Shell extension, and reports whether one came forward. It is what the real
 // panel and TUI pass as their focus function; a watchModel built by hand has
 // none, which keeps `go test ./ui` off the developer's desktop.
 func focusShellWindow(dir string) focusResult {
+	return focusShellWindowWith(dir, pickEditorWindow)
+}
+
+// focusShellIntelliJ is focusShellWindow for an IntelliJ project window — the
+// same extension, the same lock-screen rule, a different title rule
+// (pickIntelliJWindow). Passed as the focus function when @mux_editor is idea.
+func focusShellIntelliJ(dir string) focusResult {
+	return focusShellWindowWith(dir, pickIntelliJWindow)
+}
+
+// focusShellWindowWith asks the extension for its windows, picks dir's with
+// pick, and raises it.
+func focusShellWindowWith(dir string, pick func([]shellWindow, string) (uint64, bool)) focusResult {
 	out, err := busctlCall("List")
 	if err != nil {
 		// Which failure it was is asked of the bus rather than read off the
@@ -79,7 +104,7 @@ func focusShellWindow(dir string) focusResult {
 		}
 		return focusUnavailable
 	}
-	id, ok := pickEditorWindow(parseWindowList(out), dir)
+	id, ok := pick(parseWindowList(out), dir)
 	if !ok {
 		return focusNoWindow
 	}
@@ -177,8 +202,43 @@ func pickEditorWindow(wins []shellWindow, dir string) (uint64, bool) {
 	var found uint64
 	n := 0
 	for _, w := range wins {
+		if w.App != "" && w.App != appVSCode {
+			continue
+		}
 		segs := titleSegments(w.Title)
 		if len(segs) > 0 && segs[len(segs)-1] == base {
+			found = w.ID
+			n++
+		}
+	}
+	if n != 1 {
+		return 0, false
+	}
+	return found, true
+}
+
+// pickIntelliJWindow finds the one IntelliJ window whose project is dir. Pure
+// for testing.
+//
+// IntelliJ's title is "<project> – <what is in front>": the project name, which
+// defaults to the folder's base name, then the open file or tool window. Only
+// the first part is looked at, by equality — "mux" must not raise "my-mux", and
+// a file named like a project is not the project. Two windows with the name
+// give no answer, for the reason pickEditorWindow gives.
+func pickIntelliJWindow(wins []shellWindow, dir string) (uint64, bool) {
+	dir = strings.TrimRight(dir, "/")
+	if dir == "" {
+		return 0, false
+	}
+	base := filepath.Base(dir)
+	var found uint64
+	n := 0
+	for _, w := range wins {
+		if w.App != appIntelliJ {
+			continue
+		}
+		name, _, _ := strings.Cut(w.Title, intellijTitleSep)
+		if strings.TrimSpace(name) == base {
 			found = w.ID
 			n++
 		}

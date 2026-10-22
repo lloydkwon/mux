@@ -1235,14 +1235,14 @@ func switchOwnClient(tmuxPath, name string) error {
 	return runTmux(tmuxPath, "switch-client", "-t", "="+name)
 }
 
-// raiseEditorFor brings the target session's VS Code window forward when one is
-// already open on it — never launches one (raiseOpenEditor). Before that rule
+// raiseEditorFor brings the target session's editor window forward when one is
+// already open on it — never launches one (raiseChosenEditor). Before that rule
 // reached here, picking a session in `mux` started VS Code whenever it was not
-// running.
+// running. Which editor is @mux_editor's, the same as the panel's click.
 func raiseEditorFor(name string) {
-	bin := findEditor()
-	if bin == "" {
-		return
+	ed := editorSetup{
+		code: findEditor(), idea: findIntelliJ(), choose: tmux.EditorChoice,
+		focus: focusShellWindow, focusIdea: focusShellIntelliJ,
 	}
 	dir := tmux.SessionProjectDir(name)
 	if dir == "" {
@@ -1253,7 +1253,7 @@ func raiseEditorFor(name string) {
 	if dir == "" {
 		return
 	}
-	raiseOpenEditor(name, bin, dir, focusShellWindow)
+	raiseChosenEditor(name, dir, ed)
 }
 
 // firstSessionIndex is where the cursor lands on a fresh list: the first
