@@ -157,6 +157,10 @@ type watchModel struct {
 	// @mux_editor=idea 여도 띄울 것이 없다 — editorBin 과 같은 제로값 관문이다.
 	ideaBin string
 
+	// pycharmBin 은 PyCharm 의 런처로, ideaBin 과 같이 시작할 때 한 번 채운다. "" 이면 Python
+	// 프로젝트도 IntelliJ 로 열고 폴더를 읽지도 않는다 — 같은 제로값 관문이다(jetbrainsLauncher).
+	pycharmBin string
+
 	// editorChoice 는 @mux_editor 를 읽는다(tmux.EditorChoice). 오른쪽 클릭마다 tea.Cmd
 	// 안에서 부른다. nil 이면 묻지 않고 VS Code — 손으로 만든 watchModel 은 전부 nil
 	// 이므로 테스트가 개발자의 서버에 묻지 않는다.
@@ -168,9 +172,9 @@ type watchModel struct {
 	// falls back to `code <folder>`, which is what WSL needs anyway.
 	focusWindow func(dir string) focusResult
 
-	// focusIdea raises the IntelliJ window open on a project folder
+	// focusIdea raises the IntelliJ or PyCharm window open on a project folder
 	// (focusShellIntelliJ), used when @mux_editor is idea. nil is off, like
-	// focusWindow — and with it off nothing is raised, since IntelliJ has no
+	// focusWindow — and with it off nothing is raised, since neither IDE has a
 	// launcher that only raises.
 	focusIdea func(dir string) focusResult
 
@@ -270,6 +274,7 @@ func RunWatch() error {
 	editorBin := findEditor()
 	// 같은 이유로 무조건 찾는다. 찾아도 @mux_editor=idea 가 아니면 쓰이지 않는다.
 	ideaBin := findIntelliJ()
+	pycharmBin := findPyCharm()
 	// A preference, read once for the same reason minWidth is: it does not
 	// change between ticks, and asking every two seconds costs a show-options
 	// per panel per tick to be told the same number.
@@ -293,6 +298,7 @@ func RunWatch() error {
 				showHeader:     header,
 				editorBin:      editorBin,
 				ideaBin:        ideaBin,
+				pycharmBin:     pycharmBin,
 				editorChoice:   tmux.EditorChoice,
 				focusWindow:    focusShellWindow,
 				focusIdea:      focusShellIntelliJ,
@@ -1226,11 +1232,13 @@ func openSessionEditor(name, dir string, ed editorSetup) tea.Cmd {
 				ed.focusIdea(dir) == focusRaised {
 				return nil
 			}
-			if ed.idea == "" {
-				return editorFailedMsg{session: name, editor: "IntelliJ", err: errIntelliJMissing}
+			// 어느 IDE 로 열지는 올리지 못했을 때만 묻는다 — 이미 열린 창은 어느 IDE 의 것이든 위에서 올라온다.
+			label, bin := jetbrainsLauncher(dir, ed)
+			if bin == "" {
+				return editorFailedMsg{session: name, editor: label, err: errIntelliJMissing}
 			}
-			if err := openDetached(ed.idea, dir); err != nil {
-				return editorFailedMsg{session: name, editor: "IntelliJ", err: err}
+			if err := openDetached(bin, dir); err != nil {
+				return editorFailedMsg{session: name, editor: label, err: err}
 			}
 			return nil
 		default:
@@ -1261,14 +1269,15 @@ func openInVSCode(name, bin, dir string, focus func(string) focusResult) tea.Msg
 // editorSetup 은 오른쪽 클릭이 편집기를 고르고 띄우는 데 필요한 것을 묶는다.
 type editorSetup struct {
 	code, idea string                   // 런처 경로, "" 이면 없음
+	pycharm    string                   // Python 프로젝트의 런처, "" 이면 IntelliJ 로
 	choose     func() string            // @mux_editor, nil 이면 VS Code
 	focus      func(string) focusResult // VS Code 창 올리기, nil 이면 끔
-	focusIdea  func(string) focusResult // IntelliJ 창 올리기, nil 이면 끔
+	focusIdea  func(string) focusResult // IntelliJ·PyCharm 창 올리기, nil 이면 끔
 }
 
 func (m watchModel) editorSetup() editorSetup {
-	return editorSetup{code: m.editorBin, idea: m.ideaBin, choose: m.editorChoice,
-		focus: m.focusWindow, focusIdea: m.focusIdea}
+	return editorSetup{code: m.editorBin, idea: m.ideaBin, pycharm: m.pycharmBin,
+		choose: m.editorChoice, focus: m.focusWindow, focusIdea: m.focusIdea}
 }
 
 // chosen is @mux_editor as ed reads it; "" when there is nothing to ask.
@@ -1281,9 +1290,11 @@ func (ed editorSetup) chosen() string {
 
 // raiseChosenEditor is the switch's half of the editor: it brings forward the
 // window @mux_editor's editor already has open on the session, and launches
-// nothing. idea raises an IntelliJ project window; anything else is VS Code as
-// it always was — a value the right click would report as unknown still gets
-// the old behaviour here, where nothing is reported.
+// nothing. idea raises an IntelliJ or PyCharm project window — whichever has
+// the project open, so a Python project left open in IntelliJ still comes
+// forward; anything else is VS Code as it always was — a value the right click
+// would report as unknown still gets the old behaviour here, where nothing is
+// reported.
 func raiseChosenEditor(name, targetDir string, ed editorSetup) {
 	if ed.chosen() == choiceIntelliJ {
 		raiseOpenIntelliJ(name, targetDir, ed.focusIdea)
@@ -1292,9 +1303,9 @@ func raiseChosenEditor(name, targetDir string, ed editorSetup) {
 	raiseOpenEditor(name, ed.code, targetDir, ed.focus)
 }
 
-// raiseOpenIntelliJ brings forward the IntelliJ window open on a session's
-// project, and does nothing when there is none. No fallback: IntelliJ's
-// launcher opens a project rather than merely raising one, and opening is the
+// raiseOpenIntelliJ brings forward the IntelliJ or PyCharm window open on a
+// session's project, and does nothing when there is none. No fallback: their
+// launchers open a project rather than merely raising one, and opening is the
 // right click's job. focus may be nil.
 func raiseOpenIntelliJ(name, targetDir string, focus func(string) focusResult) {
 	if focus == nil {
@@ -1306,12 +1317,12 @@ func raiseOpenIntelliJ(name, targetDir string, focus func(string) focusResult) {
 }
 
 // intellijWindowFor is the folder of the IntelliJ project to raise for a
-// session, or "" when none is open — vscodeWindowFor's IntelliJ half. An
-// IntelliJ terminal attached to the session names its project surely; IntelliJ's
-// record of open projects covers a session with no such terminal. The window is
-// chosen by that folder's base name — or by the folder itself when the title
-// carries its path (pickIntelliJWindow) — which is why the folder must be one
-// that is known to be open.
+// session, or "" when none is open — vscodeWindowFor's IntelliJ half, PyCharm
+// included. A JetBrains terminal attached to the session names its project
+// surely; the IDEs' record of open projects covers a session with no such
+// terminal. The window is chosen by that folder's base name — or by the folder
+// itself when the title carries its path (pickIntelliJWindow) — which is why
+// the folder must be one that is known to be open.
 func intellijWindowFor(name, targetDir string) string {
 	if targetDir == "" {
 		return ""

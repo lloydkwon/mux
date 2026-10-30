@@ -134,6 +134,32 @@ IntelliJ 창을 올리고(VS Code 창은 건드리지 않는다), 그 밖은 예
 - 확장 코드를 바꾸면 GNOME Shell 이 다시 읽어야 한다(X11: Alt+F2 → `r`, Wayland: 다시 로그인).
   확장과 mux 중 어느 쪽이 먼저 바뀌어도 깨지지 않는다 — `app` 이 없으면 VS Code 로 읽는다.
 
+**`idea` 는 Python 프로젝트를 PyCharm 으로 연다**(2026-10-30, 사용자가 PyCharm 을 들임). `@mux_editor` 에
+셋째 값을 더하지 않았다 — PyCharm 은 따로 고르는 편집기가 아니라 «JetBrains 로 열기»의 한 갈래다.
+- **띄우기는 프로젝트 종류로**(`jetbrainsLauncher`, `ui/editor.go`): 폴더 **맨 위**에 `pyproject.toml`·
+  `setup.py`·`setup.cfg`·`requirements.txt`·`Pipfile`·`uv.lock`·`poetry.lock`·`.python-version` 중
+  하나가 있고 JVM 빌드 파일(`pom.xml`, `build.gradle(.kts)`, `settings.gradle(.kts)`)이 없으면 PyCharm.
+  섞인 저장소를 IntelliJ 에 두는 것은 Gradle 저장소의 스크립트용 `requirements.txt` 하나로 Java 를
+  못 읽는 IDE 가 뜨지 않게다. 하위 폴더는 보지 않는다 — `water_ai` 처럼 `ai/`·`backend/`·`frontend/`
+  를 품은 저장소는 한 언어의 프로젝트가 아니다(`TestIsPythonProject`). 띄우는 법은 IntelliJ 와 같은
+  `startDetached` 다: Toolbox 의 `apps/pycharm/bin/pycharm` 은 IDE 를 자기 프로세스 안에서 돌린다
+  (실측, 프로세스 이름 `pycharm`).
+- **제로값이 꺼짐이다:** `pycharmBin` 이 비어 있으면 폴더를 읽지도 않고 IntelliJ 다
+  (`TestRightClickWithoutPyCharmNeverAsksWhatTheProjectIs`). Python 인데 PyCharm 이 없을 때 IntelliJ 로
+  여는 것은 위의 «물러서지 않는다»와 어긋나지 않는다 — 사용자가 고른 `idea` 는 지켜졌다. 거꾸로
+  IntelliJ 가 없어도 PyCharm 으로 열 Python 프로젝트는 연다.
+- **올리기는 JetBrains 창 전체에서:** 확장이 PyCharm 창(WM_CLASS `jetbrains-pycharm`, 실측)에
+  `app: "pycharm"` 을 달고, `pickIntelliJWindow` 는 `idea`·`pycharm` 을 한 무리로 고른다. 제목 모양이
+  같고(실측 `WelcomeScreen – Welcome to PyCharm`), IntelliJ 로 열어 둔 Python 프로젝트도 계속 올라와야
+  한다. 같은 이름이 두 IDE 에 하나씩 열려 있으면 창이 둘이라 답하지 않는다
+  (`TestPickIntelliJWindowIncludesPyCharm`). 오른쪽 클릭은 올리기를 먼저 해 보고, 못 올렸을 때만 어느
+  IDE 로 열지 묻는다(`TestRightClickRaisesAnOpenProjectBeforeChoosingAnIDE`).
+- **열린 프로젝트 기록도 둘:** `tmux/intellijprojects.go` 가 `PyCharm*/options/recentProjects.xml` 도
+  읽는다. 각 기록은 **그 IDE 의 프로세스가 떠 있을 때만** 믿는다 — IntelliJ 가 떠 있다고 PyCharm 이
+  남긴 «다시 열 프로젝트»를 믿지 않는다(`TestOpenIntelliJProjectsTrustsEachRecordOnlyWhileItsIDERuns`).
+  PyCharm 터미널도 JediTerm 이므로 `IntelliJClientDirs` 가 그대로 센다고 보지만, 재 보지는 않았다.
+- PyCharm 에도 신뢰 대화상자가 있다. Trusted Locations 는 IDE 마다 따로라 PyCharm 에도 넣어야 한다.
+
 **IntelliJ 의 터미널은 VS Code 의 것과 같은 «편집기 클라이언트»다**(2026-10-21). IntelliJ 로 연
 프로젝트의 터미널이 그 세션에 붙으면(아래 dotfiles), 그 tmux 클라이언트는 한 프로젝트를 보는
 편집기 창이라는 점에서 VS Code 터미널과 다를 것이 없다. 그래서 같은 대접을 받는다: 창 맞춤이

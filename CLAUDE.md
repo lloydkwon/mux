@@ -108,7 +108,9 @@ Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale a
   오른쪽 클릭의 편집기는 `@mux_editor` 가 고르고, IntelliJ(`idea`)는 `startEditor` 가 아니라
   `startDetached` 로 띄운다 — 기다리면 신뢰 대화상자에 묶이고, 타임아웃이 IDE 를 죽인다
   (`TestStartDetachedLeavesALongLaunchRunning`). 왼쪽 클릭의 창 올리기도 `@mux_editor` 를 따른다
-  (`raiseChosenEditor`, IntelliJ 창은 열린 것이 확인된 프로젝트만). IntelliJ 터미널(JediTerm)도 «VS Code 클라이언트»다
+  (`raiseChosenEditor`, IntelliJ 창은 열린 것이 확인된 프로젝트만). `idea` 는 Python 프로젝트를
+  `pycharmBin` 이 있을 때만 PyCharm 으로 열고(`jetbrainsLauncher`, 제로값이면 폴더도 안 읽는다), 창
+  올리기는 IntelliJ·PyCharm 창을 한 무리로 고른다. IntelliJ 터미널(JediTerm)도 «VS Code 클라이언트»다
   — 판별은 `isEditorClient`, VS Code 창을 찾는 `VSCodeClientDirs` 만 좁은 `isVSCodeClient`. (panel.md)
 - **`--claude` 입양은 `--fork-session` 을 쓰지 않고, 순차로, 초 경계를 기다리며** 돈다. 끝나면
   `ResetClaudeRunCache()`. (claude-mode.md)

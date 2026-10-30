@@ -290,6 +290,34 @@ func TestPickIntelliJWindow(t *testing.T) {
 	}
 }
 
+// PyCharm 창도 같은 규칙으로 고른다 — 제목 모양이 같다(2026-10-30 실측: WM_CLASS
+// jetbrains-pycharm, "WelcomeScreen – Welcome to PyCharm"). 같은 이름이 IntelliJ 와 PyCharm 에
+// 하나씩 열려 있으면 어느 쪽인지 모르므로 답하지 않는다. 다른 JetBrains IDE 는 보지 않는다.
+func TestPickIntelliJWindowIncludesPyCharm(t *testing.T) {
+	wins := []shellWindow{
+		{ID: 1, Title: "matchingByJev – main.py", App: "pycharm"},
+		{ID: 2, Title: "mux – watch.go", App: "idea"},
+		{ID: 3, Title: "both – a", App: "idea"},
+		{ID: 4, Title: "both – b", App: "pycharm"},
+		{ID: 5, Title: "db – console", App: "datagrip"},
+	}
+	for _, c := range []struct {
+		dir    string
+		want   uint64
+		wantOK bool
+	}{
+		{"/home/u/dev/projects/ebbt/matchingByJev", 1, true},
+		{"/home/u/dev/projects/my/mux", 2, true},
+		{"/home/u/both", 0, false},
+		{"/home/u/db", 0, false},
+	} {
+		got, ok := pickIntelliJWindow(wins, c.dir)
+		if ok != c.wantOK || got != c.want {
+			t.Errorf("%q → (%d, %v), want (%d, %v)", c.dir, got, ok, c.want, c.wantOK)
+		}
+	}
+}
+
 // IntelliJ 는 같은 이름의 프로젝트가 열린 적이 있으면 제목에 «이름 [경로]» 를 쓴다
 // (2026-10-28 water_ai 창: "water_ai [~/dev/projects/si/water_ai] – Local"). 그 경로가
 // 세션 폴더와 같아야 고른다 — 이름만 같은 다른 폴더의 창은 고르지 않는다.
@@ -344,9 +372,11 @@ func TestPickIntelliJWindowWithoutAHome(t *testing.T) {
 
 // VS Code 규칙은 IntelliJ 창을 보지 않는다 — 제목이 우연히 VS Code 모양이어도.
 func TestPickEditorWindowIgnoresIntelliJ(t *testing.T) {
-	wins := []shellWindow{{ID: 9, Title: "x - mux - Visual Studio Code", App: "idea"}}
-	if _, ok := pickEditorWindow(wins, "/p/mux"); ok {
-		t.Error("an IntelliJ window was picked by the VS Code rule")
+	for _, app := range []string{"idea", "pycharm"} {
+		wins := []shellWindow{{ID: 9, Title: "x - mux - Visual Studio Code", App: app}}
+		if _, ok := pickEditorWindow(wins, "/p/mux"); ok {
+			t.Errorf("a %s window was picked by the VS Code rule", app)
+		}
 	}
 }
 

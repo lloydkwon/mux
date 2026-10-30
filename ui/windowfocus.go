@@ -59,9 +59,9 @@ const (
 	focusRaised
 )
 
-// shellWindow is one editor window as the extension lists it. App is "vscode"
-// or "idea"; an extension older than IntelliJ support sends none, which means
-// VS Code — the only kind it listed.
+// shellWindow is one editor window as the extension lists it. App is "vscode",
+// "idea" or "pycharm"; an extension older than IntelliJ support sends none,
+// which means VS Code — the only kind it listed.
 type shellWindow struct {
 	ID    uint64 `json:"id"`
 	Title string `json:"title"`
@@ -71,6 +71,7 @@ type shellWindow struct {
 const (
 	appVSCode   = "vscode"
 	appIntelliJ = "idea"
+	appPyCharm  = "pycharm"
 
 	// intellijTitleSep is what IntelliJ puts between its title's parts: an en
 	// dash with spaces (measured: "mux – Claude Code").
@@ -89,9 +90,10 @@ func focusShellWindow(dir string) focusResult {
 	return focusShellWindowWith(dir, pickEditorWindow)
 }
 
-// focusShellIntelliJ is focusShellWindow for an IntelliJ project window — the
-// same extension, the same lock-screen rule, a different title rule
-// (pickIntelliJWindow). Passed as the focus function when @mux_editor is idea.
+// focusShellIntelliJ is focusShellWindow for an IntelliJ or PyCharm project
+// window — the same extension, the same lock-screen rule, a different title
+// rule (pickIntelliJWindow). Passed as the focus function when @mux_editor is
+// idea.
 func focusShellIntelliJ(dir string) focusResult {
 	return focusShellWindowWith(dir, pickIntelliJWindow)
 }
@@ -222,8 +224,13 @@ func pickEditorWindow(wins []shellWindow, dir string) (uint64, bool) {
 	return found, true
 }
 
-// pickIntelliJWindow finds the one IntelliJ window whose project is dir. Pure
-// for testing.
+// pickIntelliJWindow finds the one IntelliJ or PyCharm window whose project is
+// dir. Pure for testing.
+//
+// The two are one pool: @mux_editor=idea opens a Python project in PyCharm, and
+// a project left open in the other IDE must still come forward. PyCharm titles
+// its windows the same way (measured: "WelcomeScreen – Welcome to PyCharm"). A
+// name open in both is two windows, and so no answer.
 //
 // IntelliJ's title is "<project> – <what is in front>": the project name, which
 // defaults to the folder's base name, then the open file or tool window. Only
@@ -246,7 +253,7 @@ func pickIntelliJWindow(wins []shellWindow, dir string) (uint64, bool) {
 	var found uint64
 	n := 0
 	for _, w := range wins {
-		if w.App != appIntelliJ {
+		if w.App != appIntelliJ && w.App != appPyCharm {
 			continue
 		}
 		name, _, _ := strings.Cut(w.Title, intellijTitleSep)

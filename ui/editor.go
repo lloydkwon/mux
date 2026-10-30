@@ -24,15 +24,21 @@ import (
 //     창 뒤에 떠서 그것을 닫을 때까지 131초가 걸렸다(2026-10-21 실측). 꺼져 있으면 그
 //     프로세스가 곧 IDE 본체다(JVM 이 런처 안에서 돈다). startEditor 의 10초 타임아웃은
 //     거기서 IDE 를 죽인다. 그래서 IntelliJ 는 startDetached 로 띄운다.
+//
+// idea 를 고르면 Python 프로젝트(isPythonProject)는 PyCharm 으로 연다 — PyCharm 이 설치돼
+// 있을 때만이고, 없으면 IntelliJ 다(jetbrainsLauncher). 셋째 값이 아닌 것은 PyCharm 이 따로
+// 고르는 편집기가 아니라 «JetBrains 로 열기»의 한 갈래라서다. 런처도 IntelliJ 와 같은 종류라
+// (IDE 가 런처 프로세스 안에서 돈다, 프로세스 이름 pycharm) startDetached 로 띄운다.
 const (
 	choiceVSCode   = "code"
 	choiceIntelliJ = "idea"
 )
 
-// editorCommand 와 intellijCommand 는 PATH 에서 찾는 이름이다.
+// editorCommand, intellijCommand, pycharmCommand 는 PATH 에서 찾는 이름이다.
 const (
 	editorCommand   = "code"
 	intellijCommand = "idea"
+	pycharmCommand  = "pycharm"
 )
 
 // editorTimeout bounds one launch.
@@ -101,6 +107,76 @@ func systemIntelliJCandidates() []string {
 		"/snap/bin/intellij-idea-ultimate",
 		"/snap/bin/intellij-idea-community",
 	)
+}
+
+// findPyCharm 은 PyCharm 의 런처를 찾는다. 없으면 "". 규칙은 findIntelliJ 와 같다.
+func findPyCharm() string { return findBinary(pycharmCommand, pycharmCandidates) }
+
+// pycharmCandidates 는 intellijCandidates 와 같은 이유로 var 다.
+var pycharmCandidates = systemPyCharmCandidates
+
+// systemPyCharmCandidates 는 PyCharm 이 PATH 밖에 설치되는 곳이다. 순서의 이유는
+// systemIntelliJCandidates 와 같다. Toolbox 두 줄은 이 기계에서 쟀고(2026-10-30, Toolbox
+// 3.9), snap 두 줄은 문서의 경로다.
+func systemPyCharmCandidates() []string {
+	var paths []string
+	if home, err := os.UserHomeDir(); err == nil {
+		toolbox := filepath.Join(home, ".local/share/JetBrains/Toolbox")
+		paths = append(paths,
+			filepath.Join(toolbox, "apps/pycharm/bin/pycharm"),
+			filepath.Join(toolbox, "scripts/pycharm"),
+		)
+	}
+	return append(paths,
+		"/snap/bin/pycharm-professional",
+		"/snap/bin/pycharm-community",
+	)
+}
+
+// pythonMarkers 는 폴더 맨 위에 있으면 Python 프로젝트라고 볼 파일이다 — 패키지 정의, 의존성
+// 목록, 잠금 파일, 버전 고정.
+var pythonMarkers = []string{
+	"pyproject.toml", "setup.py", "setup.cfg", "requirements.txt",
+	"Pipfile", "uv.lock", "poetry.lock", ".python-version",
+}
+
+// jvmMarkers 는 Python 표식을 이기는 JVM 빌드 파일이다. Gradle 저장소에 스크립트용
+// requirements.txt 가 하나 있다고 PyCharm 으로 열면 Java 코드를 못 읽는 IDE 가 뜬다 — 섞인
+// 저장소는 둘 다 다루는 IntelliJ 에 둔다.
+var jvmMarkers = []string{
+	"pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
+}
+
+// isPythonProject 는 dir 이 Python 프로젝트인지 맨 위의 파일로만 판단한다. 하위 폴더는 보지
+// 않는다: ai/·backend/·frontend/ 를 품은 저장소(water_ai)는 한 언어의 프로젝트가 아니고, 내려가
+// 훑는 것은 클릭 한 번에 치르기엔 비싸다. 표식 이름의 폴더는 표식이 아니다.
+func isPythonProject(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	has := func(names []string) bool {
+		for _, n := range names {
+			if info, err := os.Stat(filepath.Join(dir, n)); err == nil && !info.IsDir() {
+				return true
+			}
+		}
+		return false
+	}
+	return has(pythonMarkers) && !has(jvmMarkers)
+}
+
+// pythonProject 는 openDetached 와 같은 이음새다 — 테스트의 세션 폴더는 가짜 경로다.
+var pythonProject = isPythonProject
+
+// jetbrainsLauncher 는 @mux_editor=idea 의 오른쪽 클릭이 dir 을 열 IDE 의 이름과 런처다.
+// PyCharm 이 없으면(pycharm "") 폴더를 읽지도 않고 IntelliJ 다 — 이 제로값이 손으로 만든
+// watchModel 의 테스트를 파일 시스템에서 떼어 놓는다. Python 인데 PyCharm 이 없을 때 조용히
+// IntelliJ 인 것은 물러섬이 아니다: 사용자가 고른 idea 는 그대로 지켜졌다.
+func jetbrainsLauncher(dir string, ed editorSetup) (label, bin string) {
+	if ed.pycharm != "" && pythonProject(dir) {
+		return "PyCharm", ed.pycharm
+	}
+	return "IntelliJ", ed.idea
 }
 
 // editorCandidates lists the standard install locations, most common first. A
