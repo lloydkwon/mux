@@ -10,8 +10,10 @@ import (
 // BorderLine renders the session summary tmux draws above a pane, through
 // `pane-border-status top` and `pane-border-format`.
 //
-// It says what the pane below it cannot: which session this is, where it is,
-// which AI CLI is in it and what that CLI is doing, and the git branch. The pane
+// It says what the pane below it cannot: which session this is, where it is and
+// in what language (lang, tmux.ProjectLanguage — the caller reads the disk so
+// this stays pure), which AI CLI is in it and what that CLI is doing, and the
+// git branch. The pane
 // itself is the user's shell, so this border is the only row of that window mux
 // gets to write in.
 //
@@ -25,11 +27,12 @@ import (
 //   - It does not right-align. tmux fills whatever the format does not use with
 //     the border character, so padding out to the full width would replace that
 //     run of ─ with blanks and leave the border looking broken.
-//   - It is a single left-aligned cluster that gives up its parts from the right
-//     as the pane narrows: branch, then the tool's name, then the directory. The
+//   - It is a single left-aligned cluster that gives up its parts as the pane
+//     narrows: branch, then the language, then the tool's name, then the
+//     directory. The
 //     session name is never dropped — a border that cannot say which session it
 //     belongs to has nothing left worth drawing.
-func BorderLine(s tmux.Session, width int) string {
+func BorderLine(s tmux.Session, lang string, width int) string {
 	if s.Name == "" || width <= 0 {
 		return ""
 	}
@@ -69,11 +72,13 @@ func BorderLine(s tmux.Session, width int) string {
 	}
 	path := shortenPath(s.Directory)
 
+	// The language stands beside the directory: where and what are one thing.
 	for _, parts := range [][]string{
-		{name, path, badgeFull, branch},
-		{name, path, badgeFull},  // the branch is context, and the panel repeats it
-		{name, path, badgeMid},   // the tool's name goes before its state does
-		{name, path, badgeShort}, // the glyph is the state; the name is its label
+		{name, path, lang, badgeFull, branch},
+		{name, path, lang, badgeFull}, // the branch is context, and the panel repeats it
+		{name, path, badgeFull},       // the language is the project's; the state is now
+		{name, path, badgeMid},        // the tool's name goes before its state does
+		{name, path, badgeShort},      // the glyph is the state; the name is its label
 		{name, badgeShort},
 		{name},
 	} {

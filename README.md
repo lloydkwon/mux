@@ -276,7 +276,7 @@ Nothing has to be added to your tmux.conf. tmux's own `MouseDown3Pane` binding f
 
 The session the panel itself sits in is marked `◀`, and it is where the cursor opens — the highlight and the mark agree on where you are. There is one panel per window, so switching sessions puts you in front of a fresh one, and what it opens on is the only thing it says about where you landed. Pressing enter there is not wasted either: it hands the focus back to the pane you were working in.
 
-**The summary of the session you are in sits on the border above your pane** — its name, directory, AI tool and live state, and git branch. It is the line `prefix + m` shows at the top of its right column, put somewhere it does not cover what you were doing. `mux setup-panel` turns on tmux's `pane-border-status` and points `pane-border-format` at the new `mux border`:
+**The summary of the session you are in sits on the border above your pane** — its name, directory and the project's language, AI tool and live state, and git branch. It is the line `prefix + m` shows at the top of its right column, put somewhere it does not cover what you were doing. `mux setup-panel` turns on tmux's `pane-border-status` and points `pane-border-format` at the new `mux border`:
 
 ```
 ┌ [ mux ] ~/Projects/temp/mux  ✅ claude  ⌥ main ─┬ mux watch ─────┐
@@ -286,7 +286,7 @@ The session the panel itself sits in is marked `◀`, and it is where the cursor
 └─────────────────────────────────────────────────┴────────────────┘
 ```
 
-The border, because everything below it is your shell — mux cannot write there, and the pane's title already belongs to whatever runs in it (Claude Code names its pane after the task in hand). It is not drawn above the panel's own pane: there is no reason to say the same thing directly over the list that says it. As the pane narrows the line drops its branch, then the tool's name, then the directory; the session name always stays. It **costs one row per pane**.
+The border, because everything below it is your shell — mux cannot write there, and the pane's title already belongs to whatever runs in it (Claude Code names its pane after the task in hand). It is not drawn above the panel's own pane: there is no reason to say the same thing directly over the list that says it. As the pane narrows the line drops its branch, then the language, then the tool's name, then the directory; the session name always stays. The language comes from the build and dependency files at the project's top (`go.mod`, `pom.xml`, `build.gradle`, `pyproject.toml`, `requirements.txt`, `package.json`, `tsconfig.json`, `Cargo.toml`, `*.csproj` and a few more) — from a subfolder mux climbs to the repository's top, never above it and never into your home directory — and a folder carrying none of them shows no language. It **costs one row per pane**.
 
 **For the keyboard there are two ways in, and `mux setup-panel` installs both.**
 

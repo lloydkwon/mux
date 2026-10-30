@@ -523,7 +523,14 @@ func runBorder(target string, width int) error {
 		fmt.Println()
 		return nil
 	}
-	fmt.Println(ui.BorderLine(session, width))
+	// The project's language, from the folder the session is about: its
+	// @project_dir when tagged, else where the pane is (tmux.ProjectLanguage
+	// climbs from a subfolder to the repository's top).
+	dir := session.ProjectDir
+	if dir == "" {
+		dir = session.Directory
+	}
+	fmt.Println(ui.BorderLine(session, tmux.ProjectLanguage(dir), width))
 	return nil
 }
 

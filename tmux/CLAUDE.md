@@ -21,4 +21,5 @@
 | `resurrect.go` | resurrect.md, panel.md (유령 패널) |
 | `note.go` | note.md |
 | `session.go`, `types.go`, `window.go` | tui.md (`session.go` 는 tmux-config.md 의 `SessionProjectDir` 도) |
+| `language.go` | border.md (패널의 PyCharm 규칙은 panel.md) |
 | `viewport.go`, `vscodewindows.go` | 설계 문서 없음 — 파일 머리 주석이 정본 |

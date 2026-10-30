@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/lloydkwon/mux/tmux"
 )
 
 // 오른쪽 클릭이 띄울 편집기는 둘 중 하나이고, tmux 전역 옵션 @mux_editor 가 고른다
@@ -133,37 +135,14 @@ func systemPyCharmCandidates() []string {
 	)
 }
 
-// pythonMarkers 는 폴더 맨 위에 있으면 Python 프로젝트라고 볼 파일이다 — 패키지 정의, 의존성
-// 목록, 잠금 파일, 버전 고정.
-var pythonMarkers = []string{
-	"pyproject.toml", "setup.py", "setup.cfg", "requirements.txt",
-	"Pipfile", "uv.lock", "poetry.lock", ".python-version",
-}
-
-// jvmMarkers 는 Python 표식을 이기는 JVM 빌드 파일이다. Gradle 저장소에 스크립트용
-// requirements.txt 가 하나 있다고 PyCharm 으로 열면 Java 코드를 못 읽는 IDE 가 뜬다 — 섞인
-// 저장소는 둘 다 다루는 IntelliJ 에 둔다.
-var jvmMarkers = []string{
-	"pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
-}
-
-// isPythonProject 는 dir 이 Python 프로젝트인지 맨 위의 파일로만 판단한다. 하위 폴더는 보지
-// 않는다: ai/·backend/·frontend/ 를 품은 저장소(water_ai)는 한 언어의 프로젝트가 아니고, 내려가
-// 훑는 것은 클릭 한 번에 치르기엔 비싸다. 표식 이름의 폴더는 표식이 아니다.
-func isPythonProject(dir string) bool {
-	if dir == "" {
-		return false
-	}
-	has := func(names []string) bool {
-		for _, n := range names {
-			if info, err := os.Stat(filepath.Join(dir, n)); err == nil && !info.IsDir() {
-				return true
-			}
-		}
-		return false
-	}
-	return has(pythonMarkers) && !has(jvmMarkers)
-}
+// isPythonProject 는 dir 이 Python 프로젝트인지 맨 위의 빌드·의존성 파일로만 판단한다 —
+// `mux border` 가 적는 언어와 같은 표(tmux.LanguageAt)다. 그 표에서 JVM·Go·Rust 의 빌드 파일이
+// Python 표식을 이긴다: Gradle 저장소에 스크립트용 requirements.txt 가 하나 있다고 PyCharm 으로
+// 열면 Java 코드를 못 읽는 IDE 가 뜬다 — 섞인 저장소는 여러 언어를 다루는 IntelliJ 에 둔다.
+//
+// 하위 폴더도, 위 폴더도 보지 않는다(tmux.ProjectLanguage 와 다른 점): 오른쪽 클릭은 바로 이
+// 폴더를 열고, ai/·backend/·frontend/ 를 품은 저장소(water_ai)는 한 언어의 프로젝트가 아니다.
+func isPythonProject(dir string) bool { return tmux.LanguageAt(dir) == tmux.LangPython }
 
 // pythonProject 는 openDetached 와 같은 이음새다 — 테스트의 세션 폴더는 가짜 경로다.
 var pythonProject = isPythonProject
