@@ -117,6 +117,13 @@ IntelliJ 창을 올리고(VS Code 창은 건드리지 않는다), 그 밖은 예
 - **창 고르기:** 확장이 IntelliJ 창(WM_CLASS `jetbrains-idea`)에 `app: "idea"` 를 달아 내놓는다.
   IntelliJ 제목은 «프로젝트이름 – 앞에 있는 것»(en dash, 실측 `mux – Claude Code`)이라 첫 토막만
   같음으로 본다(`pickIntelliJWindow`). VS Code 규칙은 IntelliJ 창을 보지 않는다.
+- **첫 토막에 경로가 붙은 창은 경로로 고른다**(2026-10-28). IntelliJ 는 같은 이름의 프로젝트가 열린
+  적이 있으면 그 토막을 «이름 [경로]» 로 쓰고, 경로는 홈 아래면 `~/…` 로 줄인다(그날 water_ai 창:
+  `water_ai [~/dev/projects/si/water_ai] – Local`, 열린 프로젝트 중 이름이 겹치는 것은 없었다 — 한번 붙은
+  경로가 남는다). 이름만 보던 때는 이 창이 어떤 폴더와도 같지 않아 왼쪽 클릭이 아무것도 올리지 못했다.
+  경로는 폴더를 가리키므로 그 경로가 세션 폴더와 **같을 때만** 고른다 — 이름이 같은 다른 폴더의 창은
+  고르지 않는다. 홈을 모르면 `~` 경로는 어떤 폴더와도 같지 않다
+  (`TestPickIntelliJWindowReadsThePathInTheTitle`, `TestPickIntelliJWindowWithoutAHome`).
 - **열린 것이 확인된 폴더만 묻는다:** 창은 이름으로만 고를 수 있어서, 그 세션의 IntelliJ 터미널
   (JediTerm 클라이언트의 `PWD`, `IntelliJClientDirs`)이나 IntelliJ 의 최근 프로젝트 기록에서
   `opened="true"` 인 폴더(`tmux/intellijprojects.go`)가 세션 폴더를 소유할 때만 묻는다 — 아니면 같은

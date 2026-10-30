@@ -1309,8 +1309,9 @@ func raiseOpenIntelliJ(name, targetDir string, focus func(string) focusResult) {
 // session, or "" when none is open — vscodeWindowFor's IntelliJ half. An
 // IntelliJ terminal attached to the session names its project surely; IntelliJ's
 // record of open projects covers a session with no such terminal. The window is
-// chosen by that folder's base name, which is why the folder must be one that is
-// known to be open.
+// chosen by that folder's base name — or by the folder itself when the title
+// carries its path (pickIntelliJWindow) — which is why the folder must be one
+// that is known to be open.
 func intellijWindowFor(name, targetDir string) string {
 	if targetDir == "" {
 		return ""

@@ -290,6 +290,58 @@ func TestPickIntelliJWindow(t *testing.T) {
 	}
 }
 
+// IntelliJ 는 같은 이름의 프로젝트가 열린 적이 있으면 제목에 «이름 [경로]» 를 쓴다
+// (2026-10-28 water_ai 창: "water_ai [~/dev/projects/si/water_ai] – Local"). 그 경로가
+// 세션 폴더와 같아야 고른다 — 이름만 같은 다른 폴더의 창은 고르지 않는다.
+func TestPickIntelliJWindowReadsThePathInTheTitle(t *testing.T) {
+	prev := homeDir
+	homeDir = func() (string, error) { return "/home/u", nil }
+	t.Cleanup(func() { homeDir = prev })
+
+	wins := []shellWindow{
+		{ID: 1, Title: "water_ai [~/dev/projects/si/water_ai] – Local", App: "idea"},
+		{ID: 2, Title: "api [~/work/api] – a.go", App: "idea"},
+		{ID: 3, Title: "api [~/personal/api] – b.go", App: "idea"},
+		{ID: 4, Title: "tools [/srv/tools] – x", App: "idea"},
+		{ID: 5, Title: "home [~]", App: "idea"},
+		{ID: 6, Title: "[/opt/raw]", App: "idea"},  // 프로젝트 이름이 곧 경로일 때
+		{ID: 7, Title: "odd [x] – f", App: "idea"}, // 폴더 이름 자체가 [ ] 로 끝난다 — 경로가 아니다
+	}
+	for _, c := range []struct {
+		dir    string
+		want   uint64
+		wantOK bool
+	}{
+		{"/home/u/dev/projects/si/water_ai", 1, true},
+		{"/home/u/dev/projects/si/water_ai/", 1, true},
+		{"/home/u/work/api", 2, true},
+		{"/home/u/personal/api", 3, true},
+		{"/home/u/other/api", 0, false}, // 이름은 같지만 경로가 다르다
+		{"/srv/tools", 4, true},
+		{"/home/u", 5, true},
+		{"/opt/raw", 6, true},
+		{"/home/u/odd [x]", 7, true},
+		{"/elsewhere/water_ai", 0, false},
+	} {
+		got, ok := pickIntelliJWindow(wins, c.dir)
+		if ok != c.wantOK || got != c.want {
+			t.Errorf("%q → (%d, %v), want (%d, %v)", c.dir, got, ok, c.want, c.wantOK)
+		}
+	}
+}
+
+// 홈을 모르면 «~» 경로는 아무 폴더와도 같지 않다 — 이름으로 물러서지 않는다.
+func TestPickIntelliJWindowWithoutAHome(t *testing.T) {
+	prev := homeDir
+	homeDir = func() (string, error) { return "", errors.New("no home") }
+	t.Cleanup(func() { homeDir = prev })
+
+	wins := []shellWindow{{ID: 1, Title: "water_ai [~/dev/projects/si/water_ai] – Local", App: "idea"}}
+	if got, ok := pickIntelliJWindow(wins, "/home/u/dev/projects/si/water_ai"); ok {
+		t.Errorf("picked %d without knowing the home directory", got)
+	}
+}
+
 // VS Code 규칙은 IntelliJ 창을 보지 않는다 — 제목이 우연히 VS Code 모양이어도.
 func TestPickEditorWindowIgnoresIntelliJ(t *testing.T) {
 	wins := []shellWindow{{ID: 9, Title: "x - mux - Visual Studio Code", App: "idea"}}

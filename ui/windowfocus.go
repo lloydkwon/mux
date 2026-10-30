@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -75,6 +76,10 @@ const (
 	// dash with spaces (measured: "mux – Claude Code").
 	intellijTitleSep = " – "
 )
+
+// homeDir resolves the user's home directory, which IntelliJ shortens to "~"
+// in a title's path. A var so tests can pin it.
+var homeDir = os.UserHomeDir
 
 // focusShellWindow raises the VS Code window open on dir through the GNOME
 // Shell extension, and reports whether one came forward. It is what the real
@@ -225,6 +230,13 @@ func pickEditorWindow(wins []shellWindow, dir string) (uint64, bool) {
 // the first part is looked at, by equality — "mux" must not raise "my-mux", and
 // a file named like a project is not the project. Two windows with the name
 // give no answer, for the reason pickEditorWindow gives.
+//
+// Once two projects with one name have been open, IntelliJ writes the
+// project's location into that part — "<project> [<path>]", the path under
+// the home directory as "~/…" (water_ai's window: "water_ai
+// [~/dev/projects/si/water_ai] – Local"). The path names the folder, so such a
+// window is matched by its path alone, exactly: a same-named project elsewhere
+// is not dir's.
 func pickIntelliJWindow(wins []shellWindow, dir string) (uint64, bool) {
 	dir = strings.TrimRight(dir, "/")
 	if dir == "" {
@@ -238,15 +250,54 @@ func pickIntelliJWindow(wins []shellWindow, dir string) (uint64, bool) {
 			continue
 		}
 		name, _, _ := strings.Cut(w.Title, intellijTitleSep)
-		if strings.TrimSpace(name) == base {
-			found = w.ID
-			n++
+		name = strings.TrimSpace(name)
+		// The name first: a folder whose own name ends in "[…]" is not a path.
+		// A title that carries a path cannot equal a base name, so this never
+		// lets a same-named project elsewhere through.
+		if name != base {
+			loc, ok := intellijTitlePath(name)
+			if !ok || !intellijPathIs(loc, dir) {
+				continue
+			}
 		}
+		found = w.ID
+		n++
 	}
 	if n != 1 {
 		return 0, false
 	}
 	return found, true
+}
+
+// intellijTitlePath pulls the location out of a title's project part when
+// IntelliJ wrote one: "<project> [<path>]", or "[<path>]" when the project's
+// name is its path. Pure for testing.
+func intellijTitlePath(name string) (string, bool) {
+	if !strings.HasSuffix(name, "]") {
+		return "", false
+	}
+	if strings.HasPrefix(name, "[") {
+		return name[1 : len(name)-1], true
+	}
+	i := strings.Index(name, " [")
+	if i < 0 {
+		return "", false
+	}
+	return name[i+2 : len(name)-1], true
+}
+
+// intellijPathIs reports whether a title's location is dir, reading a leading
+// "~" as the home directory. Without a home a "~" path is no folder: guessing
+// one would raise a window that may not be dir's.
+func intellijPathIs(loc, dir string) bool {
+	if loc == "~" || strings.HasPrefix(loc, "~/") {
+		home, err := homeDir()
+		if err != nil || home == "" {
+			return false
+		}
+		loc = home + loc[1:]
+	}
+	return filepath.Clean(loc) == filepath.Clean(dir)
 }
 
 // titleSegments splits a VS Code title into its segments, without the app name
