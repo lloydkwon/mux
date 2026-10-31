@@ -115,15 +115,31 @@ func main() {
 	setupCmd := &cobra.Command{
 		Use:   "setup",
 		Short: "Set up the whole tmux integration with default keys",
-		Long: "Runs setup-keybind and setup-panel in one go, with their default keys.\n" +
-			"Use the individual commands instead to choose your own keys.",
+		Long: "Runs setup-keybind, setup-panel and setup-resurrect in one go, with their\n" +
+			"default keys. Use the individual commands instead to choose your own keys.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := tmux.SetupKeybind(tmux.DefaultBindKey); err != nil {
 				return err
 			}
 			fmt.Println()
-			return tmux.SetupPanel(tmux.DefaultPanelKey, tmux.DefaultFocusKey)
+			if err := tmux.SetupPanel(tmux.DefaultPanelKey, tmux.DefaultFocusKey); err != nil {
+				return err
+			}
+			fmt.Println()
+			return tmux.SetupResurrect()
+		},
+	}
+
+	setupResurrectCmd := &cobra.Command{
+		Use:   "setup-resurrect",
+		Short: "Save tmux sessions every 15 minutes and restore them when tmux starts",
+		Long: "Installs tmux-resurrect and tmux-continuum (pinned revisions, cloned with git\n" +
+			"if missing) and adds a block that loads them to tmux config. If your config\n" +
+			"already loads tmux-resurrect, only the option the mux panel needs is added.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return tmux.SetupResurrect()
 		},
 	}
 
@@ -257,7 +273,7 @@ func main() {
 	navCmd.Flags().StringVarP(&navTarget, "target", "t", "",
 		"pane whose window holds the panel (default: current)")
 
-	rootCmd.AddCommand(newCmd, popupCmd, setupCmd, setupKeybindCmd, setupPanelCmd, statusCmd,
+	rootCmd.AddCommand(newCmd, popupCmd, setupCmd, setupKeybindCmd, setupPanelCmd, setupResurrectCmd, statusCmd,
 		switchCmd, watchCmd, panelCmd, navCmd, borderCmd)
 
 	if err := rootCmd.Execute(); err != nil {

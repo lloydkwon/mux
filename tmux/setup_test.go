@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,10 +52,16 @@ func TestIntegrationInstalledIsFalseOnAFreshMachine(t *testing.T) {
 // Accepting the offer must leave the machine exactly where the two setup
 // commands would: both regions present, and recognised as installed.
 func TestInstallIntegrationWritesBothRegions(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("TMUX", "") // no server to apply to; the files are the test
+	// The mock runner keeps the plugin clone off the network; the plugins are
+	// put on disk by hand so the save/restore region has something to load.
+	withMock(t, func(m *mockRunner) {
+		installIntegrationWritesAllRegions(t)
+	})
+}
+
+func installIntegrationWritesAllRegions(t *testing.T) {
+	home := isolatedHome(t)
+	fakePlugins(t, filepath.Join(home, ".tmux", "plugins"))
 
 	if err := InstallIntegration(); err != nil {
 		t.Fatalf("InstallIntegration: %v", err)
@@ -71,7 +78,31 @@ func TestInstallIntegrationWritesBothRegions(t *testing.T) {
 	if !strings.Contains(s, panelBlockBegin) || !strings.Contains(s, panelBlockEnd) {
 		t.Errorf("conf lacks the panel block:\n%s", s)
 	}
+	if !strings.Contains(s, resurrectBlockBegin) {
+		t.Errorf("conf lacks the session save/restore region:\n%s", s)
+	}
 	if !IntegrationInstalled() {
 		t.Error("IntegrationInstalled() = false right after InstallIntegration")
 	}
+}
+
+// No git, no network: the keys and the panel still go in, and the error says
+// which part is missing rather than that setup failed.
+func TestInstallIntegrationKeepsTheKeysWhenResurrectFails(t *testing.T) {
+	withMock(t, func(m *mockRunner) {
+		home := isolatedHome(t)
+
+		err := InstallIntegration()
+		if !errors.Is(err, ErrResurrectUnavailable) {
+			t.Fatalf("want ErrResurrectUnavailable, got %v", err)
+		}
+		content, _ := os.ReadFile(filepath.Join(home, ".tmux.conf"))
+		s := string(content)
+		if !strings.Contains(s, muxKeybindMarker) || !strings.Contains(s, panelBlockBegin) {
+			t.Errorf("a resurrect failure took the other regions with it:\n%s", s)
+		}
+		if strings.Contains(s, resurrectBlockBegin) {
+			t.Errorf("region written without its plugins:\n%s", s)
+		}
+	})
 }

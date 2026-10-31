@@ -3,6 +3,7 @@ package ui
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -411,7 +412,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case setupInstalledMsg:
 		// Success needs no announcement — the keys simply work from here. What
 		// must not be silent is a failure, or the user believes they are set up.
-		if msg.err != nil {
+		switch {
+		case errors.Is(msg.err, tmux.ErrResurrectUnavailable):
+			// The keys and the panel went in; only the plugins did not. Saying
+			// "setup failed" would send someone to redo the part that worked.
+			m.err = fmt.Errorf("tmux keys set up, but %w (try `mux setup-resurrect`)", msg.err)
+		case msg.err != nil:
 			m.err = fmt.Errorf("tmux setup failed: %w (try `mux setup`)", msg.err)
 		}
 		return m, nil

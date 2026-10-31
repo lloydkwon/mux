@@ -126,12 +126,16 @@ mux
 On a machine with no mux in its tmux config, the first launch offers to set the
 integration up — press `y` and you are done: `prefix + m` opens the popup,
 `prefix + a` toggles the side panel, and both work immediately, no config
-reload. Declined it, or want your own keys?
+reload. The same `y` turns on session save/restore: tmux-resurrect and
+tmux-continuum (cloned with git, at pinned revisions) save every 15 minutes and
+bring your sessions back when the tmux server starts again — after a reboot, or
+a WSL shutdown. Declined it, or want your own keys?
 
 ```bash
 mux setup            # everything above, default keys
 mux setup-keybind    # just the popup bind — pass a key to override
 mux setup-panel      # just the panel bind and hooks — pass key and focus-key
+mux setup-resurrect  # just session save/restore
 ```
 
 Now press `Ctrl+b` then `m` anywhere in tmux to open mux.

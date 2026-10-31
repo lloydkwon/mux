@@ -37,8 +37,9 @@ func IntegrationInstalled() bool {
 	return false
 }
 
-// InstallIntegration writes both mux-owned regions with the default keys and
-// applies them to the running server — the quiet path behind the TUI's
+// InstallIntegration writes the mux-owned regions with the default keys — the
+// popup bind, the panel block and session save/restore — and applies them to
+// the running server — the quiet path behind the TUI's
 // first-run offer, and what `mux setup` bundles for the command line.
 //
 // It reuses the same write helpers `setup-keybind` and `setup-panel` go
@@ -76,7 +77,15 @@ func InstallIntegration() error {
 	if err := upsertBlock(target, block); err != nil {
 		return err
 	}
+	applied := append([]string{bindLine}, block...)
 
-	_ = applyToServer(append([]string{bindLine}, block...))
-	return nil
+	// Session save/restore last, and allowed to fail on its own: it needs git
+	// and the network, and neither is a reason to leave the keys unbound. The
+	// two regions above are applied either way; the error still reaches the
+	// offer page, so a missing save is not a surprise at the next restart.
+	saved, _, resurrectErr := installResurrect(confPath, target)
+	applied = append(applied, saved...)
+
+	_ = applyToServer(applied)
+	return resurrectErr
 }

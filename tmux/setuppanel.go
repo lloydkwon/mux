@@ -228,13 +228,19 @@ func borderLines(muxPath string) []string {
 // oh-my-tmux installs `~/.tmux.conf` as one. Renaming over it would replace the
 // link and leave the real file behind.
 func upsertBlock(path string, block []string) error {
+	return upsertFenced(path, panelBlockBegin, panelBlockEnd, block)
+}
+
+// upsertFenced is upsertBlock for any mux-owned fence — the panel's and the
+// session save/restore region share the placement and replacement rules.
+func upsertFenced(path, beginFence, endFence string, block []string) error {
 	content, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to read %s: %w", path, err)
 	}
 
 	lines := strings.Split(string(content), "\n")
-	if begin, end, ok := findBlock(lines); ok {
+	if begin, end, ok := findFenced(lines, beginFence, endFence); ok {
 		rest := append([]string{}, lines[end+1:]...)
 		lines = append(lines[:begin], append(block, rest...)...)
 	} else {
@@ -255,14 +261,19 @@ func upsertBlock(path string, block []string) error {
 // treated as absent rather than as running to the end of the file: truncating a
 // user's config on a hand-edited fence is not a failure worth risking.
 func findBlock(lines []string) (begin, end int, ok bool) {
+	return findFenced(lines, panelBlockBegin, panelBlockEnd)
+}
+
+// findFenced is findBlock for any fence.
+func findFenced(lines []string, beginFence, endFence string) (begin, end int, ok bool) {
 	begin, end = -1, -1
 	for i, line := range lines {
 		switch strings.TrimSpace(line) {
-		case panelBlockBegin:
+		case beginFence:
 			if begin < 0 {
 				begin = i
 			}
-		case panelBlockEnd:
+		case endFence:
 			if begin >= 0 && end < 0 {
 				end = i
 			}
