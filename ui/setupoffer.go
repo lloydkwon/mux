@@ -89,6 +89,9 @@ func renderSetupOfferBody() string {
 		helpStyle.Render("~/.tmux.conf에 mux 전용 블록을 쓰고, 실행 중인 서버에 바로"),
 		helpStyle.Render("적용합니다. 자동 저장 플러그인은 git 으로 받습니다."),
 		helpStyle.Render("키는 setup-keybind / setup-panel 명령으로 바꿀 수 있습니다."),
+		// Said here because this path never runs SetupPanel, which is the only
+		// other place that warns — and mux does not turn the option on itself.
+		helpStyle.Render("패널 클릭·경계 끌기에는 tmux 의 `set -g mouse on` 이 필요합니다."),
 		"",
 		titleStyle.Render(" y") + " 설정하기   " + titleStyle.Render("n") + " 다음에 (나중에 `mux setup`)",
 	}

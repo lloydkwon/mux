@@ -167,6 +167,16 @@ type watchModel struct {
 	// often, and there is one panel per window asking.
 	lastGhostCheck time.Time
 
+	// probeMouse asks tmux whether its `mouse` option is on (watchmouse.go).
+	// nil is off — every hand-built watchModel — so no test asks the
+	// developer's server, the same zero-value gate resolveOwn uses.
+	probeMouse func() bool
+
+	// mouseOff is the last answer, and what puts the hint row above the list.
+	// lastMouseCheck is when it was asked, on the ghost check's minute cadence.
+	mouseOff       bool
+	lastMouseCheck time.Time
+
 	// ownClients is how many clients were in this pane's session as of the last
 	// refresh. Held so an *arrival* can be seen: a level would undo the user's
 	// own cursor two seconds after they moved it, an edge only fires when
@@ -249,6 +259,7 @@ func RunWatch() error {
 				editorBin:      editorBin,
 				focusWindow:    focusShellWindow,
 				ghostIdle:      ghostIdle,
+				probeMouse:     tmux.MouseEnabled,
 				exePath:        exe,
 				// Taken here rather than on the first tick so the baseline is
 				// the file we actually started from. A tick later it may already
@@ -276,7 +287,10 @@ func RunWatch() error {
 }
 
 func (m watchModel) Init() tea.Cmd {
-	return tea.Batch(loadSessions, watchTick())
+	// The mouse is asked once at startup rather than waiting for the first
+	// minute: a panel that cannot be clicked should say so while the user is
+	// still looking at it for the first time. nil when probeMouse is.
+	return tea.Batch(loadSessions, watchTick(), mouseCheckCmd(m.probeMouse))
 }
 
 func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -390,7 +404,17 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m = due
 		}
-		return m, tea.Batch(loadSessions, watchTick(), adopt, ghost)
+		var mouse tea.Cmd
+		if due, ok := m.dueForMouseCheck(time.Now()); ok {
+			m, mouse = due, mouseCheckCmd(m.probeMouse)
+		} else {
+			m = due
+		}
+		return m, tea.Batch(loadSessions, watchTick(), adopt, ghost, mouse)
+
+	case mouseStateMsg:
+		m.mouseOff = msg.off
+		return m, nil
 
 	case sessionsLoadedMsg:
 		m.err = msg.err
@@ -1105,7 +1129,14 @@ func (m watchModel) sessionAtRow(y int) string {
 // takes come off the bottom of the event log, and fixedBox does that clipping
 // silently.
 func (m watchModel) sessionLines() []notifyLine {
-	return notifyLines(m.sessions, m.events, m.width, m.height, m.selected, m.ownSession, m.showHeader)
+	lines := notifyLines(m.sessions, m.events, m.width, m.height, m.selected, m.ownSession, m.showHeader)
+	if !m.mouseOff || len(lines) == 0 {
+		return lines
+	}
+	// On top, where it is read before anything is clicked. It carries no
+	// session, so the rows under it still click to the session they name —
+	// sessionAtRow indexes this same slice — and the cursor cannot stop on it.
+	return append([]notifyLine{mouseHintLine(m.width)}, lines...)
 }
 
 func (m watchModel) View() string {

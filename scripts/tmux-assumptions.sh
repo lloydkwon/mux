@@ -296,6 +296,53 @@ ok "다른 창에 select-pane -t =세션:창.pane 해도 현재 창은 그대로
 ok "그 창의 활성 pane 은 바뀐다" "0" "$(t display-message -p -t "=r:$SECOND" '#{pane_index}')"
 ok "#{window_panes} 가 창의 pane 수" "3" "$(t display-message -p -t "=r:$SECOND.2" '#{window_panes}')"
 
+# ── 13. mouse off 에서 패널 클릭이 닿는 조건 ─────────────────────────────────
+# ui/watch.go 의 패널 클릭과 mouseOff 안내. `mouse off` 에서 tmux 는 바깥 터미널의
+# 마우스 보고를 «활성 pane» 의 마우스 모드에 맞춰 켜고 끈다. 그래서 claude 처럼
+# 마우스를 켜는 프로그램이 활성인 창에서만 패널 클릭이 도착하고, 셸이 활성인 창에서는
+# 터미널이 클릭을 보내지 않아 패널이 아무것도 받지 못한다. 바깥으로 나가는 바이트를
+# script(1) 의 기록으로 받아 `ESC[?1000h` 가 나가는지 본다.
+echo
+echo "mouse off 와 바깥 마우스 보고 (ui/watch.go 패널 클릭)"
+if command -v script >/dev/null 2>&1; then
+	t new-session -d -s m -x 100 -y 20 "sleep 300"
+	t split-window -h -t m "printf '\033[?1000h\033[?1006h'; sleep 300"
+	MOUSE_PANE=$(t display-message -p -t m '#{pane_id}')
+	SHELL_PANE=$(t list-panes -t m -F '#{pane_id}' | grep -vx "$MOUSE_PANE")
+	MLOG=$(mktemp)
+	script -qfc "$TMUX_BIN -L $SOCKET -f /dev/null attach-session -t m" "$MLOG" \
+		>/dev/null 2>&1 &
+	MPID=$!
+	for _ in $(seq 1 30); do
+		[ -n "$(t list-clients -t m -F '#{client_tty}' 2>/dev/null)" ] && break
+		sleep 0.1
+	done
+	sleep 0.5
+	ON=$(printf '\033[?1000h')
+	# mouse_on_after <명령…>: 명령 뒤에 바깥으로 «마우스 보고 켜기» 가 나갔는지.
+	mouse_on_after() {
+		local mark
+		mark=$(wc -c <"$MLOG")
+		"$@"
+		sleep 0.5
+		tail -c +$((mark + 1)) "$MLOG" | grep -qF -- "$ON" && echo yes || echo no
+	}
+	ok "mouse off, 셸 pane 이 활성이면 마우스 보고를 켜지 않는다" "no" \
+		"$(mouse_on_after t select-pane -t "$SHELL_PANE")"
+	ok "mouse off, 마우스를 켠 pane 이 활성이면 켠다" "yes" \
+		"$(mouse_on_after t select-pane -t "$MOUSE_PANE")"
+	t select-pane -t "$SHELL_PANE"
+	sleep 0.3
+	ok "mouse on 이면 셸 pane 이 활성이어도 켠다" "yes" \
+		"$(mouse_on_after t set -g mouse on)"
+	t set -g mouse off
+	kill "$MPID" 2>/dev/null || true
+	wait "$MPID" 2>/dev/null || true
+	rm -f "$MLOG"
+else
+	echo "  SKIP  script(1) 이 없어 pty 를 못 붙였습니다"
+fi
+
 echo
 if [ "$FAILED" -eq 0 ]; then
 	echo "$CHECKED 개 전부 통과 — $VERSION 에서 mux 의 가정이 유지됩니다."

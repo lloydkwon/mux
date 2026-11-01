@@ -105,6 +105,23 @@ Code` 의 **폴더 칸만** 보고 그 칸과 **같아야** 한다 — 부분 �
 `openSessionEditor` 도 `restoreFocus()` 를 부른다. 전환과 달리 **뒤이어 사용자를
 패널에서 꺼내 줄 것이 아무것도 없으므로**, 여기서 빠뜨리면 포커스가 패널에 남는다.
 
+**`mouse off` 에서는 클릭이 «우연히» 도착한다 — 그래서 패널이 그걸 말한다.** `mouse` 가
+꺼져 있으면 tmux 는 바깥 터미널의 마우스 보고를 **활성 pane 의 마우스 모드**에 맞춰 켜고
+끄고, 들어온 이벤트는 바인딩 없이 포인터 아래 pane 에 넘긴다. 활성 pane 이 claude(마우스를
+켠다)인 창에서는 터미널이 클릭을 보내고 패널이 받는다. 활성 pane 이 셸인 창에서는 터미널이
+아무것도 보내지 않아, 패널 행을 눌러도 터미널의 글자 선택만 시작된다. 실측이고
+`scripts/tmux-assumptions.sh` 13절이 지킨다. 2026-11-01 에 «AI 세션에서는 클릭이 되는데 셸
+세션에서는 안 된다»로 보고됐다 — 첫 실행 설정으로 깐 사용자는 `mouse off` 경고를 본 적이
+없었다(tmux-config.md).
+
+mux 는 `mouse` 를 켜지 않는다(`MouseEnabled` 주석). 대신 패널이 꺼진 동안 목록 맨 위에
+세션 없는 한 줄(` 마우스 꺼짐 · set -g mouse on`, `ui/watchmouse.go`)을 그린다. 세션이 없으니
+`sessionAtRow`·`sessionOrder` 가 같은 슬라이스를 읽어도 클릭 행과 커서는 어긋나지 않는다.
+묻는 것은 `probeMouse`(nil 이면 꺼짐 — 손으로 만든 `watchModel` 은 서버에 묻지 않는다)를
+시작할 때 한 번, 그 뒤 유령 클라이언트 검사와 같은 1분 간격으로. 옵션은 설정을 고칠 때나
+바뀌는 것이라 2초 틱마다 창마다 `show-options` 를 부를 이유가 없고, 그 1분이 `mouse on` 뒤에
+안내가 남아 있는 최대 시간이다.
+
 **키보드는 뜻이 하나다.** `enter` 와 `mux nav enter`(= `prefix + Enter`)는 왼쪽 클릭과
 같이 전환만 한다. 오른쪽 버튼에 해당하는 키는 없다 — 필요해지면 `navKeys`·`navBinds`·
 `handleKey`·`cmd/mux` 를 다 고치고 사용자가 `mux setup-panel` 을 다시 돌려야 하므로,
