@@ -10,4 +10,4 @@
 | `runPanelAuto` | tmux-config.md |
 | `runBorder` | border.md |
 | 설정 복구 호출 | tmux-config.md |
-| `setup-resurrect`, `setup` | resurrect.md |
+| `setup-resurrect`, `setup`, `runResurrectHook`, `restoreSavedSessions` | resurrect.md |

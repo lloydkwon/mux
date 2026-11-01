@@ -274,6 +274,28 @@ else
 	echo "  SKIP  script(1) 이 없어 pty 를 못 붙였습니다"
 fi
 
+# ── 12. 복원 직후 활성 pane 바로잡기 ─────────────────────────────────────────
+# tmux/resurrect.go 의 ResurrectPostRestore. resurrect 는 활성 pane 을
+# `switch-client -t 세션:창` 뒤 `select-pane -t <번호>` 로 고르는데, continuum 이
+# 서버 시작 때 돌리면 붙은 클라이언트가 없어 switch-client 가 실패하고 번호만 준
+# select-pane 은 엉뚱한 창을 가리킨다 — 그래서 창마다 마지막에 만든 pane(옛 패널
+# 자리)이 활성으로 남았다. mux 는 `=세션:창.pane` 전체 주소로 다시 고르는데, 그게
+# 세션의 현재 창을 건드리지 않아야 복원된 «현재 창» 이 그대로다.
+echo
+echo "복원 직후 활성 pane (tmux/resurrect.go)"
+t new-session -d -s r -x 100 -y 20
+FIRST=$(t display-message -p -t r '#{window_index}')
+t new-window -t r
+SECOND=$(t display-message -p -t r '#{window_index}')
+t split-window -t "=r:$SECOND"
+t split-window -t "=r:$SECOND"
+t select-window -t "=r:$FIRST"
+t select-pane -t "=r:$SECOND.0"
+ok "다른 창에 select-pane -t =세션:창.pane 해도 현재 창은 그대로" "$FIRST" \
+	"$(t display-message -p -t r '#{window_index}')"
+ok "그 창의 활성 pane 은 바뀐다" "0" "$(t display-message -p -t "=r:$SECOND" '#{pane_index}')"
+ok "#{window_panes} 가 창의 pane 수" "3" "$(t display-message -p -t "=r:$SECOND.2" '#{window_panes}')"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
 	echo "$CHECKED 개 전부 통과 — $VERSION 에서 mux 의 가정이 유지됩니다."

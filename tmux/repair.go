@@ -9,8 +9,8 @@ import (
 // RepairOwnedConfig brings mux's own regions of the tmux config back in line
 // with the binary that is running.
 //
-// Both `setup-keybind` and `setup-panel` write an absolute path, resolved once
-// from os.Executable(). That path is right until the day mux is installed
+// `setup-keybind`, `setup-panel` and `setup-resurrect` write an absolute path,
+// resolved once from os.Executable(). That path is right until the day mux is installed
 // somewhere else — a different PREFIX, a `go install` when the last one was a
 // release tarball, a GOBIN that moved — and then nothing says so. tmux goes on
 // calling a binary the user believes they replaced, and the symptom is a
@@ -54,6 +54,15 @@ func RepairOwnedConfig() (bool, error) {
 	changed := false
 	if block, ok := repairedPanelBlock(lines, muxPath); ok {
 		if err := upsertBlock(target, block); err != nil {
+			return changed, err
+		}
+		if err := applyToServer(block); err != nil {
+			return true, err
+		}
+		changed = true
+	}
+	if block, ok := repairedResurrectBlock(lines, muxPath); ok {
+		if err := upsertFenced(target, resurrectBlockBegin, resurrectBlockEnd, block); err != nil {
 			return changed, err
 		}
 		if err := applyToServer(block); err != nil {
@@ -111,6 +120,50 @@ func panelBlockKeys(block []string) (key, focusKey string, ok bool) {
 		}
 	}
 	return key, focusKey, key != "" && focusKey != ""
+}
+
+// repairedResurrectBlock returns the session save/restore region as it should
+// be for this binary, and whether that differs from what is there.
+//
+// The region names mux in its restore hooks, so it goes stale the same way the
+// panel block does. Its settings are read back out of the block rather than
+// re-decided: whether it loads the plugins (a run-shell line), from where (the
+// resurrect entry point's directory), and whether the hooks are ours to write
+// (not when the rest of the config sets them). A block that loads plugins from
+// a path that cannot be read back is left alone. A block written before the
+// hooks existed gains them here, which is how an existing install picks up the
+// fix for the restored dead panel.
+func repairedResurrectBlock(lines []string, muxPath string) ([]string, bool) {
+	begin, end, found := findFenced(lines, resurrectBlockBegin, resurrectBlockEnd)
+	if !found {
+		return nil, false
+	}
+	existing := lines[begin : end+1]
+
+	loadPlugins, pluginDir := false, ""
+	const entry = "/tmux-resurrect/resurrect.tmux"
+	for _, line := range existing {
+		if !strings.HasPrefix(strings.TrimSpace(line), "run-shell") || !strings.Contains(line, entry) {
+			continue
+		}
+		loadPlugins = true
+		start := strings.Index(line, `"'`)
+		stop := strings.Index(line, entry+`'"`)
+		if start < 0 || stop < start {
+			return nil, false
+		}
+		pluginDir = line[start+2 : stop]
+	}
+	if loadPlugins && (pluginDir == "" || strings.Contains(pluginDir, "'")) {
+		return nil, false // a quoted path we cannot round-trip — not ours to guess at
+	}
+
+	rest := strings.Join(append(append([]string{}, lines[:begin]...), lines[end+1:]...), "\n")
+	want := resurrectBlockLines(muxPath, pluginDir, loadPlugins, !userSetsRestoreHooks(rest))
+	if equalLines(existing, want) {
+		return nil, false
+	}
+	return want, true
 }
 
 // repairedPopupBind returns the bind line the popup region should hold, and

@@ -115,7 +115,9 @@ Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale a
   `procStart` 를 못 적었으면 물러선다. (revive.md)
 - **`# mux resurrect { }` 의 `@resurrect-capture-pane-contents 'on'` 은 취향이 아니다** — 유령 패널 판정이
   복원된 pane 의 시작 명령과 그려진 머리글에 기대고, 둘 다 이 옵션이 있어야 생긴다. 플러그인이 디스크에
-  없으면 영역을 쓰지 않는다. (resurrect.md)
+  없으면 영역을 쓰지 않는다. 복원 직후 훅은 활성 pane 을 **먼저** 고르고 죽은 패널을 나중에 닫으며,
+  floor 없이는 아무것도 닫지 않는다. 시작 시 복원의 시드 세션 이름은 저장된 세션 이름으로 시작하면 안 된다
+  (resurrect 가 `=` 없이 찾는다). (resurrect.md)
 - **창의 유일한 pane 인 유령 패널은 죽이지 않고 제목만 지운다** — `kill-pane` 이 곧 `kill-session`. (panel.md)
 - **유령 클라이언트**: `StaleClients` 의 네 규칙 전부, `DetachTTY` 의 빈 tty 거부. (panel-width.md)
 - **훅 경로는 실패를 말하지 않는다** — `mux panel --auto` 는 삼키고, `mux border` 는 빈 줄에 exit 0.

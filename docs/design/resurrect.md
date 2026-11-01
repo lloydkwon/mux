@@ -29,14 +29,59 @@ pane 제목(`mux panel`)마저 덮어써서 아무 표시도 남지 않는다. �
 에서는 맞는다. 사용자가 `@resurrect-dir` 을 `resurrect` 로 끝나지 않는 곳으로 바꾸면 같은 일이 생긴다 —
 그때 남는 단서는 제목뿐이다.
 
-별도 훅 스크립트(복원 전 가장 큰 pane id 를 적어 두고, 복원 뒤 저장 파일에서 `mux panel` 이던 자리를
-닫는 것)도 만들어 돌려 봤다. 동작은 했지만 기존 유령 판정과 같은 일을 두 번 하는 셈이라 버렸다.
+처음에는 이것으로 충분하다고 보고, 복원 직후 훅(아래)은 «유령 판정과 같은 일을 두 번 한다»며 버렸다.
+틀렸다 — 다음 절.
+
+## 복원 직후 훅 (`mux resurrect-hook pre|post`)
+
+2026-11-01 재부팅 뒤 `mux` 창이 세 칸이 됐다: 빈 복원 셸, 패널 폭(46칸)에 끼인 Claude 대화, 새 패널.
+원인은 두 가지가 겹친 것이다.
+
+- **resurrect 는 활성 pane 을 복원하지 못한다.** `restore_active_pane_for_each_window` 는
+  `switch-client -t 세션:창` 뒤 `select-pane -t <번호>` 로 고른다. continuum 은 서버가 시작될 때,
+  아무도 붙기 전에 복원하므로 switch-client 가 실패하고, 번호만 준 select-pane 은 엉뚱한 창을 가리킨다.
+  그래서 창마다 마지막에 split 된 pane 이 활성으로 남는데, 패널은 늘 마지막에 split 된다 — **모든 창에서
+  죽은 패널이 활성 pane** 이었다. 격리 서버에서 재현했다(저장 때 0번 활성 → 복원 뒤 1번 활성).
+- **유령 판정은 자식 프로세스가 있는 pane 을 살려 둔다**(누가 입양한 셸일 수 있으므로). 사용자가 붙자마자
+  친 첫 명령(`claude --continue`)이 활성인 죽은 패널로 들어갔고, 그 순간부터 그 pane 은 자식이 있어 영영
+  치워지지 않았다.
+
+그래서 mux 가 resurrect 의 `pre-restore-all`/`post-restore-all` 훅으로 복원이 끝나는 순간 두 일을 한다.
+
+1. **pre**: 지금 있는 가장 큰 pane id 를 `@mux_restore_floor` 에 적는다.
+2. **post**: 저장 파일(`<dir>/last`)의 활성 pane 을 전체 주소 `=세션:창.pane` 으로 다시 고른 뒤,
+   저장 때 패널(`mux panel` 제목 **그리고** `mux` 명령)이던 자리를 닫는다.
+
+순서가 load-bearing 이다. 닫기를 먼저 하면 닫힌 pane 오른쪽의 번호가 당겨져 저장 파일의 번호와 어긋난다.
+닫기는 죽은 패널이 활성일 때만 활성 pane 을 옮기고, 그때 tmux 가 이웃에게 넘긴다.
+
+닫는 조건은 셋이고, 자식 프로세스 검사는 **하지 않는다** — 방금 생긴 pane 을 누가 입양했을 리 없기 때문이고,
+그걸 증명하는 것이 floor 다.
+
+- id 가 floor 보다 크다 — 이번 복원이 만든 pane 이다. floor 가 없으면(pre 훅이 안 돌았으면) 아무것도 안 한다.
+- 시작 명령에 `resurrectRestoreMark` 가 있다 — 살아 있는 패널이나 그 뒤에 시작한 다른 것이 아니다.
+- 창의 유일한 pane 이 아니다 — `kill-pane` 이 곧 `kill-session` 이다(panel.md).
+
+`select-pane -t =세션:창.pane` 이 세션의 현재 창을 바꾸지 않는다는 것(복원된 «현재 창»이 그대로여야 한다)은
+`scripts/tmux-assumptions.sh` 12절이 단언한다.
+
+훅 값은 mux 의 절대 경로를 담으므로 `RepairOwnedConfig` 가 패널 블록처럼 고쳐 쓴다
+(`repairedResurrectBlock`). 블록에서 플러그인 로드 여부와 플러그인 경로를 다시 읽어 그대로 두고, 훅이 없던
+옛 블록은 여기서 훅을 얻는다. 설정의 다른 곳에서 사용자가 같은 훅을 쓰면 우리 것은 넣지 않는다 — 옵션 하나에
+명령 하나이고, 그 자리는 그 사람 것이다. 훅 경로는 실패를 말하지 않는다(`runResurrectHook`) — resurrect 가
+그 출력을 세션을 기다리는 사용자 앞에 띄운다.
+
+시험할 때의 함정: `script -qfc "tmux attach" /dev/null </dev/null` 로 붙인 클라이언트는 활성 pane 에 EOF 를
+보내 셸을 끝낸다. pane 하나짜리 창이 통째로 사라져 훅이 창을 지운 것처럼 보인다. `sleep 20 | script …` 처럼
+입력을 열어 둔다.
 
 ## 영역의 모양
 
 ```
 # mux resurrect {
 set -g @resurrect-capture-pane-contents 'on'
+set -g @resurrect-hook-pre-restore-all "'<mux>' resurrect-hook pre"
+set -g @resurrect-hook-post-restore-all "'<mux>' resurrect-hook post"
 set -g @continuum-restore 'on'
 run-shell "'<plugins>/tmux-resurrect/resurrect.tmux'"
 run-shell "'<plugins>/tmux-continuum/continuum.tmux'"
@@ -44,14 +89,47 @@ run-shell "'<plugins>/tmux-continuum/continuum.tmux'"
 ```
 
 - **패널 영역과 다른 펜스다.** 패널 블록은 `setup-panel` 과 복구 경로(`RepairOwnedConfig`)가 통째로
-  다시 쓴다. 누군가의 세션이 저장되느냐가 그 재생성에 딸려 가면 안 된다. mux 경로가 들어 있지 않으므로
-  복구 대상도 아니다.
+  다시 쓴다. 누군가의 세션이 저장되느냐가 그 재생성에 딸려 가면 안 된다. 이 영역도 훅에 mux 경로를 담으므로
+  복구 대상이지만, 자기 펜스 안에서 따로 고쳐진다.
 - **tpm 을 거치지 않고 `run-shell` 로 직접 부른다.** tpm 은 「마지막 줄이어야 한다」는 로더를 요구하고,
   사용자에게 tpm 이 없으면 tpm 까지 깔아야 한다. 플러그인 디렉터리는 tpm 의 기본값(`~/.tmux/plugins`,
   XDG 설정이면 `…/tmux/plugins`)을 쓰므로 나중에 tpm 으로 옮겨도 그 자리에 있다.
 - **resurrect 가 continuum 보다 먼저다.** continuum 은 resurrect 가 로드될 때 옵션으로 공개하는
   저장·복원 스크립트 경로를 읽는다.
 - **두 겹 인용** — tmux 큰따옴표 안에 `/bin/sh` 작은따옴표. 이유는 [tmux-config.md](tmux-config.md).
+
+## mux 가 시작할 때 복원한다 (`RestoreAtStartup`)
+
+continuum 은 tmux **서버가 시작될 때** 복원한다. 재부팅 뒤에는 누가 tmux 를 건드리기 전까지 서버가 없다.
+2026-11-01 의 보고: 부팅 뒤 `mux` 를 열면 목록이 비어 있고, 거기서 `mux` 세션을 만들려 하자 «중복»이라며
+옛 세션들이 나타났다. 순서는 이렇다 — 빈 목록에서 만든 `new-session` 이 서버를 띄우고, 서버가 설정을 읽어
+continuum 이 복원하고, 복원이 방금 친 이름과 같은 세션을 되살린다.
+
+그래서 `runRoot` 와 `mux new` 는 그리기 전에 `restoreSavedSessions` 를 부른다. 서버가 없고(`has-session`
+실패), 설정에 mux 의 영역과 복원 훅이 있고, 저장 파일이 있을 때만 움직인다. 나머지 경우는 예전 그대로 연다.
+
+1. 시드 세션 하나로 서버를 띄운다 — 설정이 읽히고 continuum 이 «방금 시작한 서버»를 본다.
+2. post 훅이 남기는 `@mux_restored` 를 기다린다. 이것이 «누가 돌렸든 복원이 끝났다»는 유일한 신호다.
+3. `restoreGrace`(5초)가 지나도 pre 훅의 floor 가 없으면 — 복원이 시작조차 안 했으면 — resurrect 의 복원
+   스크립트(`@resurrect-restore-script-path`)를 `run-shell` 로 직접 돌린다. continuum 은 다른 tmux 서버가
+   떠 있으면 물러서기 때문이다(`-L` 테스트 서버 하나로 충분하다). floor 가 있으면 continuum 이 이미 돌고
+   있으므로 두 번 돌리지 않는다.
+4. 시드를 닫는다. 복원된 것이 없으면 세션이 하나도 안 남아 서버도 함께 끝난다 — mux 가 찾은 그 상태다.
+
+resurrect 에도 시드 처리가 있다(«처음부터 복원»이면 세션 `0` 을 닫는다). 하지만 서버의 pane 이 딱 하나일
+때만 그렇게 판단하고, 패널 훅이 새 세션마다 pane 을 하나 더 넣으므로 여기서는 적용되지 않는다.
+
+**시드 이름은 저장된 어떤 세션 이름으로도 시작하면 안 된다** (`seedSessionName`). resurrect 는
+`has-session -t <이름>` 을 `=` 없이 묻고, tmux 는 정확한 이름이 없으면 접두사로 찾는다. 시드가
+`mux-restoring` 이었을 때 저장된 `mux` 가 «있다»고 판정되어 그 창들이 시드 안으로 복원됐고, 시드를 닫자
+함께 사라졌다 — 격리 서버에서 세 세션 중 둘만 돌아왔다. 첫 글자를 바꿔 가며 고른다. `_` 를 앞에 계속 붙이는
+방식은 `_` 라는 세션 하나에 무한 루프가 된다(테스트가 실제로 멈췄다).
+
+서버가 없으니 `@resurrect-dir` 은 읽을 수 없고 `resurrectDir` 은 resurrect 의 기본값으로 떨어진다. mux 의
+영역은 그 옵션을 쓰지 않으므로 같은 곳이다.
+
+시험할 때: `TMUX_TMPDIR` 로 기본 소켓을 옮기면 mux 의 `tmux` 호출이 전부 격리 서버로 간다. 다만 소켓 경로는
+유닉스 소켓 길이 제한(약 108바이트)에 걸리므로 짧은 디렉터리를 쓴다 — 스크래치 경로는 «File name too long» 이었다.
 
 ## 플러그인
 

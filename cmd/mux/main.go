@@ -100,6 +100,11 @@ func main() {
 		Use:   "new",
 		Short: "Open mux on the new-session prompt and attach to what it creates",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Before the prompt, for the same reason as runRoot: a session
+			// created into an empty server is what triggers the restore, and
+			// the restore then collides with the name just typed.
+			reviveAndRemember()
+			restoreSavedSessions()
 			return runTUI(ui.NewSessionModel())
 		},
 	}
@@ -273,7 +278,20 @@ func main() {
 	navCmd.Flags().StringVarP(&navTarget, "target", "t", "",
 		"pane whose window holds the panel (default: current)")
 
-	rootCmd.AddCommand(newCmd, popupCmd, setupCmd, setupKeybindCmd, setupPanelCmd, setupResurrectCmd, statusCmd,
+	resurrectHookCmd := &cobra.Command{
+		Use:       "resurrect-hook <pre|post>",
+		Short:     "For tmux-resurrect's restore hooks: fix the active panes and close dead panels",
+		Hidden:    true,
+		Args:      cobra.ExactArgs(1),
+		ValidArgs: []string{"pre", "post"},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			runResurrectHook(args[0])
+			return nil
+		},
+		SilenceUsage: true,
+	}
+
+	rootCmd.AddCommand(newCmd, popupCmd, setupCmd, setupKeybindCmd, setupPanelCmd, setupResurrectCmd, resurrectHookCmd, statusCmd,
 		switchCmd, watchCmd, panelCmd, navCmd, borderCmd)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -324,6 +342,7 @@ func runRoot(herdrMode, claudeMode bool) error {
 		return runTUI(ui.NewHerdrModel())
 	}
 	reviveAndRemember()
+	restoreSavedSessions()
 	pairSessions()
 	if shouldBootstrap() {
 		// Returns only on failure — attach-session replaces this process.
@@ -612,6 +631,31 @@ func joinWith(parts []string, sep string) string {
 // The starting model is a parameter so `mux` and `mux new` differ only in where
 // they open — the attach and detach handling below is shared, and a second copy
 // of it is how one of them would quietly stop attaching.
+// restoreSavedSessions brings saved sessions back when no tmux server is
+// running, before the list is drawn — after a reboot, the list would otherwise
+// open empty and the first session created would collide with a restored one.
+//
+// Narrated on stderr like adoptClaudeSessions, since it waits for the restore.
+// Never fails: an unrestored server is the state mux used to open on anyway.
+func restoreSavedSessions() {
+	tmux.RestoreAtStartup(func(line string) { fmt.Fprintln(os.Stderr, line) })
+}
+
+// runResurrectHook is what tmux-resurrect runs around a restore.
+//
+// It never reports a failure, for the reason runPanelAuto does not: it runs
+// from a hook, and resurrect would put whatever it printed in front of the user
+// who is waiting for their sessions to come back. Every step in tmux already
+// stands down on anything unexpected; an error here means "did nothing".
+func runResurrectHook(phase string) {
+	switch phase {
+	case "pre":
+		_ = tmux.ResurrectPreRestore()
+	case "post":
+		_ = tmux.ResurrectPostRestore()
+	}
+}
+
 // repairOwnedConfig heals a tmux config that still names an older copy of mux.
 //
 // Failures are swallowed on purpose. This is housekeeping the user did not ask

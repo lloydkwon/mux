@@ -20,7 +20,7 @@ load-bearing 인지. 2026-10-14 까지는 전부 루트 `CLAUDE.md` 한 파일(1
 | [panel-width.md](panel-width.md) | 패널 폭 하나, 천장·바닥, 드래그 판별, 유령 클라이언트 정리 |
 | [border.md](border.md) | 작업 pane 위 테두리 줄 `mux border` |
 | [revive.md](revive.md) | 소켓만 잃은 tmux 서버를 SIGUSR1 로 되살리기 |
-| [resurrect.md](resurrect.md) | 세션 저장·복원 영역 `# mux resurrect { }` — 왜 pane 내용 저장이 필수인가, 플러그인 고정, 이미 쓰는 사용자 |
+| [resurrect.md](resurrect.md) | 세션 저장·복원 영역 `# mux resurrect { }` — 왜 pane 내용 저장이 필수인가, 복원 직후 훅(활성 pane·죽은 패널), mux 시작 시 복원, 플러그인 고정, 이미 쓰는 사용자 |
 | [tmux-config.md](tmux-config.md) | `setup-keybind`/`setup-panel` 영역, 자가 복구, 폭·VS Code 게이트, 훅, 첫 실행 제안 |
 
 새 주제는 새 문서로 만들고, 이 표와 해당 디렉터리의 `CLAUDE.md` 에 한 줄씩 더한다.

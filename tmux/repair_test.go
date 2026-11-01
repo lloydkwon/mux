@@ -139,3 +139,51 @@ func readFile(t *testing.T, path string) string {
 	}
 	return string(b)
 }
+
+// A region written before the restore hooks existed gains them — that is how
+// an existing install picks up the dead-panel fix — and keeps its plugin path.
+func TestRepairedResurrectBlockAddsTheHooks(t *testing.T) {
+	old := []string{
+		resurrectBlockBegin,
+		captureContentsLine,
+		"set -g @continuum-restore 'on'",
+		`run-shell "'/home/u/.tmux/plugins/tmux-resurrect/resurrect.tmux'"`,
+		`run-shell "'/home/u/.tmux/plugins/tmux-continuum/continuum.tmux'"`,
+		resurrectBlockEnd,
+	}
+	got, ok := repairedResurrectBlock(old, "/bin/mux")
+	if !ok {
+		t.Fatal("a block without the hooks was left alone")
+	}
+	want := resurrectBlockLines("/bin/mux", "/home/u/.tmux/plugins", true, true)
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestRepairedResurrectBlockFollowsTheBinary(t *testing.T) {
+	old := resurrectBlockLines("/old/mux", "/p", true, true)
+	got, ok := repairedResurrectBlock(old, "/new/mux")
+	if !ok || strings.Contains(strings.Join(got, "\n"), "/old/mux") {
+		t.Errorf("the old path survived:\n%s", strings.Join(got, "\n"))
+	}
+}
+
+func TestRepairedResurrectBlockLeavesACorrectOneAlone(t *testing.T) {
+	for _, load := range []bool{true, false} {
+		current := resurrectBlockLines("/bin/mux", "/p", load, true)
+		if _, ok := repairedResurrectBlock(current, "/bin/mux"); ok {
+			t.Errorf("loadPlugins=%v: a correct block was rewritten", load)
+		}
+	}
+}
+
+// The user's own restore hook elsewhere in the config keeps ours out.
+func TestRepairedResurrectBlockRespectsTheUsersHooks(t *testing.T) {
+	lines := append([]string{"set -g @resurrect-hook-post-restore-all 'mine'"},
+		resurrectBlockLines("/bin/mux", "/p", true, true)...)
+	got, ok := repairedResurrectBlock(lines, "/bin/mux")
+	if !ok || strings.Contains(strings.Join(got, "\n"), "resurrect-hook") {
+		t.Errorf("our hooks were kept beside the user's:\n%s", strings.Join(got, "\n"))
+	}
+}
