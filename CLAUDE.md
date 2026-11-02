@@ -33,6 +33,8 @@ scripts/test-fixture.sh down    # tear them down
 make herdr-check                # herdr 의 응답 모양이 그대로인지 (herdr 안에서, 읽기만)
 ./mux --herdr                   # herdr 를 데이터 출처로 목록을 연다 (읽기 전용)
 ./mux --claude                  # 돌고 있는 클로드 «대화» 목록; enter 로 가거나 여기서 이어간다
+./mux agent ls                  # 이 서버의 Claude pane 목록 — prompt/wait/read 의 대상 (docs/design/agent-api.md)
+go test -tags e2e -run TestAgent ./e2e/   # agent API 만 가짜 Claude 로 (~20초)
 ```
 
 CI (`.github/workflows/ci.yml`) runs test + build + arm64 cross-build + `scripts/tmux-assumptions.sh` + `make e2e`.
@@ -47,7 +49,7 @@ Note the private server has no user config, so `base-index` is tmux's default 0 
 
 Three layers, strictly one-directional:
 
-- `cmd/mux` — cobra CLI: root (TUI), `popup`, `setup-keybind`, `setup-panel`, `status`, `watch`, `panel`, `nav`.
+- `cmd/mux` — cobra CLI: root (TUI), `popup`, `setup-keybind`, `setup-panel`, `status`, `watch`, `panel`, `nav`, `agent`.
 - `tmux/` — everything that shells out or reads the filesystem. No UI dependencies.
 - `herdr/` — the same job for herdr, and the only package that reads it. Imports `tmux` for the session types and nothing else; `tmux` does not know it exists.
 - `ui/` — Bubble Tea model, rendering, preferences. Depends on `tmux` and `herdr`.
@@ -141,4 +143,14 @@ Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale a
   `/bin/sh`(작은따옴표) 두 겹으로 인용, 쓰기는 `os.WriteFile`(심링크를 따른다). (tmux-config.md)
 - **`modeHelp` 에 서브모델을 만들지 않는다**, 도움말 본문은 `TestHelpBodyFitsPopup` 안에 맞춘다. (tui.md)
 - **프로젝트 필터 시딩은 버그가 아니다** — `esc` 가 탈출구다. (tui.md)
+- **에이전트 프롬프트는 우리 글이 입력창에 그대로 보일 때만 Enter 를 누르고, 글은 한 번만 친다.**
+  `send-keys -l --` 한 번, Enter 는 0.6초 뒤 따로, 재시도는 Enter 한 번뿐. 어긋나면 친 만큼 BSpace 로
+  되돌리되, 지우기 직전에 다시 읽어 «원래 글 + 우리 글» 일 때만 지운다(사람의 초안·그 사이 친 글을
+  지우지 않는다). blocked 는 `--force` 로도 보내지 않고, `--force` 도
+  입력창을 비우지 않는다(`C-u` 는 줄바꿈된 글을 다 못 지운다). 끝 `;` 은 `\;`, 700자 상한(801자부터
+  접힌다). 모든 `PromptAgent` 테스트가 «`-l` 은 많아야 한 번» 을 단언한다. (agent-api.md)
+- **에이전트 상태 단어는 `AIState.String()` 이 아니다**(`status --json` 의 "waiting"=완료와 섞지 않는다).
+  `wait --after` 의 완료 기준은 보낸 시각이 아니라 기록에 프롬프트 턴이 시작된 시각이고, `read` 는
+  마지막 응답 그룹에 글이 없으면 앞 그룹으로 물러서지 않는다(exit 2). 대상이 모호하면 고르지 않는다.
+  종료 코드 6(되돌렸으니 다시 보내도 됨)과 7(기록에 안 보임 — 다시 보내지 마라)을 합치지 않는다. (agent-api.md)
 - **주석에 «measured»·«verified» 를 쓰면** `scripts/tmux-assumptions.sh` 에 그 단언을 한 줄 더한다.

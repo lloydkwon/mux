@@ -292,10 +292,10 @@ func main() {
 	}
 
 	rootCmd.AddCommand(newCmd, popupCmd, setupCmd, setupKeybindCmd, setupPanelCmd, setupResurrectCmd, resurrectHookCmd, statusCmd,
-		switchCmd, watchCmd, panelCmd, navCmd, borderCmd)
+		switchCmd, watchCmd, panelCmd, navCmd, borderCmd, newAgentCmd())
 
 	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
 }
 

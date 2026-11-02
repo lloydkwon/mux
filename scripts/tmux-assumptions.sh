@@ -411,6 +411,51 @@ else
 	echo "  SKIP  script(1) 이나 mkfifo 가 없어 클라이언트를 붙이지 못했습니다"
 fi
 
+# ── 15. 에이전트 프롬프트 ───────────────────────────────────────────────────
+# tmux/agent_prompt.go 는 다른 Claude 의 입력창에 글을 친다(`mux agent prompt`). 글은
+# send-keys -l -- 로 한 번 치고, Enter 는 따로 보내고, 어긋나면 친 글자 수만큼 BSpace 로
+# 되돌린다. 아래가 그 전제다 — cat 이 도는 pane 에서 tty 에코로 확인한다.
+echo
+echo "에이전트 프롬프트 (tmux/agent_prompt.go)"
+AP=$(t new-session -d -P -F '#{pane_id}' -s agentapi -x 120 -y 30 cat)
+sleep 0.3
+apcount() { sleep 0.4; t capture-pane -p -t "$AP" | grep -c -F -- "$1"; }
+
+t send-keys -t "$AP" -l -- '-n Up Space C-u lit1'
+t send-keys -t "$AP" Enter
+ok "send-keys -l -- 는 키 이름·플래그 모양 글도 글자 그대로 보낸다, Enter 는 따로 보내도 제출된다" "2" \
+	"$(apcount '-n Up Space C-u lit1')"
+OUT=$(t send-keys -t "$AP" -l '-n lit2' 2>&1)
+okc "-- 가 없으면 '-n' 을 플래그로 읽는다 (그래서 늘 -- 를 넣는다)" "-n" "$OUT"
+OUT=$(t send-keys -t "$AP" -l -- 'semi;' bogus-cmd 2>&1)
+okc "«;» 로 끝나는 인자는 명령을 끊는다 (뒤 인자가 새 명령이 된다)" "unknown command" "$OUT"
+t send-keys -t "$AP" -N 3 BSpace # 위에서 친 'semi' 의 일부가 남았을 수 있다 — 줄을 비운다
+t send-keys -t "$AP" C-u
+t send-keys -t "$AP" -l -- 'lit3\;'
+t send-keys -t "$AP" Enter
+ok "«\;» 로 끝나면 «;» 가 글자로 간다" "2" "$(apcount 'lit3;')"
+t send-keys -t "$AP" -l -- 'lit4abcdef'
+t send-keys -t "$AP" -N 3 BSpace
+t send-keys -t "$AP" Enter
+# 지운 줄의 에코와 cat 의 출력, 두 줄 모두 'lit4abc' 이고 'def' 는 어디에도 없어야 한다.
+ok "send-keys -N 3 BSpace 는 세 글자를 지운다" "2 0" "$(apcount 'lit4abc') $(apcount 'lit4abcd')"
+OUT=$(LANG=C LC_ALL=C "$TMUX_BIN" -L "$SOCKET" send-keys -t "$AP" -l -- '한글 ❯ lit5' 2>&1)
+t send-keys -t "$AP" Enter
+ok "LANG=C 클라이언트가 보낸 한글·❯ 도 그대로 간다" "2" "$(apcount '한글 ❯ lit5')"
+t send-keys -t "$AP" -l -- "$(printf '\xe2\x9d\xaf\xc2\xa0lit6')"
+sleep 0.4
+ok "LANG=C 클라이언트의 capture-pane -p 도 ❯+U+00A0 를 UTF-8 바이트로 낸다" "1" \
+	"$(LANG=C LC_ALL=C "$TMUX_BIN" -L "$SOCKET" capture-pane -p -t "$AP" | grep -c "$(printf '\xe2\x9d\xaf\xc2\xa0lit6')")"
+t send-keys -t "$AP" C-u
+t copy-mode -t "$AP"
+ok "#{pane_in_mode} 는 복사 모드에서 1" "1" "$(t display-message -p -t "$AP" '#{pane_in_mode}')"
+t send-keys -t "$AP" -X cancel
+ok "send-keys -X cancel 로 복사 모드를 빠져나온다" "0" "$(t display-message -p -t "$AP" '#{pane_in_mode}')"
+t set-window-option -t "$AP" synchronize-panes on
+ok "#{pane_synchronized} 는 synchronize-panes 가 켜진 창에서 1" "1" "$(t display-message -p -t "$AP" '#{pane_synchronized}')"
+t set-window-option -t "$AP" synchronize-panes off
+ok "#{pane_synchronized} 는 꺼진 창에서 0" "0" "$(t display-message -p -t "$AP" '#{pane_synchronized}')"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
 	echo "$CHECKED 개 전부 통과 — $VERSION 에서 mux 의 가정이 유지됩니다."
