@@ -307,6 +307,9 @@ ok "#{window_panes} 가 창의 pane 수" "3" "$(t display-message -p -t "=r:$SEC
 echo
 echo "mouse off 와 바깥 마우스 보고 (ui/watch.go 패널 클릭)"
 if command -v script >/dev/null 2>&1; then
+	# 3.8 부터 mouse 의 기본값이 on 이다(CHANGES 3.7c→3.8). -f /dev/null 로 도는 이 서버가 3.4 처럼
+	# off 로 시작한다고 기대하면, 3.8 에서는 바깥 마우스 보고가 처음부터 켜져 있어 아래 단언이 헛돈다.
+	t set -g mouse off
 	t new-session -d -s m -x 100 -y 20 "sleep 300"
 	t split-window -h -t m "printf '\033[?1000h\033[?1006h'; sleep 300"
 	MOUSE_PANE=$(t display-message -p -t m '#{pane_id}')
