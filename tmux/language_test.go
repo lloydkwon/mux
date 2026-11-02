@@ -58,6 +58,17 @@ func TestLanguageAt(t *testing.T) {
 		{"typescript", []string{"package.json", "tsconfig.json"}, nil, "TypeScript"},
 		{"javascript", []string{"package.json"}, nil, "JavaScript"},
 		{"cmake", []string{"CMakeLists.txt"}, nil, "C/C++"},
+		// 빌드 파일 없는 Python — 스크립트와 virtualenv 만 있는 프로젝트(infra-monitor). 약한 표식이라
+		// 빌드 파일 규칙이 모두 빗나간 뒤에만 본다.
+		{"a script at the top", []string{"monitor.py", "README.md"}, nil, "Python"},
+		{"a pyw at the top", []string{"run-monitor.pyw"}, nil, "Python"},
+		{"a virtualenv", []string{".venv/pyvenv.cfg"}, nil, "Python"},
+		{"a virtualenv named venv", []string{"venv/pyvenv.cfg"}, nil, "Python"},
+		{"a folder named .venv that is no virtualenv", nil, []string{".venv"}, ""},
+		{"a script beside go.mod", []string{"go.mod", "tool.py"}, nil, "Go"},
+		{"a script beside package.json", []string{"package.json", "gen.py"}, nil, "JavaScript"},
+		{"a virtualenv beside gradle", []string{"build.gradle", ".venv/pyvenv.cfg"}, nil, "Java"},
+		{"a folder named like a script", nil, []string{"tool.py"}, ""},
 		{"nothing", []string{"README.md"}, nil, ""},
 		{"a folder named like a marker", nil, []string{"go.mod"}, ""},
 		{"markers only below the top", []string{"ai/pyproject.toml", "backend/build.gradle"}, nil, ""},
@@ -92,8 +103,11 @@ func TestProjectLanguage(t *testing.T) {
 			"outer/go.mod", "outer/repo/README", // repo 는 저장소 — 그 밖의 go.mod 는 남의 것
 			"loose/sub/notes.md",                // 저장소도 표식도 없이 홈까지 — 없음
 			"wtouter/go.mod", "wtouter/wt/.git", // worktree 의 .git 은 파일이다 — 그래도 저장소 맨 위
+			"mux/scripts/gen.py",                 // 위의 go.mod 가 아래의 스크립트를 이긴다
+			"pyrepo/app.py", "pyrepo/pkg/mod.py", // 빌드 파일 없는 저장소 — 가장 가까운 약한 표식
+			"loosepy/tool/run.py", // 저장소 밖에서도 약한 표식은 답이 된다
 		},
-		[]string{"mux/.git", "outer/repo/.git", "outer/repo/src", "wtouter/wt/sub"},
+		[]string{"mux/.git", "outer/repo/.git", "outer/repo/src", "wtouter/wt/sub", "pyrepo/.git"},
 	)
 
 	for _, c := range []struct {
@@ -105,6 +119,9 @@ func TestProjectLanguage(t *testing.T) {
 		{filepath.Join(home, "outer", "repo", "src"), ""},
 		{filepath.Join(home, "loose", "sub"), ""},
 		{filepath.Join(home, "wtouter", "wt", "sub"), ""},
+		{filepath.Join(home, "mux", "scripts"), "Go"},
+		{filepath.Join(home, "pyrepo", "pkg"), "Python"},
+		{filepath.Join(home, "loosepy", "tool"), "Python"},
 		{home, ""},
 		{"", ""},
 		{"relative/path", ""},

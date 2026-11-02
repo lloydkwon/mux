@@ -88,6 +88,8 @@ func TestIsPythonProject(t *testing.T) {
 		{"kotlin gradle beside pyproject", []string{"build.gradle.kts", "pyproject.toml"}, nil, false},
 		{"gradle settings beside pyproject", []string{"settings.gradle", "pyproject.toml"}, nil, false},
 		{"maven beside pyproject", []string{"pom.xml", "pyproject.toml"}, nil, false},
+		{"scripts and a virtualenv, no build file", []string{"monitor.py", ".venv/pyvenv.cfg"}, nil, true},
+		{"a script beside go.mod", []string{"go.mod", "tool.py"}, nil, false},
 		{"nothing", nil, nil, false},
 		{"python only below the top", []string{"ai/pyproject.toml"}, nil, false},
 		{"a folder named like a marker", nil, []string{"pyproject.toml"}, false},

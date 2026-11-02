@@ -51,11 +51,25 @@ var languageRules = []languageRule{
 	{label: "C/C++", names: []string{"CMakeLists.txt"}},
 }
 
+// 빌드 파일 없는 Python 도 흔하다 — 스크립트 몇 개와 virtualenv 로 된 도구(2026-11-02
+// infra-monitor: monitor.py, monitor_app/*.py, .venv). 그래서 빌드 파일 규칙이 모두 빗나간 뒤에만
+// 약한 표식을 본다: 맨 위의 *.py·*.pyw 파일, 또는 virtualenv(.venv·venv 안의 pyvenv.cfg — 이름만
+// 같은 폴더가 아니라 venv·uv 가 만든 것). 약한 표식은 어떤 빌드 파일에도 진다 — Go 저장소의
+// 도우미 스크립트 하나가 그 저장소를 Python 으로 만들지 않는다.
+
+// pythonScriptSuffixes are the loose Python files that are a weak sign at a
+// folder's top.
+var pythonScriptSuffixes = []string{".py", ".pyw"}
+
+// venvDirs are where a project keeps its virtualenv; one holding pyvenv.cfg is
+// a weak sign of Python.
+var venvDirs = []string{".venv", "venv"}
+
 // LanguageAt is the language of the project whose top is dir, or "" when dir
-// carries no build file mux knows. Only dir itself is read — see
-// ProjectLanguage for a folder inside a project.
+// carries no sign mux knows. Only dir itself is read — see ProjectLanguage for
+// a folder inside a project.
 func LanguageAt(dir string) string {
-	lang, _ := scanLanguage(dir)
+	lang, _, _ := scanLanguage(dir)
 	return lang
 }
 
@@ -77,10 +91,20 @@ func ProjectLanguage(dir string) string {
 	if home != "" {
 		home = filepath.Clean(home) // $HOME may end in "/", and d never will
 	}
+	// A weak sign does not end the climb: a build file further up still wins,
+	// so the scripts/ folder of a Go repository stays Go. The nearest weak sign
+	// is the answer only when no build file turns up before the climb ends.
+	nearestWeak := ""
 	for d := filepath.Clean(dir); d != "/" && d != home; {
-		lang, repoTop := scanLanguage(d)
-		if lang != "" || repoTop {
+		lang, weak, repoTop := scanLanguage(d)
+		if lang != "" && !weak {
 			return lang
+		}
+		if lang != "" && nearestWeak == "" {
+			nearestWeak = lang
+		}
+		if repoTop {
+			break
 		}
 		parent := filepath.Dir(d)
 		if parent == d {
@@ -88,38 +112,58 @@ func ProjectLanguage(dir string) string {
 		}
 		d = parent
 	}
-	return ""
+	return nearestWeak
 }
 
-// scanLanguage reads dir once and reports the language its files name and
-// whether it is a repository's top. Folders named like a build file are not
-// build files.
-func scanLanguage(dir string) (lang string, repoTop bool) {
+// scanLanguage reads dir once and reports the language its build files name —
+// failing that, the one its weak signs suggest (weak true) — and whether it is
+// a repository's top. Folders named like a build file are not build files.
+func scanLanguage(dir string) (lang string, weak, repoTop bool) {
 	if dir == "" {
-		return "", false
+		return "", false, false
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return "", false
+		return "", false, false
 	}
 	files := make(map[string]bool, len(entries))
+	dirs := make(map[string]bool)
 	for _, e := range entries {
 		if e.Name() == ".git" {
 			repoTop = true
 		}
-		if !e.IsDir() {
+		if e.IsDir() {
+			dirs[e.Name()] = true
+		} else {
 			files[e.Name()] = true
 		}
 	}
 	for _, r := range languageRules {
 		if r.matches(files) {
 			if r.label == langJava && isDir(filepath.Join(dir, "src", "main", "kotlin")) {
-				return "Kotlin", repoTop
+				return "Kotlin", false, repoTop
 			}
-			return r.label, repoTop
+			return r.label, false, repoTop
 		}
 	}
-	return "", repoTop
+	if looksLikePython(dir, files, dirs) {
+		return LangPython, true, repoTop
+	}
+	return "", false, repoTop
+}
+
+// looksLikePython reports the weak signs of a Python project at dir's top: a
+// loose script, or a virtualenv.
+func looksLikePython(dir string, files, dirs map[string]bool) bool {
+	if (languageRule{suffixes: pythonScriptSuffixes}).matches(files) {
+		return true
+	}
+	for _, v := range venvDirs {
+		if dirs[v] && fileExists(filepath.Join(dir, v, "pyvenv.cfg")) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r languageRule) matches(files map[string]bool) bool {

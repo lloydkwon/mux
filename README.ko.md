@@ -226,7 +226,7 @@ tmux.conf 에 더할 것은 없습니다. tmux 의 기본 `MouseDown3Pane` 바�
 └────────────────┴─────────────────────────────────────────────────┘
 ```
 
-테두리인 이유는 그 아래가 내 셸이기 때문입니다 — mux가 글자를 쓸 수 없고, pane 제목은 거기서 도는 프로그램(예: Claude Code가 붙이는 작업 이름)의 것입니다. 패널 pane 위에는 뜨지 않습니다: 목록 바로 위에 같은 말을 두 번 할 이유가 없으니까요. pane이 좁아지면 브랜치 → 언어 → 도구 이름 → 경로 순으로 줄어들고 세션 이름은 끝까지 남습니다. 언어는 프로젝트 맨 위의 빌드·의존성 파일(`go.mod`, `pom.xml`, `build.gradle`, `pyproject.toml`, `requirements.txt`, `package.json`, `tsconfig.json`, `Cargo.toml`, `*.csproj` 등)로 정합니다 — 하위 폴더에서는 저장소 맨 위까지만 올라가고 홈 폴더는 읽지 않으며, 그런 파일이 없는 폴더에는 언어를 적지 않습니다. **pane마다 세로 한 줄**을 씁니다.
+테두리인 이유는 그 아래가 내 셸이기 때문입니다 — mux가 글자를 쓸 수 없고, pane 제목은 거기서 도는 프로그램(예: Claude Code가 붙이는 작업 이름)의 것입니다. 패널 pane 위에는 뜨지 않습니다: 목록 바로 위에 같은 말을 두 번 할 이유가 없으니까요. pane이 좁아지면 브랜치 → 언어 → 도구 이름 → 경로 순으로 줄어들고 세션 이름은 끝까지 남습니다. 언어는 프로젝트 맨 위의 빌드·의존성 파일(`go.mod`, `pom.xml`, `build.gradle`, `pyproject.toml`, `requirements.txt`, `package.json`, `tsconfig.json`, `Cargo.toml`, `*.csproj` 등)로 정합니다 — 하위 폴더에서는 저장소 맨 위까지만 올라가고 홈 폴더는 읽지 않으며, 그런 파일이 없는 폴더에는 언어를 적지 않습니다. 단, 빌드 파일이 하나도 없어도 맨 위에 `*.py` 스크립트나 virtualenv(`.venv/pyvenv.cfg`)가 있으면 Python 으로 봅니다. **pane마다 세로 한 줄**을 씁니다.
 
 **키보드로 쓰는 길은 두 가지이고, `mux setup-panel`이 둘 다 깔아줍니다.**
 

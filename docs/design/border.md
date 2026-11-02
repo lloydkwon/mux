@@ -28,6 +28,13 @@ The format's conditional skips the panel's own pane by matching `panelCommand` a
   폴더 하나에 `ReadDir` 한 번으로 끝난다. 섞인 폴더는 표의 순서가 정한다: JVM 빌드 파일이 Python 의
   `requirements.txt` 를 이기고, 언어 자신의 빌드 파일이 도구용으로 딸려 오는 `package.json` 을 이긴다.
   JVM 은 `src/main/kotlin` 이 있으면 Kotlin, 아니면 Java. 표에 없는 폴더는 아무것도 적지 않는다.
+- **빌드 파일 없는 Python 은 약한 표식으로 잡는다**(2026-11-02). `infra-monitor` 는 `monitor.py`·
+  `monitor_app/*.py`·`.venv` 뿐인 Python 도구라 언어가 비었고, 오른쪽 클릭도 PyCharm 이 아니라 IntelliJ 를
+  띄웠다. 그래서 빌드 파일 규칙이 모두 빗나간 폴더에서만 맨 위의 `*.py`·`*.pyw` 파일이나 virtualenv
+  (`.venv`·`venv` 안의 `pyvenv.cfg` — 이름만 같은 폴더가 아니라 venv·uv 가 만든 것)를 Python 으로 본다.
+  약한 표식은 **어떤 빌드 파일에도 진다**: 같은 폴더에서도, 위로 올라가는 동안에도. 약한 표식을 만나도
+  올라가기를 멈추지 않고, 저장소 맨 위까지 빌드 파일이 없을 때만 가장 가까운 약한 표식이 답이 된다 —
+  Go 저장소의 `scripts/gen.py` 에 들어간 셸은 Go 다(`TestProjectLanguage`).
 - **어느 폴더인가:** `@project_dir` 가 있으면 그것, 없으면 pane 의 폴더(`runBorder`). 셸이 `ui/` 같은
   하위 폴더에 들어가 있는 일이 흔해서, 표식이 없으면 **저장소 맨 위(`.git` — worktree 에서는 파일)까지만**
   위로 올라간다(`ProjectLanguage`). 저장소 밖의 폴더는 남의 프로젝트다. **홈은 읽지 않고 거기서 멈춘다** —

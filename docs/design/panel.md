@@ -141,7 +141,9 @@ IntelliJ 창을 올리고(VS Code 창은 건드리지 않는다), 그 밖은 예
   `poetry.lock`·`.python-version`) PyCharm. 판별은 `mux border` 의 언어와 같은 표(`tmux.LanguageAt`,
   border.md)이고, 그 표에서 JVM·Go·Rust 의 빌드 파일이 Python 표식을 이긴다(2026-10-30 표로 합치면서
   Go·Rust 가 더해졌다). 섞인 저장소를 IntelliJ 에 두는 것은 Gradle 저장소의 스크립트용
-  `requirements.txt` 하나로 Java 를 못 읽는 IDE 가 뜨지 않게다. 하위 폴더도 위 폴더도 보지 않는다 — `water_ai` 처럼 `ai/`·`backend/`·`frontend/`
+  `requirements.txt` 하나로 Java 를 못 읽는 IDE 가 뜨지 않게다. 빌드 파일이 하나도 없으면 맨 위의
+  `*.py` 나 virtualenv(`pyvenv.cfg`)도 Python 으로 친다(2026-11-02, `infra-monitor`, border.md).
+  하위 폴더도 위 폴더도 보지 않는다 — `water_ai` 처럼 `ai/`·`backend/`·`frontend/`
   를 품은 저장소는 한 언어의 프로젝트가 아니다(`TestIsPythonProject`). 띄우는 법은 IntelliJ 와 같은
   `startDetached` 다: Toolbox 의 `apps/pycharm/bin/pycharm` 은 IDE 를 자기 프로세스 안에서 돌린다
   (실측, 프로세스 이름 `pycharm`).
