@@ -32,6 +32,11 @@ CHECKED=0
 
 t() { "$TMUX_BIN" -L "$SOCKET" -f /dev/null "$@"; }
 
+# GitHub Actions 에는 TERM 이 없다. 그러면 script(1) 로 붙이는 tmux 클라이언트가 «맞지 않는 터미널»
+# 이라며 붙지 못해 11·13절이 실패했고, 14절은 읽는 쪽 없는 FIFO 에 쓰다가 6시간 뒤 강제로 끝났다
+# (2026-11-02, ubuntu-26.04 러너의 tmux 3.6). e2e 의 attach 처럼 정해 준다.
+case "${TERM:-}" in "" | dumb | unknown) export TERM=xterm-256color ;; esac
+
 # kill-server 는 서버만 죽이고 소켓 파일은 남긴다 — 돌릴 때마다 /tmp 에 하나씩
 # 쌓이므로 파일까지 지운다.
 cleanup() {
@@ -381,19 +386,26 @@ if command -v script >/dev/null 2>&1 && command -v mkfifo >/dev/null 2>&1; then
 		[ "$(t list-clients -F x 2>/dev/null | wc -l)" -ge 2 ] && break
 		sleep 0.1
 	done
+	# 붙지 못한 클라이언트가 있으면 아래의 FIFO 쓰기는 읽는 쪽이 없어 영원히 기다린다 — 실패로
+	# 적고 이 절을 건너뛴다. 쓰기에도 상한을 둔다(fifo_put).
+	fifo_put() { timeout 5 sh -c 'printf %s "$1" >"$2"' _ "$1" "$2" || echo "  (FIFO $2 에 쓰지 못했다 — 읽는 클라이언트가 없다)"; }
+	CLIENTS=$(t list-clients -F x 2>/dev/null | wc -l)
+	ok "클라이언트 둘이 script(1) 로 붙는다" "2" "$CLIENTS"
+fi
+if [ "${CLIENTS:-0}" -ge 2 ]; then
 	TTY_BIG=$(t list-clients -F '#{client_height} #{client_tty}' | awk '$1==40{print $2}')
 	TTY_SMALL=$(t list-clients -F '#{client_height} #{client_tty}' | awk '$1==25{print $2}')
 	: >"$AT/log"
 
-	printf 'x' >"$AT/in1"
+	fifo_put 'x' "$AT/in1"
 	sleep 0.5
 	ok "latest: 창이 방금 입력한 큰 클라이언트 크기 (200x39)" "200x39" \
 		"$(t display -p -t a '#{window_width}x#{window_height}')"
-	printf 'y' >"$AT/in2"
+	fifo_put 'y' "$AT/in2"
 	sleep 0.5
 	ok "latest: 작은 쪽에서 입력하면 그 크기 (120x24)" "120x24" \
 		"$(t display -p -t a '#{window_width}x#{window_height}')"
-	printf 'z' >"$AT/in2"
+	fifo_put 'z' "$AT/in2"
 	sleep 0.5
 	# 바뀔 때만 돈다 — 같은 클라이언트가 계속 입력해도 한 줄씩 쌓이지 않는다.
 	ok "client-active 는 최근 클라이언트가 바뀔 때마다 돈다" \
@@ -410,6 +422,12 @@ if command -v script >/dev/null 2>&1 && command -v mkfifo >/dev/null 2>&1; then
 	kill "$BIG" "$SMALL" "$HOLD1" "$HOLD2" 2>/dev/null || true
 	wait "$BIG" "$SMALL" "$HOLD1" "$HOLD2" 2>/dev/null || true
 	rm -rf "$AT"
+elif [ -n "${AT:-}" ]; then
+	# 클라이언트가 붙지 않았다 — 위에서 실패로 적었다. 띄운 것들만 치운다.
+	kill "$BIG" "$SMALL" "$HOLD1" "$HOLD2" 2>/dev/null || true
+	wait "$BIG" "$SMALL" "$HOLD1" "$HOLD2" 2>/dev/null || true
+	rm -rf "$AT"
+	echo "  SKIP  클라이언트가 붙지 않아 이 절의 나머지를 건너뜁니다"
 else
 	echo "  SKIP  script(1) 이나 mkfifo 가 없어 클라이언트를 붙이지 못했습니다"
 fi

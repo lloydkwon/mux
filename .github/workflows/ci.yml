@@ -9,6 +9,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # 상한이 없으면 멈춘 단계가 GitHub 기본값인 6시간을 다 쓴다 — 2026-11-02 에 tmux 단언이
+    # 읽는 쪽 없는 FIFO 에 쓰다가 그렇게 끝났다. 정상이면 전체가 5분 안팎이다.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -32,10 +35,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y tmux
 
       - name: Check tmux assumptions
+        timeout-minutes: 5
         run: ./scripts/tmux-assumptions.sh
 
       # 진짜 tmux 위에서 사용자 눈에 보이는 동작(창 크기, 패널 폭이 모든 세션에 퍼지는지,
       # 클라이언트 이동)을 본다. 한동안 아무도 돌리지 않아, 원칙을 바꾼 커밋(aee4d94)이
       # 시나리오를 깨뜨린 채 들어갔고 맞춤 창의 드래그가 저장되지 않는 버그도 못 잡았다.
       - name: E2E (isolated tmux)
+        timeout-minutes: 15
         run: make e2e
