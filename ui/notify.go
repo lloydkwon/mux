@@ -481,9 +481,9 @@ func fitRight(left, right rowSeg, width int) []rowSeg {
 //
 // No border: the tmux pane it fills already draws one.
 //
-// Every row of a session's block — name, note, reason, last event — carries
-// that session, so a click anywhere in the block lands on it. There is no blank
-// between blocks (sessionBlocks); the blanks around headings carry nothing.
+// Every row of a session's block — its row, reason, last event and the blank
+// under it — carries that session, so a click anywhere in the block lands on it.
+// The blanks around headings carry nothing.
 //
 // Glyphs and colors come from aiGlyph/aiStateColor, the same deciders the list
 // uses — a second mapping here would drift from the rows it sits next to.
@@ -674,47 +674,22 @@ func sortByDisplayedAge(ss []tmux.Session) {
 // sessionBlocks renders one group: a row per session, an indented reason line
 // under a blocked one, and the line saying what last happened there.
 //
-// No blank sits between sessions — taken out a second time, by the user's call
-// (2026-11-02). It was taken out once before and put back because seven blocks
-// of two lines ran together into a wall; with ten AI sessions the blanks cost
-// the event log at the bottom ten rows, and what the log shows was worth more
-// than the air. The rows still group by indentation: the name sits at column 1,
-// its note and last event are indented under it.
+// A blank sits between sessions. Its history: taken out once, put back because
+// seven blocks ran together into a wall, taken out again on 2026-11-02 when ten
+// AI sessions left the event log no room — and put back the same day once the
+// note moved onto the session's own row (notifySessionLine). The note rows were
+// what the blanks cost; with them gone the log keeps its rows and the list keeps
+// its air.
 //
 // dim marks the second group, whose rows are context rather than the point.
 func sessionBlocks(ss []tmux.Session, events []aiEvent, width, perSession int, selected, own string, dim bool) []notifyLine {
 	var lines []notifyLine
-	for _, s := range ss {
+	for i, s := range ss {
 		sel := s.Name == selected
 		lines = append(lines, notifyLine{
 			text:    notifySessionLine(s, width, rowFlags{selected: sel, dim: dim, own: s.Name == own}),
 			session: s.Name,
 		})
-		// The note sits directly under the name, because it is that session's
-		// subtitle and has to be read with it.
-		//
-		// It is a row of its own rather than a column on the row above: at the
-		// panel's default 36 cells that row has nothing spare — the name, the
-		// age, the ◀ and the branch already spend all of it — so a note beside
-		// the branch would mean no branch, on every row that has a note.
-		//
-		// Unlike the event line it is not budgeted: a note is on some sessions
-		// and not others, so the "all or nothing" rule that governs the event
-		// lines does not apply. When the pane runs short the log at the bottom
-		// is what yields, which is what it is last for.
-		if s.Note != "" {
-			// Two spaces then the glyph puts the note's text in the same column
-			// the session's name starts in, so the block reads as one thing. One
-			// cell short of the width for the reason every other row is: the pad
-			// renderRow adds at the end is the right margin, and a note long
-			// enough to fill the row would otherwise touch the pane's edge.
-			lines = append(lines, notifyLine{
-				text: renderRow([]rowSeg{
-					{text: fitCells("  "+noteGlyph+" "+s.Note, width-1), color: colorMuted},
-				}, width, sel),
-				session: s.Name,
-			})
-		}
 		if s.AIState == tmux.AIStateApproval && s.AIWaitingFor != "" {
 			// The reason is part of its session's block: anywhere in the block
 			// clicks to the same session, which is simpler to predict than a
@@ -738,7 +713,23 @@ func sessionBlocks(ss []tmux.Session, events []aiEvent, width, perSession int, s
 		// Drawn unhighlighted, unlike the reason row: what the highlight is for
 		// is saying precisely which session the cursor is on, and a second
 		// inverted line under every selected row blurs that.
-		lines = append(lines, sessionEventLines(events, s.Name, width, perSession, sel)...)
+		last := sessionEventLines(events, s.Name, width, perSession, sel)
+		lines = append(lines, last...)
+
+		// Between sessions only. The blank belongs to the session above it, so a
+		// click anywhere in the block lands on the same place; skipping it after
+		// the last one keeps the list from trailing into the next heading, at the
+		// cost of the bottom session being a shorter target.
+		//
+		// It follows the highlight only when nothing else sits under the row: an
+		// inverted bar below an unhighlighted event line reads as a stray row
+		// rather than as the bottom of this block.
+		if i < len(ss)-1 {
+			lines = append(lines, notifyLine{
+				text:    renderRow(nil, width, sel && len(last) == 0),
+				session: s.Name,
+			})
+		}
 	}
 	return lines
 }
@@ -795,10 +786,17 @@ type rowFlags struct {
 	own      bool // the session this pane lives in
 }
 
-// notifySessionLine renders "⏳ name 3m            ⌥ branch" for one session.
+// notifySessionLine renders "⏳ name 3m ◀  ✎ note       ⌥ branch" for one session.
 //
 // Name and age sit together on the left so the age reads as belonging to the
 // name, and the branch is flush right so the column can be scanned vertically.
+//
+// The note sits on this row, right after the name (2026-11-02, the user's call).
+// It used to be a row of its own under the name, because at the panel's old
+// default of 36 cells there was no room for it here; with ten AI sessions those
+// rows were what kept the blank between sessions from coming back. It yields the
+// way the list's note does (formatSessionRow): the branch gives way first, then
+// the note is cut, and below minNoteWidth it is dropped whole.
 //
 // A session running no AI CLI renders the same way with an empty badge — the
 // padding is what keeps the branch in one column across both groups.
@@ -828,35 +826,53 @@ func notifySessionLine(s tmux.Session, width int, f rowFlags) string {
 		mark = " " + ownMarker
 	}
 
+	// The note carries its own two-space separator, so it can be dropped as one
+	// piece and so it reads as the session's subtitle rather than as its age.
+	note := ""
+	if s.Note != "" {
+		note = "  " + noteGlyph + " " + s.Note
+	}
+
 	branch := ""
 	if s.GitBranch != "" {
 		branch = branchGlyph(s) + " " + s.GitBranch
 	}
 
-	// The branch yields first: which session it is and how long it has held its
-	// state are the point of the row, the branch is context. The reserved cell
-	// keeps at least one space between the age and the branch when the branch
-	// has been cut down to exactly the room left.
+	// The branch yields first: which session it is, how long it has held its
+	// state and what the user wrote about it are the point of the row, the branch
+	// is context that mux border says again on the pane itself. The reserved cell
+	// keeps at least one space before the branch when it has been cut down to
+	// exactly the room left.
 	name := s.Name
 	fixed := ansi.StringWidth(age) + ansi.StringWidth(mark)
-	if room := avail - ansi.StringWidth(name) - fixed - 1; room < ansi.StringWidth(branch) {
-		if room >= minBranchWidth {
-			branch = fitCells(branch, room)
+	room := avail - ansi.StringWidth(name) - fixed - 1
+	if ansi.StringWidth(note)+ansi.StringWidth(branch) > room {
+		if branchRoom := room - ansi.StringWidth(note); branchRoom >= minBranchWidth {
+			branch = fitCells(branch, branchRoom)
 		} else {
 			branch = ""
+		}
+	}
+	// Only with the branch gone does the note give ground: cut to what is left,
+	// then dropped whole where only the glyph and an ellipsis would remain.
+	if ansi.StringWidth(note) > room {
+		if room >= minNoteWidth {
+			note = fitCells(note, room)
+		} else {
+			note = ""
 		}
 	}
 	// Only truncate the name when it genuinely overflows — fitCells always pads
 	// to the width it is given, and padding here would reopen the gap between
 	// the name and the age that this layout exists to close.
-	if nameRoom := avail - fixed - ansi.StringWidth(branch); ansi.StringWidth(name) > nameRoom {
+	if nameRoom := avail - fixed - ansi.StringWidth(note) - ansi.StringWidth(branch); ansi.StringWidth(name) > nameRoom {
 		name = fitCells(name, nameRoom)
 	}
 
 	// renderRow pads what is left over at the very end, so the gap has to be an
 	// explicit segment — otherwise the padding lands after the branch and the
 	// right edge stops lining up.
-	gap := avail - ansi.StringWidth(name) - fixed - ansi.StringWidth(branch)
+	gap := avail - ansi.StringWidth(name) - fixed - ansi.StringWidth(note) - ansi.StringWidth(branch)
 	if gap < 0 {
 		gap = 0
 	}
@@ -877,6 +893,7 @@ func notifySessionLine(s tmux.Session, width int, f rowFlags) string {
 		{text: name, color: faded},
 		{text: age, color: ageColor},
 		{text: mark, color: colorAccent},
+		{text: note, color: colorMuted},
 		{text: strings.Repeat(" ", gap)},
 		{text: branch, color: faded},
 	}

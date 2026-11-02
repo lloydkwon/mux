@@ -212,10 +212,10 @@ func TestNotifyLinesSortUsesCreationWithoutState(t *testing.T) {
 	}
 }
 
-// A session's click target is a block, not a single row: its name, its reason
-// line and the line saying what last happened there. There is no blank between
-// blocks (taken out 2026-11-02 to give the event log the rows), so every row a
-// session owns has to click to that session.
+// A session's click target is a block, not a single row: its row, a blocked
+// session's reason, the line saying what last happened there, and the blank
+// between it and the next session. Every row a session owns has to click to that
+// session — spacing that does not is just extra height.
 func TestNotifyBlocksAreClickable(t *testing.T) {
 	now := time.Now()
 	first := sess("mux", tmux.AIStateWorking)
@@ -236,10 +236,12 @@ func TestNotifyBlocksAreClickable(t *testing.T) {
 			owners[l.session]++
 		}
 	}
-	if owners["mux"] != 2 { // row + last event
-		t.Errorf("mux owns %d rows, want 2", owners["mux"])
+	if owners["mux"] != 3 { // row + last event + spacer
+		t.Errorf("mux owns %d rows, want 3", owners["mux"])
 	}
-	if owners["api"] != 3 { // row + reason + last event
+	// The spacer goes between sessions, so the last one has none — the accepted
+	// cost of not trailing a blank into the next heading.
+	if owners["api"] != 3 { // row + reason + last event, no spacer
 		t.Errorf("api owns %d rows, want 3", owners["api"])
 	}
 
@@ -990,48 +992,66 @@ func TestDetectTransitionsCarriesTheTaskName(t *testing.T) {
 	}
 }
 
-// TestNotifyNoteRowBelongsToItsSession is the panel half of the note feature.
+// TestNotifyNoteSitsOnTheSessionRow is the panel half of the note feature.
 //
-// The note is a row of its own because the session row has no cells to spare at
-// the panel's default width, and a row that is not owned by its session breaks
-// both the click map (sessionAtRow indexes the same slice) and the keyboard
-// cursor (sessionOrder skips rows owned by nobody).
-func TestNotifyNoteRowBelongsToItsSession(t *testing.T) {
+// The note sits on the session's own row, right after the name (2026-11-02) —
+// it used to be a row of its own, and those rows were what kept the blank
+// between sessions from coming back. It yields like the list's note: the branch
+// gives way first, then the note is cut, and below minNoteWidth it is dropped
+// whole. The row stays owned by its session, which is what the click map
+// (sessionAtRow) and the keyboard cursor (sessionOrder) both index.
+func TestNotifyNoteSitsOnTheSessionRow(t *testing.T) {
 	now := time.Now()
 	noted := sess("mux", tmux.AIStateWorking)
 	noted.AISince = now.Add(-time.Minute)
 	noted.Note = "라벨링 후 진행"
+	noted.GitBranch = "main"
 	plain := sess("api", tmux.AIStateWorking)
 	plain.AISince = now.Add(-time.Hour)
 
-	rows := notifyLines([]tmux.Session{noted, plain}, nil, 40, 30, "", "", false)
+	rowOf := func(width int, s tmux.Session) (string, []notifyLine) {
+		rows := notifyLines([]tmux.Session{s, plain}, nil, width, 30, "", "", false)
+		for _, l := range rows {
+			if l.session == s.Name && strings.Contains(ansi.Strip(l.text), s.Name) {
+				return ansi.Strip(l.text), rows
+			}
+		}
+		t.Fatalf("width %d: no row for %s", width, s.Name)
+		return "", nil
+	}
 
-	noteRow := -1
-	sessionRow := -1
-	for i, l := range rows {
-		if strings.Contains(ansi.Strip(l.text), noted.Name) {
-			sessionRow = i
-		}
-		if strings.Contains(ansi.Strip(l.text), "라벨링 후 진행") {
-			noteRow = i
-		}
+	// Wide enough: name, note and branch all on one row, the note right after
+	// the name and the branch flush right.
+	row, rows := rowOf(48, noted)
+	if !strings.Contains(row, noteGlyph+" 라벨링 후 진행") || !strings.Contains(row, "main") {
+		t.Errorf("48 cells: %q — want the note and the branch on the session row", row)
 	}
-	if noteRow < 0 {
-		t.Fatal("the note was not drawn")
+	if strings.Index(row, noteGlyph) > strings.Index(row, "main") {
+		t.Errorf("48 cells: %q — the note comes before the branch", row)
 	}
-	if rows[noteRow].session != "mux" {
-		t.Errorf("note row owned by %q, want mux", rows[noteRow].session)
-	}
-	// Directly under the name: the note is that session's subtitle and has to
-	// be read with it, not after whatever else the block carries.
-	if noteRow != sessionRow+1 {
-		t.Errorf("note row at %d, session row at %d — want it immediately below", noteRow, sessionRow)
-	}
-	// A session with no note gets no row, so the panel does not grow a blank
-	// line under every session to make room for the few that have one.
+	// The note takes no row of its own, and a session without one draws none.
 	for _, l := range rows {
-		if l.session == "api" && strings.Contains(ansi.Strip(l.text), noteGlyph) {
-			t.Errorf("session with no note drew one: %q", ansi.Strip(l.text))
+		text := ansi.Strip(l.text)
+		if strings.Contains(text, noteGlyph) && !strings.Contains(text, noted.Name) {
+			t.Errorf("a row of its own for the note: %q", text)
 		}
+		if l.session == "api" && strings.Contains(text, noteGlyph) {
+			t.Errorf("session with no note drew one: %q", text)
+		}
+	}
+
+	// Short of room the branch yields first and the note stays.
+	long := noted
+	long.GitBranch = "feat/a-branch-name-that-will-not-fit"
+	row, _ = rowOf(36, long)
+	if !strings.Contains(row, noteGlyph) || strings.Contains(row, "will-not-fit") {
+		t.Errorf("36 cells: %q — want the note kept and the long branch cut or gone", row)
+	}
+
+	// Below minNoteWidth the note is dropped whole rather than shown as a glyph
+	// and an ellipsis; the name is still there.
+	row, _ = rowOf(18, noted)
+	if strings.Contains(row, noteGlyph) || !strings.Contains(row, "mux") {
+		t.Errorf("18 cells: %q — want the name and no note", row)
 	}
 }
