@@ -152,7 +152,8 @@ func TestWatchTickReloads(t *testing.T) {
 
 // A click has to land on the session it looks like it landed on, and every row
 // of a session's block counts — the row itself, an approval's reason line, and
-// the spacer that makes the target easier to hit.
+// its last event. Blocks sit directly under one another (no spacer since
+// 2026-11-02), so the row after a block is the next session's.
 func TestSessionAtRow(t *testing.T) {
 	now := time.Now()
 	web := sess("web", tmux.AIStateReady)
@@ -174,16 +175,14 @@ func TestSessionAtRow(t *testing.T) {
 	}{
 		{0, ""},    // 🔔 header
 		{1, ""},    // the blank under the header
-		{2, "web"}, // web has no event of its own
-		{3, "web"}, // spacer, still the same block
-		{4, "api"},
-		{5, "api"}, // the indented waitingFor line
-		{6, "api"}, // spacer
-		{7, "mux"},
-		{8, "mux"}, // mux's own last event; last session, so no spacer follows
+		{2, "web"}, // web has no event of its own: a one-row block
+		{3, "api"},
+		{4, "api"}, // the indented waitingFor line
+		{5, "mux"},
+		{6, "mux"}, // mux's own last event
 		// The section break below the list belongs to nobody, so the last
 		// session does not silently gain a row it does not own.
-		{9, ""},
+		{7, ""},
 		{99, ""}, // past the end
 		{-1, ""},
 	}
@@ -925,9 +924,8 @@ func TestSessionAtRowOnTheLastEventLine(t *testing.T) {
 		{2, "api"}, // the session row
 		{3, "api"}, // its blocked-on reason
 		{4, "api"}, // its last event
-		{5, "api"}, // spacer, still the same block
-		{6, "mux"},
-		{7, "mux"}, // mux's own last event
+		{5, "mux"}, // the next block starts right under it
+		{6, "mux"}, // mux's own last event
 	} {
 		if got := m.sessionAtRow(tc.row); got != tc.want {
 			t.Errorf("sessionAtRow(%d) = %q, want %q", tc.row, got, tc.want)

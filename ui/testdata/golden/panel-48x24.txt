@@ -1,11 +1,9 @@
  🔔 AI 세션                                     |
                                                 |
  ✅ a-session-with-a-rather-long-name           |
-                                                |
  ❗ api-server  ⌥ feat/long-branch-name-that... |
     Bash: git push                              |
     아직 없음                                   |
-                                                |
  ⏳ mux  ◀                               ⌥ main |
                                                 |
  ── 세션 ────────────────────────────────────── |
@@ -15,6 +13,8 @@
                                                 |
  ── 최근 이벤트 ─────────────────────────────── |
  아직 없음                                      |
+                                                |
+                                                |
                                                 |
                                                 |
                                                 |

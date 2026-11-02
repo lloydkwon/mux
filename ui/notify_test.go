@@ -212,11 +212,10 @@ func TestNotifyLinesSortUsesCreationWithoutState(t *testing.T) {
 	}
 }
 
-// A session's click target is a block, not a single row. The blank line between
-// sessions used to provide the second row; the line saying what last happened
-// there does it now, which is what let the blank go. Either way every row a
-// session owns has to click to that session — spacing that does not is just
-// extra height.
+// A session's click target is a block, not a single row: its name, its reason
+// line and the line saying what last happened there. There is no blank between
+// blocks (taken out 2026-11-02 to give the event log the rows), so every row a
+// session owns has to click to that session.
 func TestNotifyBlocksAreClickable(t *testing.T) {
 	now := time.Now()
 	first := sess("mux", tmux.AIStateWorking)
@@ -237,12 +236,10 @@ func TestNotifyBlocksAreClickable(t *testing.T) {
 			owners[l.session]++
 		}
 	}
-	if owners["mux"] != 3 { // row + last event + spacer
-		t.Errorf("mux owns %d rows, want 3", owners["mux"])
+	if owners["mux"] != 2 { // row + last event
+		t.Errorf("mux owns %d rows, want 2", owners["mux"])
 	}
-	// The spacer goes between sessions, so the last one has none — the accepted
-	// cost of not trailing a blank into the next heading.
-	if owners["api"] != 3 { // row + reason + last event, no spacer
+	if owners["api"] != 3 { // row + reason + last event
 		t.Errorf("api owns %d rows, want 3", owners["api"])
 	}
 
