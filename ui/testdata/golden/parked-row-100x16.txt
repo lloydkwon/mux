@@ -1,0 +1,15 @@
+⚡ tmux sessions 4                                                                       sort: name|
+╭──────────────────────────────────────┬───────────────────────────────────────────────────────────╮|
+│○ New shell     leave tmux            │[ Parked sessions ]                                        │|
+│+ New tmux ...  create and attach     │───────────────────────────────────────────────────────────│|
+│≡ Parked se...  2 to restore          │                                                           │|
+│▶ a-session...        ✅              │Claude sessions closed with p, kept to resume later.       │|
+│▶ api-server          ❗ ⌥ feat/lon...│Enter opens the list to restore or forget one.             │|
+│▶ mux                 ⏳        ⌥ main│                                                           │|
+│▶ notes                   ✎ 회의록... │  wai-plan            /home/u/dev/wai  ✎ 다음 회차 대기    │|
+│                                      │  kmatch-exec         /home/u/dev/kream  2 conv            │|
+│                                      │                                                           │|
+│                                      │                                                           │|
+│                                      │                                                           │|
+╰──────────────────────────────────────┴───────────────────────────────────────────────────────────╯|
+↑↓/jk navigate • tab expand • ⇧tab collapse • enter/2click attach • n new • x kill • p park • r rena|

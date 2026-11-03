@@ -41,7 +41,7 @@ CI (`.github/workflows/ci.yml`) runs test + build + arm64 cross-build + `scripts
 
 **`scripts/tmux-assumptions.sh` is the only thing that tests tmux itself.** Every unit test mocks the runner, which is what makes them fast and hermetic — and also means tmux can change underneath mux without a single test failing. The script starts a private server (`-L`, `-f /dev/null`, so the developer's own sessions and hooks are never touched) and asserts the behaviours the code depends on: the `tmux -V` string `getTmuxVersion` parses, `listFormat`'s field count, that `#{@user_option}` resolves a session option through a pane target, that `-l N` on `split-window` gives exactly N columns, that `list-panes` remembers `pane_start_command` (the panel's only marker), that a batched `capture-pane ; display-message ; capture-pane` emits one separator, and that `run-shell` and `after-new-session` expand `#{pane_id}`. **Add a line here whenever a comment says "measured" or "verified"** — otherwise that one assumption is the one that breaks silently on the next upgrade. `make tmux-check` runs it; `TMUX_BIN=/path/to/tmux` points it at a candidate binary instead of PATH.
 
-**Check the candidate before switching, not after.** Putting a new tmux on PATH makes the *client* new while the running *server* stays old, and the protocol mismatch rejects every tmux call — mux, its panels and any command you type — until the server restarts, which ends every session on it. `TMUX_BIN` is how the answer arrives before that price is paid. Verified this way: 22/22 on 3.4 and on 3.7c; 62/62 on 3.4 and 3.8 (2026-11-02, 3.8 은 Docker `ubuntu:24.04` 에서 `--enable-systemd --enable-utempter` 로 빌드). 3.8 은 `mouse` 의 기본값이 on 이 되어, 기본값에 기대던 13절이 `mouse off` 를 명시하게 됐다. CI 러너(ubuntu-26.04, apt 의 tmux 3.6)와 같은 컨테이너에서도 63/63 과 e2e 통과 — 러너에는 `TERM` 이 없어 스크립트가 `xterm-256color` 를 정해 준다. 2026-11-03 에 16절(`session_activity`)을 더해 3.4·3.8 모두 64/64.
+**Check the candidate before switching, not after.** Putting a new tmux on PATH makes the *client* new while the running *server* stays old, and the protocol mismatch rejects every tmux call — mux, its panels and any command you type — until the server restarts, which ends every session on it. `TMUX_BIN` is how the answer arrives before that price is paid. Verified this way: 22/22 on 3.4 and on 3.7c; 62/62 on 3.4 and 3.8 (2026-11-02, 3.8 은 Docker `ubuntu:24.04` 에서 `--enable-systemd --enable-utempter` 로 빌드). 3.8 은 `mouse` 의 기본값이 on 이 되어, 기본값에 기대던 13절이 `mouse off` 를 명시하게 됐다. CI 러너(ubuntu-26.04, apt 의 tmux 3.6)와 같은 컨테이너에서도 63/63 과 e2e 통과 — 러너에는 `TERM` 이 없어 스크립트가 `xterm-256color` 를 정해 준다. 2026-11-03 에 16절(`session_activity`)을 더해 3.4·3.8 모두 64/64, 같은 날 17절(보관함의 `=name` 지목, `-c` 의 `#` 이스케이프)을 더해 73/73.
 
 Note the private server has no user config, so `base-index` is tmux's default 0 — target windows by `#{window_id}`, never `sess:1`. Releases are tag-driven via goreleaser. Commits follow Conventional Commits.
 
@@ -157,4 +157,9 @@ Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale a
   `wait --after` 의 완료 기준은 보낸 시각이 아니라 기록에 프롬프트 턴이 시작된 시각이고, `read` 는
   마지막 응답 그룹에 글이 없으면 앞 그룹으로 물러서지 않는다(exit 2). 대상이 모호하면 고르지 않는다.
   종료 코드 6(되돌렸으니 다시 보내도 됨)과 7(기록에 안 보임 — 다시 보내지 마라)을 합치지 않는다. (agent-api.md)
+- **보관(`p`)은 같은 id 로 `--resume` 한다(포크 금지).** 적고 → 다시 읽어 확인하고 → `kill-session -t =name`
+  (= 없으면 그 이름이 없을 때 `name-2` 를 죽인다) 순서다. 깨진 `parked.json` 이면 닫기 전에 멈춘다. 보관함은 Cmd 안에서
+  읽고-고치고-쓰기이고 prefs 에 넣지 않는다. 목록은 `NewModel` 에서 읽는다(늦게 읽으면 첫 커서가 Parked 행에 앉는다). (park.md)
+- **`-c` 에 넘기는 디렉터리는 `tmuxDirArg` 를 거친다** — tmux 는 `-c` 를 포맷으로 펼쳐서 디렉터리 이름의 `#(…)` 가
+  셸 명령으로 돈다(실측). `set-option -t` 는 pane 대상이라 정확히 지목하려면 `=name:`(콜론까지)이다. (park.md, 17절)
 - **주석에 «measured»·«verified» 를 쓰면** `scripts/tmux-assumptions.sh` 에 그 단언을 한 줄 더한다.

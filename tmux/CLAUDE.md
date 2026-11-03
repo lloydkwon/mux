@@ -11,6 +11,7 @@
 | `proc.go` | ai-state.md, revive.md |
 | `claude_sessions.go` | claude-mode.md |
 | `pair.go` | pair.md |
+| `park.go` | park.md |
 | `panel.go` | panel.md, tmux-config.md (폭·VS Code 게이트) |
 | `panelwidth.go`, `client.go` | panel-width.md |
 | `eventlog.go`, `eventarchive.go` | panel-events.md |

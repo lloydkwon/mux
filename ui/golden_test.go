@@ -111,6 +111,30 @@ func TestGoldenFilteredList(t *testing.T) {
 	checkGolden(t, "filtered-100x14", 100, m.View())
 }
 
+// 보관된 세션이 있을 때: 액션 행 아래의 Parked 행과 그 미리보기, 그리고 보관함 팝업.
+// ParkedAt 은 제로라 나이 칸은 빈칸이다(compactAgo).
+func goldenParked() []tmux.ParkedSession {
+	return []tmux.ParkedSession{
+		{ID: "sid-1", Name: "wai-plan", Note: "다음 회차 대기",
+			Conversations: []tmux.ParkedConversation{{SessionID: "sid-1", CWD: "/home/u/dev/wai"}}},
+		{ID: "sid-2", Name: "kmatch-exec",
+			Conversations: []tmux.ParkedConversation{
+				{SessionID: "sid-2", CWD: "/home/u/dev/kream"}, {SessionID: "sid-3", CWD: "/home/u/dev/kream"}}},
+	}
+}
+
+func TestGoldenParked(t *testing.T) {
+	m := goldenModel(100, 16)
+	m.parked = goldenParked()
+	m.applyFilter()
+	m.cursor = 2 // Parked 행
+	checkGolden(t, "parked-row-100x16", 100, m.View())
+
+	m.mode = modeParked
+	m.parkedMod = newParkedModel(m.parked)
+	checkGolden(t, "parked-popup-100x16", 100, m.View())
+}
+
 func TestGoldenHelp(t *testing.T) {
 	m := goldenModel(68, 19) // mux popup 이 80x24 터미널에서 얻는 크기 (TestHelpBodyFitsPopup 과 같은 예산)
 	m.mode = modeHelp

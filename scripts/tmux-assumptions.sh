@@ -491,6 +491,47 @@ t send-keys -t act x
 ok "pane 출력과 send-keys 로는 session_activity 가 그대로다" "$ACT0" "$(t display-message -p -t act '#{session_activity}')"
 t kill-session -t act
 
+# ── 17. 보관함의 정확한 지목 ──────────────────────────────────────────────────
+# docs/design/park.md, tmux/park.go. 보관은 세션을 «=name» 으로 닫고, 복원은 둘째 대화부터 «=name:» 으로
+# 창을 더한다. 복원은 이름이 겹치면 «name-2» 를 만드는 기능이라, 같은 이름으로 시작하는 세션이 늘 옆에
+# 있을 수 있다. = 없는 kill-session 은 그 이름이 이미 없을 때 접두사로 «name-2» 를 죽인다(2026-11-03 3.8 실측).
+echo
+echo "보관함의 정확한 지목 (docs/design/park.md)"
+PKDIR=$(mktemp -d)
+t new-session -d -s pk -x 80 -y 10
+t new-session -d -s pk-2 -x 80 -y 10
+t new-window -d -t "=pk:" -c "$PKDIR" sleep 300 1
+ok "new-window -t =name: 은 그 세션에만 창을 더한다" "2 1" \
+	"$(t list-windows -t "=pk" | wc -l | tr -d ' ') $(t list-windows -t "=pk-2" | wc -l | tr -d ' ')"
+okc "new-window 의 -c 와 인자가 pane 에 남는다" "$PKDIR|sleep 300 1" \
+	"$(t list-panes -s -t "=pk" -F '#{pane_current_path}|#{pane_start_command}' | tr '\n' ' ')"
+# set-option 의 -t 는 pane 대상이라 «=name» 만으로는 «no such session» 이고 «=name:» 이어야 한다. 콜론 없는
+# 맨 이름은 그 세션이 없을 때 접두사로 «name-2» 에 쓴다 — 복원이 메모·@project_dir 를 «=name:» 으로 쓰는 이유.
+t set-option -t "=pk:" @mux_park_probe on
+ok "set-option -t =name: 은 그 세션에만 쓴다" "on|" \
+	"$(t show-options -qv -t "=pk:" @mux_park_probe)|$(t show-options -qv -t "=pk-2:" @mux_park_probe)"
+t kill-session -t "=pk"
+ok "kill-session -t =name 은 그 세션을 닫는다" "no" "$(t has-session -t "=pk" 2>/dev/null && echo yes || echo no)"
+ok "그 이름이 없으면 kill-session -t =name 은 실패한다" "fail" "$(t kill-session -t "=pk" 2>/dev/null && echo ok || echo fail)"
+ok "그리고 name-2 는 건드리지 않는다" "yes" "$(t has-session -t "=pk-2" 2>/dev/null && echo yes || echo no)"
+ok "그 이름이 없으면 set-option -t =name: 도 실패한다" "fail" \
+	"$(t set-option -t "=pk:" @mux_park_probe on 2>/dev/null && echo ok || echo fail)"
+t kill-session -t "=pk-2"
+rmdir "$PKDIR"
+
+# -c 는 포맷으로 펼쳐진다. #{…} 는 바뀌고 #(…) 는 셸 명령으로 돈다(2026-11-03 실측, 여기서는 #{…} 만 쓴다).
+# tmux/session.go 의 tmuxDirArg 가 # 를 ## 로 넘기는 이유이고, ## 는 글자 그대로의 # 로 돌아와야 한다.
+HASHDIR=$(mktemp -d)/'a#{session_name}b'
+mkdir -p "$HASHDIR"
+t new-session -d -s hash -x 80 -y 10 -c "${HASHDIR//#/##}"
+ok "-c 의 ## 는 글자 그대로의 # 다" "$HASHDIR" "$(t display-message -p -t "=hash:" '#{pane_current_path}')"
+t kill-session -t "=hash"
+t new-session -d -s hash -x 80 -y 10 -c "$HASHDIR"
+ok "-c 의 # 는 포맷으로 펼쳐진다 (그래서 막는다)" "different" \
+	"$([ "$(t display-message -p -t "=hash:" '#{pane_current_path}')" = "$HASHDIR" ] && echo same || echo different)"
+t kill-session -t "=hash"
+rm -rf "$(dirname "$HASHDIR")"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
 	echo "$CHECKED 개 전부 통과 — $VERSION 에서 mux 의 가정이 유지됩니다."

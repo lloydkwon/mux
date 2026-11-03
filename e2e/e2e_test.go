@@ -77,6 +77,18 @@ func run(m *testing.M) int {
 		return 1
 	}
 
+	// 보관함 복원은 서버 환경에서 `claude --resume <id>` 를 띄운다. pane 은 서버를 띄운 때의 PATH 를
+	// 쓰므로, 테스트 중에 PATH 를 바꿔서는 닿지 않는다 — 서버보다 먼저 가짜 Claude 를 `claude` 로 둔다.
+	// 가짜는 쓰는 테스트가 처음 부를 때 빌드되고(fakeClaude), 그 경로는 여기서 미리 정해져 있다.
+	binDir := filepath.Join(tmp, "bin")
+	os.MkdirAll(binDir, 0o755)
+	wrapper := "#!/bin/sh\nexec '" + filepath.Join(tmp, "fakeclaude") + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte(wrapper), 0o755); err != nil {
+		fmt.Printf("claude 래퍼 실패: %v\n", err)
+		return 1
+	}
+	os.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
 	// 진짜 훅 설정: 사용자가 `mux setup-panel` 로 얻는 그대로.
 	os.WriteFile(filepath.Join(home, ".tmux.conf"), []byte("set -g mouse on\n"), 0o644)
 	if out, err := exec.Command(muxBin, "setup-panel").CombinedOutput(); err != nil {

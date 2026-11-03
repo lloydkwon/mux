@@ -10,4 +10,4 @@ filter: api (esc clear)|
 │                                      │                                                           │|
 │                                      │                                                           │|
 ╰──────────────────────────────────────┴───────────────────────────────────────────────────────────╯|
-↑↓/jk navigate • tab expand • ⇧tab collapse • enter/2click attach • n new • x kill • r rename • m me|
+↑↓/jk navigate • tab expand • ⇧tab collapse • enter/2click attach • n new • x kill • p park • r rena|

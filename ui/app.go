@@ -50,6 +50,8 @@ const (
 	modeNote
 	modeHelp
 	modeSetupOffer
+	modeConfirmPark
+	modeParked
 )
 
 // clickMark remembers the last left press, so the next one can be told apart
@@ -109,6 +111,19 @@ type Model struct {
 	// with the tick still running the redraw two ticks later wipes the
 	// selection the user is halfway through making.
 	selectMode bool
+
+	// parked 는 보관함이다(ui/park.go). NewModel 에서 한 번 읽고, 보관·지우기·팝업 열기 때만 다시
+	// 읽는다 — 틱마다 읽지 않는다. 비어 있으면 Parked 행도 없다.
+	parked         []tmux.ParkedSession
+	confirmParkMod confirmParkModel
+	parkedMod      parkedModel
+	// unparkTarget 은 TUI 가 끝난 뒤 되살릴 보관 항목이다. resumeTarget 과 같은 이유로 실행은 cmd/mux 가 한다.
+	unparkTarget *tmux.ParkedSession
+	// parking 은 보관이 진행 중인 세션이다. 끝나기 전 p 를 다시 받지 않는다.
+	parking string
+	// notice 는 다음 키를 누를 때까지 extraBar 에 남는 한 줄이다. m.err 는 다음 틱의 sessionsLoadedMsg 가
+	// 덮어써 500ms 만에 사라지므로 «보관 못 함» 같은 답을 실을 수 없다.
+	notice string
 }
 
 type tickMsg time.Time
@@ -229,6 +244,13 @@ func NewModel() Model {
 	if dir, vscode := tmux.ProjectScope(); vscode {
 		m.projectDir = dir
 		m.filterText = dir
+	}
+	// 보관함은 여기서 읽는다. 첫 세션 목록보다 늦게 오는 Cmd 로 읽으면 Parked 행이 그 사이에 끼어들어,
+	// firstSessionIndex 로 놓인 커서가 Parked 행을 가리킨다 — 그러면 첫 enter 가 attach 가 아니라 팝업이다.
+	if parked, err := loadParked(); err != nil {
+		m.notice = "parked sessions: " + err.Error()
+	} else {
+		m.parked = parked
 	}
 	return m
 }
@@ -423,6 +445,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if next, cmd, ok := m.handleParkMsg(msg); ok {
+		return next, cmd
+	}
+
 	switch m.mode {
 	case modeCreate:
 		return m.updateCreate(msg)
@@ -445,6 +471,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case modeSetupOffer:
 		return m.updateSetupOffer(msg)
+	case modeConfirmPark:
+		return m.updateConfirmPark(msg)
+	case modeParked:
+		return m.updateParked(msg)
 	default:
 		return m.updateList(msg)
 	}
@@ -456,6 +486,8 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouse(msg)
 
 	case tea.KeyMsg:
+		// notice 는 다음 키까지만 — 읽었으면 다음 행동으로 넘어간 것이다.
+		m.notice = ""
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -508,6 +540,28 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.mode = modeConfirmKill
 				m.confirmKillMod = newConfirmKillModel(it.session.Name)
 			}
+
+		case "p":
+			if m.writesBlocked() {
+				break
+			}
+			it := m.currentItem()
+			if it == nil || it.kind != itemSession {
+				break
+			}
+			if !claudeSessionRow(it) {
+				m.notice = "only Claude sessions can be parked — other tools have no conversation id to resume"
+				break
+			}
+			if m.parking != "" {
+				m.notice = fmt.Sprintf("still parking %q…", m.parking)
+				break
+			}
+			m.mode = modeConfirmPark
+			m.confirmParkMod = newConfirmParkModel(*it.session)
+
+		case "P":
+			return m.openParked()
 
 		case "r":
 			if m.writesBlocked() {
@@ -604,6 +658,9 @@ func (m Model) activateCurrent() (tea.Model, tea.Cmd) {
 		m.mode = modeCreate
 		m.createModel = newCreateModel(true)
 		return m, m.createModel.nameInput.Focus()
+	case itemParked:
+		// 이것이 빠지면 더블클릭이 아래 default 의 빈 attach 로 빠져 mux 가 그냥 닫힌다.
+		return m.openParked()
 	default:
 		m.attachTarget = previewKeyForItem(*it)
 		return m, tea.Quit
@@ -864,7 +921,7 @@ func (m *Model) rebuildItems() {
 	// Action rows are "New shell" (detach) and "New tmux session" (create) —
 	// both writes, and both meaningless for a source that only reads.
 	actions := !m.writesBlocked() && (m.filterText == "" || m.filterText == m.projectDir)
-	m.items = flattenMenu(m.filtered, &m.tree, m.prefs.Orders, actions)
+	m.items = flattenMenu(m.filtered, &m.tree, m.prefs.Orders, actions, len(m.parked))
 	if m.cursor >= len(m.items) {
 		m.cursor = max(0, len(m.items)-1)
 	}
@@ -918,6 +975,8 @@ func (m Model) View() string {
 		return m.viewHelp()
 	case modeSetupOffer:
 		return m.viewSetupOffer()
+	case modeParked:
+		return m.viewParked()
 	default:
 		return m.viewMain()
 	}
@@ -931,6 +990,11 @@ func (m Model) extraBar() string {
 		return m.filterMod.View()
 	case m.mode == modeConfirmKill:
 		return m.confirmKillMod.View()
+	case m.mode == modeConfirmPark:
+		return m.confirmParkMod.View()
+	case m.notice != "":
+		// 필터보다 위. VS Code 에서 연 목록은 시딩 필터가 늘 서 있어서, 아래에 두면 영영 안 보인다.
+		return helpKeyStyle.Render(m.notice)
 	case m.selectMode:
 		// Says the screen has stopped moving as well as how to leave: a frozen
 		// list with no explanation reads as mux having hung.
@@ -1034,6 +1098,9 @@ func (m Model) viewMain() string {
 		tokenUsage = m.tokenUsage
 	}
 	preview := renderPreview(currentItem, cachedContent, rightWidth, innerHeight, tokenUsage)
+	if currentItem != nil && currentItem.kind == itemParked {
+		preview = renderParkedPreview(m.parked, rightWidth, innerHeight)
+	}
 
 	content := drawFrame(list, preview, leftWidth, rightWidth, innerHeight)
 
@@ -1075,6 +1142,7 @@ func renderHelp(writesBlocked, canCommit bool) string {
 		{"enter/2click", "attach"},
 		{"n", "new"},
 		{"x", "kill"},
+		{"p", "park"},
 		{"r", "rename"},
 		{"m", "memo"},
 		{"v", "copy"},

@@ -17,6 +17,8 @@ type mockRunner struct {
 	// holds the side effects, and a test about what mux asked tmux — rather than
 	// what it did to it — has nothing else to assert on.
 	gets []string
+	// runErrs 는 Run 이 실패해야 하는 명령이다. 없으면 Run 은 늘 성공한다.
+	runErrs map[string]error
 }
 
 type mockResult struct {
@@ -45,9 +47,18 @@ func (m *mockRunner) Output(name string, args ...string) ([]byte, error) {
 	return nil, fmt.Errorf("mock: unexpected call: %s", k)
 }
 
+// OnRun 은 그 명령의 Run 이 err 로 실패하게 한다.
+func (m *mockRunner) OnRun(err error, name string, args ...string) {
+	if m.runErrs == nil {
+		m.runErrs = make(map[string]error)
+	}
+	m.runErrs[m.key(name, args...)] = err
+}
+
 func (m *mockRunner) Run(name string, args ...string) error {
-	m.runs = append(m.runs, m.key(name, args...))
-	return nil
+	k := m.key(name, args...)
+	m.runs = append(m.runs, k)
+	return m.runErrs[k]
 }
 
 func withMock(t *testing.T, fn func(m *mockRunner)) {
@@ -85,12 +96,16 @@ func withMock(t *testing.T, fn func(m *mockRunner)) {
 	// 이벤트 이력에 쓰면 안 되고, 반대로 그 이력을 읽어 와 단언이 흔들려도 안 된다.
 	oldArchive := eventArchiveFile
 	eventArchiveFile = func() (string, error) { return filepath.Join(stateDir, "events.json"), nil }
+	// 보관함도. 개발자의 실제 parked.json 을 읽거나 덮으면 보관해 둔 대화로 가는 길을 잃는다.
+	oldParked := parkedFile
+	parkedFile = func() (string, error) { return filepath.Join(stateDir, "parked.json"), nil }
 	defer func() {
 		runner = old
 		homeDir = oldHome
 		panelStateFile = oldPanelState
 		serverStateFile = oldServerState
 		eventArchiveFile = oldArchive
+		parkedFile = oldParked
 		claudeStatusCacheMu.Lock()
 		claudeStatusCache = cachedClaudeStatuses{}
 		claudeStatusCacheMu.Unlock()

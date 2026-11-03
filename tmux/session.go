@@ -256,7 +256,7 @@ func CreateSession(name string) error {
 // that; the profile still falls back to the pane's cwd for sessions made
 // without a directory.
 func CreateSessionWithDir(name, dir string) error {
-	if err := runner.Run("tmux", "new-session", "-d", "-s", name, "-c", dir); err != nil {
+	if err := runner.Run("tmux", "new-session", "-d", "-s", name, "-c", tmuxDirArg(dir)); err != nil {
 		return err
 	}
 	// Best-effort: a session without its tag is the old behaviour, not a
@@ -284,7 +284,7 @@ func CreateSessionWithCommand(name, dir string, argv []string) (string, error) {
 	name = freeSessionName(name)
 	args := []string{"new-session", "-d", "-s", name}
 	if dir != "" {
-		args = append(args, "-c", dir)
+		args = append(args, "-c", tmuxDirArg(dir))
 	}
 	args = append(args, argv...)
 	if err := runner.Run("tmux", args...); err != nil {
@@ -327,6 +327,12 @@ func freeSessionName(name string) string {
 	}
 	return candidate
 }
+
+// tmuxDirArg 는 -c 에 넘길 디렉터리다. tmux 는 -c 를 포맷으로 펼친다 — #{…} 는 바뀌고 #(…) 는 셸
+// 명령으로 실행된다. 2026-11-03 격리 서버(3.8) 실측: «c#(touch …)d» 라는 디렉터리를 -c 로 넘기자 그 명령이
+// 돌았다. 디렉터리 이름은 저장소가 정할 수 있으므로(클론한 폴더, Claude 의 cwd) # 를 ## 로 막는다.
+// tmux-assumptions 17절이 ## 가 글자 그대로 돌아오는 것을 단언한다.
+func tmuxDirArg(dir string) string { return strings.ReplaceAll(dir, "#", "##") }
 
 // KillSession destroys the tmux session with the given name.
 func KillSession(name string) error {

@@ -231,7 +231,7 @@ func openPanel(window, dir string, width int) error {
 		// active pane, and ListSessions reads the session's directory from
 		// #{pane_current_path} of the active pane. Every session then reports the
 		// panel's directory, so every branch reads the same.
-		args = append(args, "-c", dir)
+		args = append(args, "-c", tmuxDirArg(dir))
 	}
 	args = append(args, "-t", window, self+" watch")
 	return runner.Run("tmux", args...)

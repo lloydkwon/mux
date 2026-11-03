@@ -16,4 +16,4 @@
 │                                              │                                                                       │|
 │                                              │                                                                       │|
 ╰──────────────────────────────────────────────┴───────────────────────────────────────────────────────────────────────╯|
-↑↓/jk navigate • tab expand • ⇧tab collapse • enter/2click attach • n new • x kill • r rename • m memo • v copy • 0-9 or|
+↑↓/jk navigate • tab expand • ⇧tab collapse • enter/2click attach • n new • x kill • p park • r rename • m memo • v copy|

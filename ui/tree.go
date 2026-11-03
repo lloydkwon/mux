@@ -12,6 +12,8 @@ const (
 	itemSession
 	itemWindow
 	itemPane
+	// itemParked 는 보관함 행이다. 맨 끝에 둔 것은 앞의 값들을 그대로 두기 위해서다.
+	itemParked
 )
 
 // listItem is one renderable row in the flattened tree view.
@@ -24,6 +26,7 @@ type listItem struct {
 	window  *tmux.Window
 	pane    *tmux.Pane
 	order   int
+	count   int // itemParked 만: 보관 항목 수
 }
 
 // paneCacheKey is the cache key for panes loaded from a (session, window).
@@ -164,19 +167,23 @@ func (t *treeState) pruneCaches(sessions []tmux.Session) {
 // state. Expanded sessions yield their windows; expanded windows yield their
 // panes. The original session slice is held by reference inside the items.
 func flatten(sessions []tmux.Session, t *treeState) []listItem {
-	return flattenMenu(sessions, t, nil, false)
+	return flattenMenu(sessions, t, nil, false, 0)
 }
 
 // flattenMenu builds the interactive menu. Action rows are included only in
 // the unfiltered top-level view; order values are copied onto session rows for
-// rendering without changing tmux's Session type.
-func flattenMenu(sessions []tmux.Session, t *treeState, orders map[string]int, includeActions bool) []listItem {
+// rendering without changing tmux's Session type. parked 가 0 보다 크면 액션 행
+// 아래에 보관함 행이 붙는다.
+func flattenMenu(sessions []tmux.Session, t *treeState, orders map[string]int, includeActions bool, parked int) []listItem {
 	items := make([]listItem, 0, len(sessions))
 	if includeActions {
 		items = append(items,
 			listItem{kind: itemNewShell},
 			listItem{kind: itemNewSession},
 		)
+		if parked > 0 {
+			items = append(items, listItem{kind: itemParked, count: parked})
+		}
 	}
 	for i := range sessions {
 		s := &sessions[i]

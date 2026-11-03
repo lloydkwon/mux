@@ -141,6 +141,8 @@ func sessionNameWidth(items []listItem, innerWidth int, showOrder, showNote bool
 			label = actionNewShellLabel
 		case itemNewSession:
 			label = actionNewSessionLabel
+		case itemParked:
+			label = actionParkedLabel
 		default:
 			continue
 		}
@@ -190,6 +192,8 @@ func formatItemRow(it listItem, selected, showOrder bool, nameWidth, width int, 
 		return formatActionRow("○", actionNewShellLabel, "leave tmux", selected, nameWidth, width)
 	case itemNewSession:
 		return formatActionRow("+", actionNewSessionLabel, "create and attach", selected, nameWidth, width)
+	case itemParked:
+		return formatActionRow(parkedGlyph, actionParkedLabel, fmt.Sprintf("%d to restore", it.count), selected, nameWidth, width)
 	case itemWindow:
 		expanded := t.isWindowExpanded(it.session.Name, it.window.Index)
 		return formatWindowRow(it.window, expanded, selected, showOrder, nameWidth, width)

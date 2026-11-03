@@ -111,9 +111,9 @@ func renderHelpBody() string {
 		helpKeyRow("shift+tab h", "접기", "x", "세션 종료"),
 		helpKeyRow("g G", "처음 / 끝", "0-9", "순서 지정 (0 해제)"),
 		helpKeyRow("enter 더블클릭", "attach", "o", "정렬 순환"),
-		helpKeyRow("/", "검색", "esc", "검색 해제"),
-		helpKeyRow("?", "도움말", "q", "종료"),
+		helpKeyRow("/ esc", "검색/해제", "q", "종료"),
 		helpKeyRow("m", "메모 편집", "v", "선택 모드 (복사)"),
+		helpKeyRow("p", "세션 보관", "P", "보관함 (복원)"),
 	}
 	return strings.Join(lines, "\n")
 }

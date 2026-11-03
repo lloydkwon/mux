@@ -34,7 +34,7 @@ func TestFlattenMenuIncludesActionsAndOrders(t *testing.T) {
 		expandedWindow:  map[string]map[int]bool{},
 		windowsCache:    map[string][]tmux.Window{},
 		panesCache:      map[paneCacheKey][]tmux.Pane{},
-	}, map[string]int{"news": 12}, true)
+	}, map[string]int{"news": 12}, true, 0)
 
 	if len(items) != 3 {
 		t.Fatalf("items = %d, want 3", len(items))

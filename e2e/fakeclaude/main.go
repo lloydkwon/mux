@@ -36,6 +36,10 @@ var (
 	name          = flag.String("name", "fake", "Claude 대화 이름 (상태 파일의 name)")
 	replyDelay    = flag.Duration("reply-delay", 1500*time.Millisecond, "턴 하나에 걸리는 시간")
 	transcriptLag = flag.Duration("transcript-lag", 0, "idle 을 쓴 뒤 회신 줄을 쓰기까지의 지연")
+	// 보관함 복원(mux 의 RestoreParked)이 치는 `claude --resume <id>` 를 받는다. 같은 id 로 상태 파일과
+	// 기록을 이어 쓰는 것이 진짜 Claude 의 --resume 이다. --fork-session 이면 새 id 를 받는다.
+	resume = flag.String("resume", "", "이어 갈 대화 id")
+	fork   = flag.Bool("fork-session", false, "--resume 한 대화를 새 id 로 이어 간다")
 )
 
 type fake struct {
@@ -85,6 +89,9 @@ func newFake() (*fake, error) {
 	cwd, _ := os.Getwd()
 	f := &fake{home: home, cwd: cwd, pid: os.Getpid(), started: time.Now().UnixMilli()}
 	f.sid = fmt.Sprintf("fake-%d-%d", f.pid, time.Now().UnixNano())
+	if *resume != "" && !*fork {
+		f.sid = *resume
+	}
 	f.procStart = procStart()
 	out, err := exec.Command("tmux", "display-message", "-p", "-t", os.Getenv("TMUX_PANE"),
 		"#{session_name}:#{window_id}.#{pane_id}").Output()

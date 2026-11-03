@@ -717,6 +717,25 @@ func runTUI(model ui.Model) error {
 		if err := ui.AttachToSession(name, -1, -1); err != nil {
 			return fmt.Errorf("failed to attach: %w", err)
 		}
+	case m.UnparkRequest() != nil:
+		// 보관함에서 고른 세션. 세션 생성과 attach 가 TUI 밖이어야 하는 이유는 ResumeRequest 와 같다.
+		// 이름이 있으면 오류가 있어도 그리로 간다 — 띄우지 못한 대화는 보관함에 남아 다음에 Parked
+		// 행으로 다시 보이고, 그것이 보고다. 팝업은 이 프로세스와 함께 닫혀 여기서 찍는 말을 볼 수 없다.
+		name, err := tmux.RestoreParked(*m.UnparkRequest())
+		if name == "" {
+			if bootstrappedPopup() {
+				// 아무 데도 못 갔으면 bootstrap 이 붙여 둔 클라이언트를 떼어 낸다 — q 로 닫을 때와 같다.
+				// 안 그러면 tmux 가 고른 세션에 남는다.
+				_ = ui.DetachClient()
+			}
+			return fmt.Errorf("failed to restore: %w", err)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mux: restored %s with problems: %v\n", name, err)
+		}
+		if err := ui.AttachToSession(name, -1, -1); err != nil {
+			return fmt.Errorf("failed to attach: %w", err)
+		}
 	case m.AttachName() != "":
 		if err := ui.AttachToSession(m.AttachName(), m.AttachWindowIndex(), m.AttachPaneIndex()); err != nil {
 			return fmt.Errorf("failed to attach: %w", err)
