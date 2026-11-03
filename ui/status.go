@@ -94,10 +94,26 @@ func aiBadgeColor(s tmux.Session) lipgloss.TerminalColor {
 // is the number worth acting on, where the session's creation age is inert.
 // Other sessions keep showing their creation age, as they always have.
 func sessionAge(s tmux.Session) time.Time {
-	if s.AIState != tmux.AIStateNone && !s.AISince.IsZero() {
-		return s.AISince
+	if t := stateSince(s); !t.IsZero() {
+		return t
 	}
 	return s.Created
+}
+
+// stateSince 는 화면이 «이 상태로 얼마나 됐나» 를 셀 시각이다. 목록·미리보기·패널·pane 테두리가 모두
+// 이것을 쓴다 — 하나라도 다른 시계를 쓰면 정렬과 찍힌 숫자가 어긋난다. 0 이면 모른다.
+//
+// idle 인 Claude 는 상태 파일의 시각(AISince)이 아니라 대화 기록의 마지막 작업(AILastActive)이다.
+// 프롬프트에서 /theme 같은 대화상자를 열고 닫아도 AISince 는 새로 쓰인다 — 2026-11-03 에 일괄로
+// 보낸 /theme 하나가 전날 끝난 세션들을 «9분 전에 끝남» 으로 올렸다. 이벤트 기록은 그대로 AISince 다.
+func stateSince(s tmux.Session) time.Time {
+	if s.AIState == tmux.AIStateNone {
+		return time.Time{}
+	}
+	if !s.AILastActive.IsZero() {
+		return s.AILastActive
+	}
+	return s.AISince
 }
 
 // aiStatusText renders the preview's state cluster, dropping detail to fit
@@ -115,8 +131,8 @@ func aiStatusText(s tmux.Session, maxWidth int) string {
 	label := s.AIState.String()
 
 	elapsed := ""
-	if !s.AISince.IsZero() {
-		elapsed = "  " + compactAgo(s.AISince)
+	if t := stateSince(s); !t.IsZero() {
+		elapsed = "  " + compactAgo(t)
 	}
 
 	candidates := []string{}

@@ -35,10 +35,14 @@ type ClaudeStatus struct {
 	// A missing nameSource — older Claude builds, 12 of 67 files here — counts as
 	// the tool's. That is what mux did before it read the field, and there is no
 	// evidence either way to act on.
-	Name      string
-	Since     time.Time // when the current state began; zero when unknown
-	SessionID string
-	PID       int
+	Name  string
+	Since time.Time // when the current state began; zero when unknown
+	// LastActive 는 idle 세션이 실제로 마지막 일을 한 시각이다(대화 기록, claude_activity.go). Since 보다
+	// 늦지 않고, idle 이 아니거나 기록을 못 읽으면 0 이다. 화면의 경과 시간과 recent 정렬은 이것을,
+	// 이벤트 기록은 Since 를 쓴다.
+	LastActive time.Time
+	SessionID  string
+	PID        int
 }
 
 // Elapsed reports how long the session has been in its current state. It
@@ -172,6 +176,10 @@ func parseClaudeStatus(data []byte) (status ClaudeStatus, tmuxRef string, ok boo
 	}
 	if sf.StatusUpdatedAt > 0 {
 		status.Since = time.UnixMilli(sf.StatusUpdatedAt)
+	}
+	// shell 에서 강등된 Ready 는 뺀다 — 그 statusUpdatedAt 은 shell 이 시작된 때라 기록과 견줄 것이 다르다.
+	if sf.Status == "idle" {
+		status.LastActive = claudeLastActive(sf.SessionID, sf.CWD, status.Since)
 	}
 	return status, tmuxRef, true
 }

@@ -52,7 +52,10 @@ type Session struct {
 	// whose tool does not say.
 	AITask  string
 	AISince time.Time // when the current state began; zero if unknown
-	AIPID   int       // pid of the process publishing the state; 0 if none
+	// AILastActive 는 idle 인 Claude 가 실제로 마지막 일을 한 시각이다(ClaudeStatus.LastActive). 0 이면
+	// 모른다. 화면의 경과 시간과 recent 정렬은 이것을 먼저 쓰고, 이벤트 기록은 AISince 를 쓴다.
+	AILastActive time.Time
+	AIPID        int // pid of the process publishing the state; 0 if none
 	// AISessionID is the tool's own identifier for the conversation — Claude's
 	// session UUID. Empty on the tmux path, where the badge never needed it.
 	//

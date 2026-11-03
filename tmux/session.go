@@ -222,6 +222,7 @@ func parseLine(line string, statuses map[string]ClaudeStatus, screens map[string
 		s.AIWaitingFor = st.WaitingFor
 		s.AITask = st.Name
 		s.AISince = st.Since
+		s.AILastActive = st.LastActive
 		s.AIPID = st.PID
 
 		// tmux's session path follows the *active pane*, which may be looking

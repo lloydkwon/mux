@@ -212,6 +212,10 @@ func parseClaudeRun(data []byte, panes map[string]paneInfo) (ClaudeRun, bool) {
 	if sf.StatusUpdatedAt > 0 {
 		s.AISince = time.UnixMilli(sf.StatusUpdatedAt)
 	}
+	// parseClaudeStatus 와 같은 규칙이다. 이 목록도 UI 의 recent 정렬을 거친다.
+	if sf.Status == "idle" {
+		s.AILastActive = claudeLastActive(sf.SessionID, sf.CWD, s.AISince)
+	}
 	if sf.StartedAt > 0 {
 		s.Created = time.UnixMilli(sf.StartedAt)
 	}

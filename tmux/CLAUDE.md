@@ -7,7 +7,7 @@
 | 파일 | 문서 (`docs/design/`) |
 |---|---|
 | `runner.go`, `process.go`, `git.go` | 루트 `CLAUDE.md` (러너, TTL 캐시) |
-| `aitools.go`, `claude_status.go`, `claude.go` | ai-state.md |
+| `aitools.go`, `claude_status.go`, `claude_activity.go`, `claude.go` | ai-state.md |
 | `proc.go` | ai-state.md, revive.md |
 | `claude_sessions.go` | claude-mode.md |
 | `pair.go` | pair.md |

@@ -414,8 +414,8 @@ func panelStateText(s tmux.Session, width int) string {
 	glyph, label := s.AIState.Icon(), aiStateLabel(s.AIState)
 
 	elapsed := ""
-	if !s.AISince.IsZero() {
-		elapsed = "  " + compactAgo(s.AISince)
+	if t := stateSince(s); !t.IsZero() {
+		elapsed = "  " + compactAgo(t)
 	}
 
 	candidates := []string{}

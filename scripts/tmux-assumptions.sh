@@ -477,6 +477,20 @@ ok "#{pane_synchronized} 는 synchronize-panes 가 켜진 창에서 1" "1" "$(t 
 t set-window-option -t "$AP" synchronize-panes off
 ok "#{pane_synchronized} 는 꺼진 창에서 0" "0" "$(t display-message -p -t "$AP" '#{pane_synchronized}')"
 
+# ── 16. session_activity 가 움직이는 때 ──────────────────────────────────────
+# docs/design/ai-state.md. pane 출력이나 send-keys 로는 움직이지 않고, 사람이 붙거나 옮겨 오거나 키를 칠
+# 때만 움직인다(그쪽은 붙은 클라이언트가 있어야 해서 여기서는 재지 않는다). 문서가 한때 «pane 이 무언가
+# 그렸다는 뜻» 이라고 적었다가 2026-11-03 3.8 에서 재고 고쳤다. «내가 마지막으로 있던 세션» 순서를 다시
+# 생각할 때의 전제다 — 지금 mux 는 이 값으로 정렬하지 않는다.
+echo
+echo "session_activity (docs/design/ai-state.md)"
+t new-session -d -s act -x 80 -y 10 'while :; do echo tick; sleep 0.2; done'
+ACT0=$(t display-message -p -t act '#{session_activity}')
+sleep 2.2
+t send-keys -t act x
+ok "pane 출력과 send-keys 로는 session_activity 가 그대로다" "$ACT0" "$(t display-message -p -t act '#{session_activity}')"
+t kill-session -t act
+
 echo
 if [ "$FAILED" -eq 0 ]; then
 	echo "$CHECKED 개 전부 통과 — $VERSION 에서 mux 의 가정이 유지됩니다."

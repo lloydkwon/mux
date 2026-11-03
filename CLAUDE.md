@@ -41,7 +41,7 @@ CI (`.github/workflows/ci.yml`) runs test + build + arm64 cross-build + `scripts
 
 **`scripts/tmux-assumptions.sh` is the only thing that tests tmux itself.** Every unit test mocks the runner, which is what makes them fast and hermetic — and also means tmux can change underneath mux without a single test failing. The script starts a private server (`-L`, `-f /dev/null`, so the developer's own sessions and hooks are never touched) and asserts the behaviours the code depends on: the `tmux -V` string `getTmuxVersion` parses, `listFormat`'s field count, that `#{@user_option}` resolves a session option through a pane target, that `-l N` on `split-window` gives exactly N columns, that `list-panes` remembers `pane_start_command` (the panel's only marker), that a batched `capture-pane ; display-message ; capture-pane` emits one separator, and that `run-shell` and `after-new-session` expand `#{pane_id}`. **Add a line here whenever a comment says "measured" or "verified"** — otherwise that one assumption is the one that breaks silently on the next upgrade. `make tmux-check` runs it; `TMUX_BIN=/path/to/tmux` points it at a candidate binary instead of PATH.
 
-**Check the candidate before switching, not after.** Putting a new tmux on PATH makes the *client* new while the running *server* stays old, and the protocol mismatch rejects every tmux call — mux, its panels and any command you type — until the server restarts, which ends every session on it. `TMUX_BIN` is how the answer arrives before that price is paid. Verified this way: 22/22 on 3.4 and on 3.7c; 62/62 on 3.4 and 3.8 (2026-11-02, 3.8 은 Docker `ubuntu:24.04` 에서 `--enable-systemd --enable-utempter` 로 빌드). 3.8 은 `mouse` 의 기본값이 on 이 되어, 기본값에 기대던 13절이 `mouse off` 를 명시하게 됐다. CI 러너(ubuntu-26.04, apt 의 tmux 3.6)와 같은 컨테이너에서도 63/63 과 e2e 통과 — 러너에는 `TERM` 이 없어 스크립트가 `xterm-256color` 를 정해 준다.
+**Check the candidate before switching, not after.** Putting a new tmux on PATH makes the *client* new while the running *server* stays old, and the protocol mismatch rejects every tmux call — mux, its panels and any command you type — until the server restarts, which ends every session on it. `TMUX_BIN` is how the answer arrives before that price is paid. Verified this way: 22/22 on 3.4 and on 3.7c; 62/62 on 3.4 and 3.8 (2026-11-02, 3.8 은 Docker `ubuntu:24.04` 에서 `--enable-systemd --enable-utempter` 로 빌드). 3.8 은 `mouse` 의 기본값이 on 이 되어, 기본값에 기대던 13절이 `mouse off` 를 명시하게 됐다. CI 러너(ubuntu-26.04, apt 의 tmux 3.6)와 같은 컨테이너에서도 63/63 과 e2e 통과 — 러너에는 `TERM` 이 없어 스크립트가 `xterm-256color` 를 정해 준다. 2026-11-03 에 16절(`session_activity`)을 더해 3.4·3.8 모두 64/64.
 
 Note the private server has no user config, so `base-index` is tmux's default 0 — target windows by `#{window_id}`, never `sess:1`. Releases are tag-driven via goreleaser. Commits follow Conventional Commits.
 
@@ -69,6 +69,7 @@ Two deliberate exceptions bypass the runner because they must hit the real proce
 | resolved pane command (`pgrep`/`ps` scan) | `tmux/process.go` | 5s |
 | git branch / worktree | `tmux/git.go` | 5s |
 | Claude token usage (JSONL scan) | `tmux/claude.go` | 10s |
+| idle Claude 의 마지막 작업 시각 (JSONL 꼬리) | `tmux/claude_activity.go` | 파일 크기·mtime 이 같으면 재사용 |
 
 Anything new that runs per-tick needs the same treatment.
 
@@ -101,6 +102,9 @@ Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale a
   `TestGlyphWidthsAreStable`. 색은 ANSI 인덱스만(hex·`AdaptiveColor` 금지), 선택 행은 reverse
   video 에 세그먼트 색을 버린다(`TestSelectedRowDropsSegmentColors`). (rendering.md)
 - **상태 글리프는 도구 아이콘을 대체한다, 옆에 붙지 않는다** — 판단은 `aiGlyph` 한 곳. (ai-state.md)
+- **상태의 나이는 `stateSince` 한 곳에서 센다** — idle Claude 는 대화 기록의 마지막 작업(`AILastActive`).
+  `AISince` 를 그 값으로 덮어쓰지 않는다 — 이벤트 기록의 중복 판정 열쇠다. `/theme` 같은 대화상자도
+  `statusUpdatedAt` 을 새로 쓴다(`TestEveryElapsedShowsTheLastWork`). (ai-state.md)
 - **herdr 행 렌더**: AI 상태 없는 창 행은 바이트 그대로(`TestWindowRowWithoutAIStateIsUnchanged`),
   `ListSessions` 의 «exit status 삼키기»는 복제하지 않는다. (herdr.md)
 - **편집기를 띄우는 것은 패널의 오른쪽 클릭뿐**, 왼쪽 클릭·`enter`·TUI 선택은 이미 열린 창만

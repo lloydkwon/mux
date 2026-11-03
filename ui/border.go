@@ -54,8 +54,8 @@ func BorderLine(s tmux.Session, lang string, width int) string {
 	// say it — a finished turn looks the same on screen after one second as
 	// after an hour.
 	elapsed := ""
-	if s.AIState != tmux.AIStateNone && !s.AISince.IsZero() {
-		elapsed = compactAgo(s.AISince)
+	if t := stateSince(s); !t.IsZero() {
+		elapsed = compactAgo(t)
 	}
 
 	badgeFull, badgeMid, badgeShort := "", "", ""
