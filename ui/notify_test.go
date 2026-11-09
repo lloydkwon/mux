@@ -213,9 +213,9 @@ func TestNotifyLinesSortUsesCreationWithoutState(t *testing.T) {
 }
 
 // A session's click target is a block, not a single row: its row, a blocked
-// session's reason, the line saying what last happened there, and the blank
-// between it and the next session. Every row a session owns has to click to that
-// session — spacing that does not is just extra height.
+// session's reason and the line saying what last happened there. Every row a
+// session owns has to click to that session. 블록 사이의 빈 줄은 2026-11-09 에 빠졌다
+// (TestSessionBlocksSitFlush).
 func TestNotifyBlocksAreClickable(t *testing.T) {
 	now := time.Now()
 	first := sess("mux", tmux.AIStateWorking)
@@ -236,17 +236,15 @@ func TestNotifyBlocksAreClickable(t *testing.T) {
 			owners[l.session]++
 		}
 	}
-	if owners["mux"] != 3 { // row + last event + spacer
-		t.Errorf("mux owns %d rows, want 3", owners["mux"])
+	if owners["mux"] != 2 { // row + last event
+		t.Errorf("mux owns %d rows, want 2", owners["mux"])
 	}
-	// The spacer goes between sessions, so the last one has none — the accepted
-	// cost of not trailing a blank into the next heading.
-	if owners["api"] != 3 { // row + reason + last event, no spacer
+	if owners["api"] != 3 { // row + reason + last event
 		t.Errorf("api owns %d rows, want 3", owners["api"])
 	}
 
-	// Every row between the first and last owned one belongs to somebody — the
-	// spacer included. A blank that clicks nowhere is just extra height.
+	// Every row between the first and last owned one belongs to somebody. A row
+	// that clicks nowhere is just extra height.
 	firstOwned, lastOwned := -1, -1
 	for i, l := range rows {
 		if l.session != "" {

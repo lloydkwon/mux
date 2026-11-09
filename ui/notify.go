@@ -481,9 +481,9 @@ func fitRight(left, right rowSeg, width int) []rowSeg {
 //
 // No border: the tmux pane it fills already draws one.
 //
-// Every row of a session's block — its row, reason, last event and the blank
-// under it — carries that session, so a click anywhere in the block lands on it.
-// The blanks around headings carry nothing.
+// Every row of a session's block — its row, reason and last event — carries that
+// session, so a click anywhere in the block lands on it. 블록 사이에는 빈 줄이 없다
+// (sessionBlocks). The blanks around headings carry nothing.
 //
 // Glyphs and colors come from aiGlyph/aiStateColor, the same deciders the list
 // uses — a second mapping here would drift from the rows it sits next to.
@@ -674,17 +674,17 @@ func sortByDisplayedAge(ss []tmux.Session) {
 // sessionBlocks renders one group: a row per session, an indented reason line
 // under a blocked one, and the line saying what last happened there.
 //
-// A blank sits between sessions. Its history: taken out once, put back because
+// No blank sits between sessions. Its history: taken out once, put back because
 // seven blocks ran together into a wall, taken out again on 2026-11-02 when ten
 // AI sessions left the event log no room — and put back the same day once the
-// note moved onto the session's own row (notifySessionLine). The note rows were
-// what the blanks cost; with them gone the log keeps its rows and the list keeps
-// its air.
+// note moved onto the session's own row (notifySessionLine). 2026-11-09 에 세션이 더 늘어
+// 사용자가 다시 뺐다. 검은 이중 밑줄로 가르는 판을 거쳐 마지막 요청은 «선을 바탕과 같게 해서 안 보이게» 였고,
+// 바탕색 선은 긋지 않은 것과 같은 화면이라 긋지 않는다(docs/design/panel.md).
 //
 // dim marks the second group, whose rows are context rather than the point.
 func sessionBlocks(ss []tmux.Session, events []aiEvent, width, perSession int, selected, own string, dim bool) []notifyLine {
 	var lines []notifyLine
-	for i, s := range ss {
+	for _, s := range ss {
 		sel := s.Name == selected
 		lines = append(lines, notifyLine{
 			text:    notifySessionLine(s, width, rowFlags{selected: sel, dim: dim, own: s.Name == own}),
@@ -713,23 +713,7 @@ func sessionBlocks(ss []tmux.Session, events []aiEvent, width, perSession int, s
 		// Drawn unhighlighted, unlike the reason row: what the highlight is for
 		// is saying precisely which session the cursor is on, and a second
 		// inverted line under every selected row blurs that.
-		last := sessionEventLines(events, s.Name, width, perSession, sel)
-		lines = append(lines, last...)
-
-		// Between sessions only. The blank belongs to the session above it, so a
-		// click anywhere in the block lands on the same place; skipping it after
-		// the last one keeps the list from trailing into the next heading, at the
-		// cost of the bottom session being a shorter target.
-		//
-		// It follows the highlight only when nothing else sits under the row: an
-		// inverted bar below an unhighlighted event line reads as a stray row
-		// rather than as the bottom of this block.
-		if i < len(ss)-1 {
-			lines = append(lines, notifyLine{
-				text:    renderRow(nil, width, sel && len(last) == 0),
-				session: s.Name,
-			})
-		}
+		lines = append(lines, sessionEventLines(events, s.Name, width, perSession, sel)...)
 	}
 	return lines
 }
