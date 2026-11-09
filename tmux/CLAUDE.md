@@ -8,6 +8,7 @@
 |---|---|
 | `runner.go`, `process.go`, `git.go` | 루트 `CLAUDE.md` (러너, TTL 캐시) |
 | `aitools.go`, `claude_status.go`, `claude_activity.go`, `claude.go` | ai-state.md |
+| `claude_work.go`, `claude_work_title.go` | panel.md (세션 아래 줄), `transcript.go` 의 줄 모양은 agent-api.md |
 | `proc.go` | ai-state.md, revive.md |
 | `claude_sessions.go` | claude-mode.md |
 | `pair.go` | pair.md |

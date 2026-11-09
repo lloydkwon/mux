@@ -30,6 +30,11 @@ func resolveCommand(panePID int, rawCmd string) string {
 	if IsAICommand(rawCmd) {
 		return rawCmd
 	}
+	// mux 의 자식 claude 는 패널이 제목을 짓는 일회용 호출이다(claude_work_title.go). 세면 그 몇 초 동안 패널이 있는
+	// 세션이 Claude 세션으로 보이고, mux agent ls 에 답할 수 없는 대상으로 오른다.
+	if rawCmd == "mux" {
+		return rawCmd
+	}
 
 	cmdCacheMu.Lock()
 	if cached, ok := cmdCache[panePID]; ok && time.Now().Before(cached.expiresAt) {

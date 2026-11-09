@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -233,6 +234,32 @@ type watchModel struct {
 	// 그 값이 바뀌었다는 것 — 그 사이 맞춤이 창 크기를 바꿨다 — 이고, applyResize 가 판정 하나 동안만 세운다.
 	fitSeq   string
 	fitMoved bool
+
+	// titleWork 는 세션 아래 줄의 제목을 짓는다(tmux.TitleNextClaudeWork). nil 이면 짓지 않는다 — exePath 와 같은
+	// 스위치로, 손으로 만든 모델이 claude 를 부르고 사용량을 쓰는 일을 막는다. titling 은 호출 하나가 도는 동안
+	// 세워 둔다. 수 초 걸리는 일이라 틱이 겹치면 대화마다 여러 번 나간다.
+	titleWork func([]tmux.Session)
+	titling   bool
+}
+
+// workTitledMsg 는 제목 호출 하나가 끝났다는 뜻이다. 결과는 다음 틱의 WithClaudeWork 가 저장소에서 읽는다.
+type workTitledMsg struct{}
+
+// nextTitleCmd 는 제목이 없는 세션이 있으면 호출 하나를 내보낸다.
+func (m watchModel) nextTitleCmd() (watchModel, tea.Cmd) {
+	if m.titleWork == nil || m.titling {
+		return m, nil
+	}
+	untitled := func(s tmux.Session) bool { return s.AIWorkUntitled }
+	if !slices.ContainsFunc(m.sessions, untitled) {
+		return m, nil
+	}
+	m.titling = true
+	titleWork, sessions := m.titleWork, m.sessions
+	return m, func() tea.Msg {
+		titleWork(sessions)
+		return workTitledMsg{}
+	}
 }
 
 // minWidth is the bar this pane leaves below. The same number decides whether a
@@ -309,6 +336,7 @@ func RunWatch() error {
 				focusIdea:      focusShellIntelliJ,
 				ghostIdle:      ghostIdle,
 				probeMouse:     tmux.MouseEnabled,
+				titleWork:      tmux.TitleNextClaudeWork,
 				exePath:        exe,
 				// Taken here rather than on the first tick so the baseline is
 				// the file we actually started from. A tick later it may already
@@ -335,11 +363,21 @@ func RunWatch() error {
 	}
 }
 
+// loadWatchSessions 는 패널의 세션 읽기다. TUI 의 loadSessions 에 세션 아래 줄이 쓸 «지금 하는 일» 을 더한다 —
+// 이 값을 쓰는 것은 패널뿐이라 여기서만 읽는다(tmux.WithClaudeWork).
+func loadWatchSessions() tea.Msg {
+	sessions, err := tmux.ListSessions()
+	if err != nil {
+		return sessionsLoadedMsg{err: err}
+	}
+	return sessionsLoadedMsg{sessions: tmux.WithClaudeWork(sessions)}
+}
+
 func (m watchModel) Init() tea.Cmd {
 	// The mouse is asked once at startup rather than waiting for the first
 	// minute: a panel that cannot be clicked should say so while the user is
 	// still looking at it for the first time. nil when probeMouse is.
-	return tea.Batch(loadSessions, watchTick(), mouseCheckCmd(m.probeMouse))
+	return tea.Batch(loadWatchSessions, watchTick(), mouseCheckCmd(m.probeMouse))
 }
 
 func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -459,7 +497,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m = due
 		}
-		return m, tea.Batch(loadSessions, watchTick(), adopt, ghost, mouse)
+		return m, tea.Batch(loadWatchSessions, watchTick(), adopt, ghost, mouse)
 
 	case mouseStateMsg:
 		m.mouseOff = msg.off
@@ -506,7 +544,13 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.ownSessionLost() {
 			cmds = append(cmds, resolveOwnCmd(m.resolveOwn))
 		}
+		m, title := m.nextTitleCmd()
+		cmds = append(cmds, title)
 		return m.reselect(), tea.Batch(cmds...)
+
+	case workTitledMsg:
+		m.titling = false
+		return m, nil
 
 	case ownResolvedMsg:
 		return m.adoptOwnSession(msg), nil
@@ -1473,7 +1517,7 @@ func (m watchModel) checkBinary(now binaryStamp) (watchModel, bool) {
 // that is what keeps this tmux call out of `go test ./ui`.
 func (m watchModel) requestRestart() (tea.Model, tea.Cmd) {
 	if tmux.PaneActive(selfPane()) {
-		return m, tea.Batch(loadSessions, watchTick())
+		return m, tea.Batch(loadWatchSessions, watchTick())
 	}
 	m.restartRequested = true
 	return m, tea.Quit

@@ -1053,3 +1053,147 @@ func TestNotifyNoteSitsOnTheSessionRow(t *testing.T) {
 		t.Errorf("18 cells: %q — want the name and no note", row)
 	}
 }
+
+// workBlockOf 는 세션 블록의 줄들이다 — 세션 행부터, 빈 줄은 뺀다.
+func workBlockOf(lines []notifyLine, session string) []string {
+	var block []string
+	for _, l := range lines {
+		text := strings.TrimSpace(ansi.Strip(l.text))
+		if l.session == session && text != "" {
+			block = append(block, text)
+		}
+	}
+	return block
+}
+
+// 세션 이름 아래 줄은 지금 하는 일이다. 대화 이름을 되풀이하던 이벤트 줄을 대신한다 — 줄 수는 그대로다.
+func TestWorkLineSitsDirectlyUnderTheSession(t *testing.T) {
+	now := time.Now()
+	working := sess("my-mux", tmux.AIStateWorking)
+	working.AITask = "fix-intellij-viewport-height"
+	working.AIWork = "패널에 세션별 현재 작업을 적는다"
+	plain := sess("api", tmux.AIStateReady)
+	events := []aiEvent{
+		{at: now, session: "my-mux", text: "⏳ fix-intellij-viewport-height", state: tmux.AIStateWorking},
+		{at: now.Add(-time.Minute), session: "api", text: "✅ 작업 완료", state: tmux.AIStateReady},
+	}
+
+	lines := notifyLines([]tmux.Session{working, plain}, events, 48, 40, "", "", false)
+
+	block := workBlockOf(lines, "my-mux")
+	if len(block) != 2 || block[1] != working.AIWork {
+		t.Fatalf("my-mux block = %q, want the row and then %q", block, working.AIWork)
+	}
+	// 들여쓰기로 그 세션에 딸린 줄임을 보인다.
+	var raw string
+	for i, l := range lines {
+		if strings.Contains(ansi.Strip(l.text), "my-mux") {
+			raw = ansi.Strip(lines[i+1].text)
+			break
+		}
+	}
+	if !strings.HasPrefix(raw, "    "+working.AIWork) {
+		t.Errorf("work line = %q, want it indented past the badge", raw)
+	}
+
+	// 일을 모르는 세션은 예전처럼 마지막 이벤트를 말한다.
+	apiBlock := workBlockOf(lines, "api")
+	if len(apiBlock) != 2 || !strings.Contains(apiBlock[1], "✅ 작업 완료") {
+		t.Errorf("api block = %q, want the last event", apiBlock)
+	}
+
+	// 아래 최근 이벤트는 그대로다 — 시각과 전환은 거기서 본다.
+	var logged bool
+	for _, l := range lines {
+		if l.session == "" && strings.Contains(ansi.Strip(l.text), "my-mux") {
+			logged = true
+		}
+	}
+	if !logged {
+		t.Error("the log below lost the session's event")
+	}
+}
+
+// 승인을 기다리는 이유는 무엇을 하던 중이었는지보다 급하다 — 세션 바로 아래 그대로 둔다.
+func TestWorkLineFollowsTheApprovalReason(t *testing.T) {
+	s := sess("api", tmux.AIStateApproval)
+	s.AIWaitingFor = "Bash: git push"
+	s.AIWork = "운영 서버에 인증서를 다시 올린다"
+	block := workBlockOf(notifyLines([]tmux.Session{s}, nil, 48, 40, "", "", false), "api")
+	if len(block) != 3 || !strings.Contains(block[1], "git push") || block[2] != s.AIWork {
+		t.Errorf("block = %q, want row, reason, work", block)
+	}
+}
+
+// 세션마다 한 줄은 모두 가질 때만 산다(TestPerSessionLinesAreAllOrNothing). 작업 줄도 같은 값을 쓴다 —
+// 따로 셈하면 일부 세션만 줄을 가진 목록이 된다.
+func TestWorkLineYieldsOnAShortPane(t *testing.T) {
+	sessions := []tmux.Session{sess("a", tmux.AIStateWorking), sess("b", tmux.AIStateWorking), sess("c", tmux.AIStateWorking)}
+	for i := range sessions {
+		sessions[i].AIWork = "지금 하는 일을 말하는 한 줄"
+	}
+	rows := len(notifySessionLines(sessions, nil, 40, 0, "", ""))
+	for _, l := range notifyLines(sessions, nil, 40, rows+len(sessions)-1, "", "", false) {
+		if strings.Contains(ansi.Strip(l.text), "지금 하는 일") {
+			t.Fatalf("no room for all three, but drew %q", ansi.Strip(l.text))
+		}
+	}
+	var drawn int
+	for _, l := range notifyLines(sessions, nil, 40, rows+len(sessions), "", "", false) {
+		if strings.Contains(ansi.Strip(l.text), "지금 하는 일") {
+			drawn++
+		}
+	}
+	if drawn != 3 {
+		t.Errorf("room for all three, drew %d", drawn)
+	}
+}
+
+// 줄은 정확히 패널 폭이고, 넘치면 잘린 표시를 남긴다. 한글은 두 칸이라 칸 경계에서 어긋나기 쉽다.
+func TestWorkLineFitsTheWidth(t *testing.T) {
+	s := sess("my-mux", tmux.AIStateWorking)
+	s.AIWork = "세션별로 현재 작업중인 내용을 오른쪽 패널 세션명 아래에 표기하게 해줘 그리고 줄이 넘치면 잘라 줘"
+	for _, width := range []int{1, 2, 4, 5, 6, 7, 20, 36, 47, 48, 51} {
+		line := sessionWorkLine(s, width)
+		if got := ansi.StringWidth(line); got != width {
+			t.Errorf("width %d: %d cells: %q", width, got, ansi.Strip(line))
+		}
+	}
+	if line := ansi.Strip(sessionWorkLine(s, 36)); !strings.Contains(line, "...") {
+		t.Errorf("clipped without a marker: %q", line)
+	}
+	// 세션 행처럼 오른쪽 한 칸은 비운다. 영문은 칸 경계가 어긋나지 않아 한글보다 분명하게 드러난다.
+	ascii := s
+	ascii.AIWork = strings.Repeat("x", 100)
+	for _, width := range []int{20, 36, 48, 51} {
+		if line := ansi.Strip(sessionWorkLine(ascii, width)); !strings.HasSuffix(line, "... ") {
+			t.Errorf("width %d: %q — want the marker and then the right margin", width, line)
+		}
+	}
+	short := s
+	short.AIWork = "한 줄에 들어가는 글"
+	if line := ansi.Strip(sessionWorkLine(short, 48)); strings.Contains(line, "...") {
+		t.Errorf("marked a line that fits: %q", line)
+	}
+}
+
+// 작업 줄은 커서를 받지 않는다 — 세션 행의 반전만이 커서가 어디인지 말한다. 그리고 클릭은 그 세션으로 간다.
+func TestWorkLineBelongsToItsSession(t *testing.T) {
+	a := sess("a", tmux.AIStateWorking)
+	a.AIWork = "첫째 세션이 하는 일을 말하는 줄"
+	b := sess("b", tmux.AIStateWorking)
+	b.AIWork = "둘째 세션이 하는 일을 말하는 줄"
+	lines := notifyLines([]tmux.Session{a, b}, nil, 48, 40, "a", "", false)
+	for _, l := range lines {
+		text := ansi.Strip(l.text)
+		if strings.Contains(text, "첫째") && l.session != "a" {
+			t.Errorf("a's work line belongs to %q", l.session)
+		}
+		if strings.Contains(text, "둘째") && l.session != "b" {
+			t.Errorf("b's work line belongs to %q", l.session)
+		}
+	}
+	if line := sessionWorkLine(a, 48); strings.Contains(line, "\x1b[7m") {
+		t.Errorf("work line is highlighted: %q", line)
+	}
+}

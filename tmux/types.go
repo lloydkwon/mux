@@ -55,7 +55,13 @@ type Session struct {
 	// AILastActive 는 idle 인 Claude 가 실제로 마지막 일을 한 시각이다(ClaudeStatus.LastActive). 0 이면
 	// 모른다. 화면의 경과 시간과 recent 정렬은 이것을 먼저 쓰고, 이벤트 기록은 AISince 를 쓴다.
 	AILastActive time.Time
-	AIPID        int // pid of the process publishing the state; 0 if none
+	// AIWork 는 그 도구가 지금 하는 일의 한 줄이다. AITask 가 상태 파일의 대화 이름이라면 이것은 대화 기록의
+	// 마지막 요약이나 프롬프트를 다듬은 제목이고, 제목이 없으면 그 글 그대로다. ListSessions 는 채우지 않는다 —
+	// 패널만 WithClaudeWork 로 읽어 쓴다.
+	AIWork string
+	// AIWorkUntitled 는 AIWork 가 아직 제목을 지어 보지 않은 원문이라는 뜻이다(TitleNextClaudeWork 의 대상).
+	AIWorkUntitled bool
+	AIPID          int // pid of the process publishing the state; 0 if none
 	// AISessionID is the tool's own identifier for the conversation — Claude's
 	// session UUID. Empty on the tmux path, where the badge never needed it.
 	//

@@ -42,6 +42,7 @@ type ClaudeStatus struct {
 	// 이벤트 기록은 Since 를 쓴다.
 	LastActive time.Time
 	SessionID  string
+	CWD        string // 대화 기록을 찾는 열쇠. processCwd 와 달리 Claude 가 시작한 폴더다
 	PID        int
 }
 
@@ -168,6 +169,7 @@ func parseClaudeStatus(data []byte) (status ClaudeStatus, tmuxRef string, ok boo
 		State:     state,
 		RawStatus: sf.Status,
 		SessionID: sf.SessionID,
+		CWD:       sf.CWD,
 		PID:       sf.PID,
 		Name:      claudeTaskName(sf),
 	}

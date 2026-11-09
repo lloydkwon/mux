@@ -58,7 +58,7 @@ Three layers, strictly one-directional:
 
 `tmux/runner.go` defines a package-level `runner CommandRunner` var. Every `tmux`/`ps`/`pgrep` call in the package must use `runner.Output` / `runner.Run` — that is what makes the package testable. Tests call `SetRunner(mockRunner)` via the `withMock` helper in `tmux/runner_test.go`; the mock is keyed by the exact `"name arg1 arg2"` string, so adding a flag to a command breaks its test until the mock key is updated.
 
-Two deliberate exceptions bypass the runner because they must hit the real process: `getTmuxVersion` in `tmux/popup.go`, and `AttachToSession`/`DetachClient` in `ui/app.go`.
+Two deliberate exceptions bypass the runner because they must hit the real process: `getTmuxVersion` in `tmux/popup.go`, and `AttachToSession`/`DetachClient` in `ui/app.go`. `runWorkTitleModel` in `tmux/claude_work_title.go` 도 러너를 거치지 않는다 — stdin·환경·폴더·타임아웃이 필요하고, 테스트는 `askWorkTitle` 을 바꾼다.
 
 ### The 500ms tick drives everything — so everything expensive is TTL-cached
 
@@ -70,6 +70,8 @@ Two deliberate exceptions bypass the runner because they must hit the real proce
 | git branch / worktree | `tmux/git.go` | 5s |
 | Claude token usage (JSONL scan) | `tmux/claude.go` | 10s |
 | idle Claude 의 마지막 작업 시각 (JSONL 꼬리) | `tmux/claude_activity.go` | 파일 크기·mtime 이 같으면 재사용 |
+| 패널의 «지금 하는 일» (JSONL 새 줄) | `tmux/claude_work.go` | 읽은 곳까지 기억, 자란 만큼만 읽음 |
+| 그 일의 제목 (Haiku 호출 결과) | `tmux/claude_work_title.go` | 글이 같으면 재사용, 디스크로 패널끼리 공유 |
 
 Anything new that runs per-tick needs the same treatment.
 
@@ -105,6 +107,13 @@ Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale a
 - **패널의 세션 블록 사이에는 빈 줄도 선도 없다** — 세션이 늘어 사용자가 정했다(2026-11-09). 밑줄·이미지는 행을
   밀지 못해 간격을 만들지 못하고, 바탕색 선은 긋지 않은 것과 같다. 다음 후보는 «여유 있을 때만 빈 줄».
   (panel.md, `TestSessionBlocksSitFlush`)
+- **패널의 세션 아래 줄은 대화 기록에서 읽은 지금 하는 일을 Haiku 가 다듬은 제목이다** — 글은 마지막 요약이나 프롬프트이고,
+  모델은 그 글이 바뀔 때만 틱 밖에서 부른다(`TitleNextClaudeWork`, 틱은 저장된 답만 읽는다). `claude -p` 에서 `--tools ""` 와
+  `--setting-sources ""` 를 빼지 않고 `--bare` 를 쓰지 않는다(OAuth 를 못 읽는다). 저장소에는 해시와 제목만 둔다. 상태 파일의 대화 이름으로
+  물러서지 않는다(`/clear` 뒤에도 옛 이름이다). 사람이 친 줄은 `origin.kind` 가 human 인 줄뿐이고(`isHumanTurn` 을 쓰면
+  `[Request interrupted by user]` 가 작업이 된다), 20칸 아래 응답과 `[mantis-progress]` 문의는 일이 아니다. `ListSessions` 에
+  넣지 않는다 — `mux border` 가 캐시 없이 매번 읽는다(`TestStatusScanDoesNotReadTheWork`). 이벤트 기록에 넣지 않는다 —
+  프롬프트는 붙여 넣은 무엇이든 담는다. (panel.md)
 - **상태의 나이는 `stateSince` 한 곳에서 센다** — idle Claude 는 대화 기록의 마지막 작업(`AILastActive`).
   `AISince` 를 그 값으로 덮어쓰지 않는다 — 이벤트 기록의 중복 판정 열쇠다. `/theme` 같은 대화상자도
   `statusUpdatedAt` 을 새로 쓴다(`TestEveryElapsedShowsTheLastWork`). (ai-state.md)

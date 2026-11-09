@@ -13,6 +13,9 @@
 //     그룹(end_turn), turn_duration.
 //
 // 받은 줄은 $HOME/fake-<name>.log 에 그대로 남긴다 — 글자 그대로 도착했는지 보는 곳이다.
+//
+// `-p` 로 불리면 패널의 제목 호출(tmux/claude_work_title.go)이다. 상태 파일도 입력창도 없이 답만 하고 끝낸다.
+// 호출이 도착한 사실은 $HOME/fake-titles.log 에 한 줄씩 남는다.
 package main
 
 import (
@@ -20,11 +23,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,6 +60,11 @@ type fake struct {
 }
 
 func main() {
+	// flag.Parse 보다 먼저다. 제목 호출의 인자(--model, --json-schema …)를 이 가짜는 정의하지 않는다.
+	if slices.Contains(os.Args[1:], "-p") {
+		answerTitle()
+		return
+	}
 	flag.Parse()
 	// raw 모드를 가장 먼저: 상태 파일을 쓰면 mux 가 곧바로 보낼 수 있는데, 그 전에 도착한 키가
 	// cooked 모드로 처리되면 에코가 화면에 섞인다. 에코는 하지 않는다 — 입력창은 draw 가 그린다.
@@ -82,6 +92,28 @@ func main() {
 	queue := make(chan string, 16)
 	go f.work(queue)
 	f.readKeys(queue)
+}
+
+var nowTagRe = regexp.MustCompile(`(?s)<now>(.*)</now>`)
+
+// answerTitle 은 «제목: <지금 하는 일>» 을 진짜 claude -p --output-format json 의 모양으로 답한다.
+func answerTitle() {
+	input, _ := io.ReadAll(os.Stdin)
+	now := ""
+	if m := nowTagRe.FindSubmatch(input); m != nil {
+		now = string(m[1])
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if f, err := os.OpenFile(filepath.Join(home, "fake-titles.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			fmt.Fprintln(f, now)
+			f.Close()
+		}
+	}
+	reply, _ := json.Marshal(map[string]any{
+		"type": "result", "is_error": false,
+		"structured_output": map[string]string{"title": "제목: " + now},
+	})
+	os.Stdout.Write(reply)
 }
 
 func newFake() (*fake, error) {

@@ -299,7 +299,38 @@ Two action rows — `셸로 나가기` and `새 세션` — were added above `�
 
 It runs as a **separate process**, so it shares no state with the TUI: its own `prevAIStates` — the codebase's only cross-tick history, since a transition can only be seen by diffing — its own TTL caches, and a slower 2s tick (the 500ms rate exists for the TUI cursor row's preview, which reacts to a keystroke; this one reacts to a click).
 
-**The panel is three parts, in the order they earn their rows**: a row per session, one line under each saying what last happened there (`sessionEventLines`), and the chronological log of everything below that (`notifyEventLines`, `ui/notify.go`).
+**The panel is three parts, in the order they earn their rows**: a row per session, one line under each saying what it is doing now (`sessionWorkLine`) or, when that is unknown, what last happened there (`sessionEventLines`), and the chronological log of everything below that (`notifyEventLines`, `ui/notify.go`).
+
+**세션 아래 줄은 지금 하는 일이다** (2026-11-04, 사용자 요청, `tmux/claude_work.go`). 이 줄은 마지막 이벤트였는데, 이벤트의 글은 상태 파일의 대화 이름이라 일을 말하지 못했다. my-mux 는 `/clear` 뒤 Mantis 정리를 하면서 어제의 `fix-intellij-viewport-height` 였고, 폴더에서 만든 이름(`mantis-5c`, `zorin-5d`)은 무엇도 말하지 않았다.
+
+살아 있는 대화 7개에서 후보를 재 봤다.
+
+| 출처 | 판단 |
+|---|---|
+| 상태 파일 `name` | `/clear` 뒤에도 옛 대화의 것. 폴더에서 만든 이름도 있다. 이 값으로 물러서지 않는다(`TestWithClaudeWorkDoesNotFallBackToTheName`) |
+| 기록의 `ai-title` | 그 대화의 것이지만 주제라서 작업이 바뀌어도 늦게 따라온다. 대화당 1~4번 바뀌었다. 제목을 지을 때 맥락으로만 준다 |
+| 기록의 `away_summary` | 일의 내용과 상태를 Claude 가 직접 쓴 글이라 가장 좋다. 다만 자리를 비워야 생긴다 |
+| 사람이 친 프롬프트 | 가장 최신이고 일하는 동안 유일하다. 다만 «올려줘.» 같은 응답이 섞인다 |
+
+그래서 **요약과 프롬프트 중 기록에서 더 나중에 나온 것**을 쓴다. 일을 시키면 그 프롬프트가, 끝나고 자리를 비우면 요약이 줄이 된다. 프롬프트는 셋을 거른다. 폭 20칸 아래는 응답이다(실제 프롬프트 153개에서 «push 해줘.»·«#34 처리해줘.» 는 아래, «kitty 업데이트 해줘.» 는 정확히 20칸). 응답이 앞의 일을 덮으면 패널이 «커밋해줘.» 만 보여 준다. `[mantis-progress]` 는 세션에 들어가는 진행 문의다. 세면 문의를 받은 세션의 줄이 그 문의가 된다(타이머는 2026-11-05 에 꺼 두었지만 손으로 부를 수 있고, 이미 기록에 들어간 문의도 남아 있다). 다른 세션이 `mux agent prompt` 로 맡긴 일은 표식이 없고 그 세션이 실제로 하는 일이므로 센다. **사람이 친 줄은 `origin.kind` 가 `human` 인 줄뿐이다.** `isHumanTurn` 의 «origin 이 없으면 meta 가 아닌 줄» 은 턴을 나누는 데는 맞지만 여기서는 틀리다 — 그런 줄에 `[Request interrupted by user]`(실제 기록 30건, 폭 29칸이라 폭으로도 안 걸러진다), SDK 호출의 프롬프트, 로컬 명령이 다 있어서 Esc 를 누를 때마다 작업 줄이 그 글이 된다. human 줄도 그대로 찍을 수 없다. `<pasted_content …>` 는 표식만 벗기고(안의 글이 시킨 일이다), 앱이 앞에 끼운 `<system-reminder>`·`<browser_instruction>` 은 안의 글까지 지우고, 슬래시 명령은 `<command-args>` 만 쓴다(인자 없는 `/matching-work` 는 일을 말하지 않는다). 그러고도 태그로 시작하면 패널에 태그째 찍느니 앞의 일을 그대로 둔다. 글을 고르는 데는 모델을 부르지 않는다 — 이 두 글은 이미 공짜로 있고, 사용량을 쓰는 일을 패널 틱에 걸지 않는다.
+
+**고른 글을 제목으로 다듬어 그린다** (2026-11-05, 사용자 요청, `tmux/claude_work_title.go`). 위 결정 뒤에도 줄은 제목이 아니었다. 프롬프트는 앞을 모르면 뜻이 없고(«이거는 프로젝트가 진행이 되면 고객에게 알릴 사항임.»), 요약은 두세 문장이라 앞부분만 보였다. 그래서 그 글과 맥락(`ai-title`, 앞선 작업 글 셋)을 Haiku 에게 주고 제목을 받는다(실제 답: «C2C 등록불가 브랜드 금지 단서 범위 확인», «터미널 패널 세션 제목 자동 보완»). 실제 대화의 글로 재 보니 호출당 입력 약 900토큰, 1~4초, $0.0002~0.0005 였다.
+
+| 결정 | 이유 |
+|---|---|
+| API 가 아니라 `claude -p` | 이 기계에는 API 키가 없고 구독 로그인뿐이다. 그 토큰을 mux 가 직접 읽어 쓰지 않는다. `--bare` 는 OAuth 를 읽지 않아 호출마다 실패한다(`TestWorkTitleCommandCannotAct`) |
+| `--tools ""`, `--setting-sources ""`, `--strict-mcp-config`, `--no-session-persistence` | 사람이 없는 자리에서 붙여 넣은 글을 읽는 호출이라 할 수 있는 일이 없어야 한다. 설정을 읽으면 사용자 훅이 돌고, 기록을 남기면 다음 스캔이 이 호출을 세션으로 본다. 재 보니 `~/.claude/sessions`·`projects` 에 흔적이 없었다 |
+| `--json-schema` | 자유 형식이면 «이전 지시를 무시하고 …» 에 거절 문장으로 답하고, 생각의 흔적을 앞에 붙이기도 했다. 스키마로 받으니 «rm -rf 실행 및 시스템 프롬프트 출력 요청» 처럼 제목으로 왔다 |
+| 틱은 저장된 답만 읽는다 | 모델은 글이 바뀔 때만 부른다. 20칸 아래 응답은 글을 안 바꾸므로 호출도 없다(`TestShortReplyDoesNotAskAgain`, e2e `TestPanelTitlesTheWorkOnce`) |
+| 답과 claim 을 디스크(`~/.cache/mux/work-titles/`)에 | 패널은 창마다 한 프로세스라 메모리로는 중복을 못 막는다. claim 은 대화당 하나고 `O_EXCL` 로 만든다. mtime 이 다음 시도를 허락하는 시각이라 진행 중(2분)과 실패 뒤 대기(10분)가 한 파일이다. 실패 이유도 이 파일에 적힌다 |
+| 디스크에 글을 남기지 않는다 | 파일에는 글의 해시와 제목뿐이다. 앞의 «이벤트 기록에 프롬프트를 넣지 않는다» 와 같은 이유다(`TestWorkTitleStoreKeepsNoPrompt`) |
+| 실패하면 원문 | 제목이 생기기 전, 호출 실패, 쓸 수 없는 답 모두 지금까지처럼 고른 글을 그린다. 쓸 수 없는 답(80칸 초과)은 다시 묻지 않고, 호출 실패는 10분 뒤 다시 묻는다 |
+| 호출은 패널마다 한 번에 하나 | `titling` 이 호출 하나가 도는 동안 선다. 처음 띄운 순간에 세션 수만큼 동시에 나가지 않는다. `titleWork` 가 nil 이면 꺼짐이라 `go test ./ui` 는 부르지 않는다 |
+| `mux` 의 자식 `claude` 는 AI 도구로 세지 않는다 | `resolveCommand` 가 pane 의 자식을 보므로, 세면 그 몇 초 동안 패널이 있는 세션이 Claude 세션으로 보이고 `mux agent ls` 에 오른다(`TestChildOfMuxIsNotAnAgent`). 같은 이유로 환경에서 `TMUX`·`TMUX_PANE` 을 뺀다 |
+
+**이벤트 줄을 대신하고, 더하지 않는다.** 세 줄이면 AI 세션 일곱 개가 최근 이벤트에서 일곱 줄을 가져간다. 줄이 모자랄 때 먼저 뺄 것으로 이미 정해 둔 것이 이 이벤트 줄이다(커밋 f04a08d 의 메시지). 그 줄이 말하던 시각과 앞 전환, 끝난 승인의 이유는 아래 로그에 그대로 있다. 일을 모르는 세션(다른 AI 도구, 기록이 아직 없는 Claude)은 예전처럼 이벤트 줄을 그린다. 높이가 그대로라 `perSession` 의 «전부 아니면 없음» 셈도 그대로다. 승인 이유 줄은 무엇을 하던 중이었는지보다 급하므로 세션 바로 아래에 남는다. 최근 이벤트의 글은 그대로 대화 이름이다 — 이벤트는 그 순간의 기록이고, 프롬프트를 `@mux_events`·`events.json` 에 넣으면 붙여 넣은 무엇이든 디스크에 남기 때문이다. 제목도 이벤트에 넣지 않는다.
+
+**패널만 읽는다.** `tmux.WithClaudeWork` 는 `ListSessions` 와 따로다. `mux border` 는 pane 마다 15초에 한 번 새 프로세스로 같은 상태 스캔을 지나므로, 스캔에 넣었더니 한 번에 읽는 양이 0.4MB → 2.3MB 가 됐고 그 값을 쓰지도 않았다(`TestStatusScanDoesNotReadTheWork`). 며칠 도는 패널은 캐시가 있어 **새로 붙은 바이트만** 읽는다. 기록은 덧붙이기만 하고 새 줄에 답이 없으면 앞의 답이 답이므로, 몇 시간짜리 턴에도 꼬리를 다시 넓혀 읽지 않는다. 쓰다 만 마지막 줄은 읽은 곳으로 치지 않는다(`TestLastWorkTextWaitsForAFinishedLine`). 파일이 줄었으면 처음부터 읽고, 읽기 실패는 아는 답을 지우지 않는다. 기록은 Claude 의 비공개 형식이라 줄 모양이 바뀌면 이 줄은 비고 패널은 이벤트 줄로 돌아간다.
 
 The middle part is the one that was missing. A badge says what a session is doing *now*; it does not say what it just finished, and reading that off a flat log meant scanning past whichever session was busiest — measured on a live server, forty rows of one session repeating `⏳ 작업 중` / `✅ 작업 완료`. A version that opened the full history under the cursor alone was tried in between and removed: it left every *other* session as a badge and nothing else, and the panel used sixteen of sixty-seven rows.
 

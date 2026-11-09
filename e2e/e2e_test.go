@@ -63,6 +63,7 @@ func run(m *testing.M) int {
 	os.MkdirAll(filepath.Join(home, ".config", "mux"), 0o755)
 	os.Setenv("HOME", home)
 	os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	os.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	// mux 의 TUI 소켓은 os.TempDir() 아래 uid 별 하나뿐이다 — 격리하지 않으면
 	// `mux switch` 의 폴백이 사용자의 진짜 TUI 에 attach 를 요청한다.
 	os.MkdirAll(filepath.Join(tmp, "tmp"), 0o755)

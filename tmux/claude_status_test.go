@@ -43,19 +43,22 @@ func withClaudeSessions(t *testing.T, files map[string]string, aliveFn func(int,
 	oldRunner := runner
 	SetRunner(newMockRunner())
 
-	oldHome, oldAlive, oldUnder := homeDir, isAlive, pidInPane
+	oldHome, oldAlive, oldUnder, oldTitleDir := homeDir, isAlive, pidInPane, workTitleDir
 	homeDir = func() (string, error) { return home, nil }
+	workTitleDir = func() (string, error) { return filepath.Join(home, "work-titles"), nil }
 	isAlive = aliveFn
 	// 기본은 「모른다」다. 진짜 /proc 을 읽게 두면 픽스처의 낮은 pid 가 이 기계에
 	// 실제로 존재해 답이 기계마다 달라진다 — 한 번 그렇게 깨졌다.
 	pidInPane = func(int, int) (bool, bool) { return false, false }
 	resetClaudeStatusCache()
 	resetClaudeRunCache()
+	resetWorkTitleCache()
 	defer func() {
 		runner = oldRunner
-		homeDir, isAlive, pidInPane = oldHome, oldAlive, oldUnder
+		homeDir, isAlive, pidInPane, workTitleDir = oldHome, oldAlive, oldUnder, oldTitleDir
 		resetClaudeStatusCache()
 		resetClaudeRunCache()
+		resetWorkTitleCache()
 	}()
 
 	fn()

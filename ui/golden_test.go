@@ -36,7 +36,8 @@ var update = flag.Bool("update", false, "골든 파일을 지금 출력으로 �
 func goldenSessions() []tmux.Session {
 	return []tmux.Session{
 		{Name: "mux", WindowCount: 2, Attached: true, Directory: "/home/u/dev/mux",
-			GitBranch: "main", ActiveCommand: "claude", AIState: tmux.AIStateWorking, AITool: "claude"},
+			GitBranch: "main", ActiveCommand: "claude", AIState: tmux.AIStateWorking, AITool: "claude",
+			AIWork: "패널에 세션별 현재 작업을 적는 일을 진행하는 중입니다"},
 		{Name: "api-server", WindowCount: 1, Directory: "/home/u/dev/api",
 			GitBranch: "feat/long-branch-name-that-must-yield", ActiveCommand: "claude",
 			AIState: tmux.AIStateApproval, AITool: "claude", AIWaitingFor: "Bash: git push"},

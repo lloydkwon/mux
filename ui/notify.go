@@ -272,8 +272,8 @@ type notifyLine struct {
 // of blanks".
 //
 // Three parts, in the order they earn their rows: a row per session, one line
-// under each saying what last happened there, and the chronological log of
-// everything below that.
+// under each saying what it is doing now or else what last happened there, and
+// the chronological log of everything below that.
 //
 // The middle part is the one that had been missing. A badge says what a session
 // is doing *now*; it does not say what it just finished, and reading that off a
@@ -587,6 +587,33 @@ func sessionEventLine(e aiEvent, width int) string {
 	}, width, false)
 }
 
+// sessionUnderLines 는 세션 행 아래의 줄이다. 지금 하는 일을 알면 그것이고, 모르면 마지막 이벤트다
+// (2026-11-04, 사용자 요청). 이벤트 줄은 대화 이름을 되풀이할 뿐이었고 — 그 이름은 /clear 뒤에도 옛 대화의
+// 것이다 — 시각과 전환은 아래 최근 이벤트에 그대로 있다. 한 줄을 바꾸는 것이라 블록의 높이도, 줄을 살지 말지의
+// 셈(perSession)도 그대로다.
+func sessionUnderLines(s tmux.Session, events []aiEvent, width, perSession int, sel bool) []notifyLine {
+	if perSession > 0 && s.AIWork != "" {
+		return []notifyLine{{text: sessionWorkLine(s, width), session: s.Name}}
+	}
+	return sessionEventLines(events, s.Name, width, perSession, sel)
+}
+
+// sessionWorkLine 은 «    패널에 세션별 현재 작업을 적는다» 한 줄을 그린다.
+//
+// 이벤트 줄과 같은 들여쓰기로 그 세션에 딸린 줄임을 보이고, 시각은 싣지 않는다 — 나이는 바로 위 세션 행에
+// 있고 그 칸을 글에 쓴다. 세션 행처럼 오른쪽 한 칸을 남기고, 잘리면 fitCells 가 표시를 남긴다.
+func sessionWorkLine(s tmux.Session, width int) string {
+	const indent = "    "
+	avail := width - ansi.StringWidth(indent) - 1
+	if avail < 2 {
+		return renderRow(nil, width, false)
+	}
+	return renderRow([]rowSeg{
+		{text: indent},
+		{text: fitCells(s.AIWork, avail), color: aiStateColor(s.AIState)},
+	}, width, false)
+}
+
 // notifyEventLines builds the chronological block under the session list: what
 // happened across every session, newest first.
 //
@@ -713,7 +740,7 @@ func sessionBlocks(ss []tmux.Session, events []aiEvent, width, perSession int, s
 		// Drawn unhighlighted, unlike the reason row: what the highlight is for
 		// is saying precisely which session the cursor is on, and a second
 		// inverted line under every selected row blurs that.
-		lines = append(lines, sessionEventLines(events, s.Name, width, perSession, sel)...)
+		lines = append(lines, sessionUnderLines(s, events, width, perSession, sel)...)
 	}
 	return lines
 }

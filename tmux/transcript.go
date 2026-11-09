@@ -40,7 +40,10 @@ type transcriptRow struct {
 	RequestID            string `json:"requestId"`
 	UUID                 string `json:"uuid"`
 	ContinuedInSessionID string `json:"continuedInSessionId"`
-	Message              struct {
+	// Content 는 system 줄의 본문이다(away_summary). 줄마다 모양이 달라 RawMessage 로 둔다 — 타입이 어긋나
+	// 줄 전체의 디코딩이 실패하면 wait 이 턴을 잃는다.
+	Content json.RawMessage `json:"content"`
+	Message struct {
 		ID         string          `json:"id"`
 		StopReason string          `json:"stop_reason"`
 		Content    json.RawMessage `json:"content"`
