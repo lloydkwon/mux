@@ -3,6 +3,7 @@ package tmux
 import (
 	"strconv"
 	"strings"
+	"time"
 )
 
 // VS Code 클라이언트가 붙은 창의 크기를 mux 가 직접 고정하는 장치. 목적은 둘이다:
@@ -34,8 +35,21 @@ import (
 // 높이에서 상태줄 줄 수를 뺀 것이 창에 허락된 높이다. 높이는 패널을 숨기는 데 아무 역할이
 // 없으므로 터미널이 있으면 터미널의 것이다. VS Code 를 바닥으로 두었더니, 밖의 ssh(236x51)
 // 에 집의 VS Code(195x55)가 겹친 세션에서 창이 54줄이 되어 ssh 화면의 위 네 줄이 잘렸다
-// (2026-10-15). VS Code 가 더 크면 아래에 ··· 줄이 남을 뿐이고, 더 작으면 KeepBottomVisible 이
-// 바닥을 붙잡는 뷰포트로 본다.
+// (2026-10-15). VS Code 가 더 크면 아래에 남는 줄이 생길 뿐이고, 더 작으면 KeepBottomVisible 이
+// 바닥을 붙잡는 뷰포트로 본다. 남는 줄은 점이 아니라 빈칸이다 — 패널 영역이 fill-character 를 공백으로
+// 둔다(setuppanel.go fillLines).
+//
+// 2026-11-03 에 높이를 편집기에 맞추는 규칙 둘을 시도했다가 버렸다. kitty 가 273x49 로 줄어 IntelliJ·
+// PyCharm 터미널(223x53)이 더 높아지자 그 화면 아래 네 줄이 점이었기 때문이다.
+//   - «편집기에 마지막으로 입력했으면 높이는 큰 쪽» — 실제 화면에서 점이 그대로였다. Claude Code 가 모든
+//     마우스 움직임을 요청하면 tmux 는 그 창을 보는 모든 클라이언트에 움직임 보고를 켜고, 버튼 없는
+//     움직임 하나가 client_activity 를 갱신한다(tmux-assumptions 18절). kitty 위를 마우스가 스치기만 해도
+//     kitty 가 최근이 되어 창이 다시 줄었다.
+//   - «터미널이 포커스를 잃었으면 높이는 큰 쪽» — 동작은 했지만, 편집기를 쓰는 동안 kitty 화면 위 네 줄
+//     (패널 상단)이 잘렸다. 창 크기는 하나라 두 화면을 다 맞출 수 없고, 사용자는 kitty 가 늘 온전한 쪽을
+//     골랐다. 편집기 쪽에는 빈 줄이 남는다.
+//
+// 축마다 max 이던 09-22 의 규칙도 다시 꺼내지 않는다 — 10-15·10-19 에 ssh 화면을 잘랐다.
 //
 // 이 파일의 «VS Code» 는 편집기의 통합 터미널이다 — 2026-10-21 부터 JetBrains IDE(IntelliJ)의
 // 터미널도 든다(isEditorClient, 표식은 jetbrainsEnvMarker). 패널의 오른쪽 클릭이 IntelliJ 로
@@ -50,7 +64,17 @@ const (
 	// a horizontal split. Without it the panel would be one cell narrower than
 	// asked and the work pane one cell wider than the VS Code client.
 	paneDivider = 1
+
+	// fitSeqOption 은 맞춤이 창 크기를 바꿀 때마다 새 값을 적는 창 옵션이다. 패널은 자기 폭을 읽을 때
+	// (PaneShape) 이 값도 함께 읽어, 지난번과 다르면 그 사이 맞춤이 창 크기를 바꾼 것으로 본다 — 그
+	// 사이에 생긴 패널 폭 변화는 tmux 의 비례 배분이지 드래그가 아니다. 창 폭 비교만으로는 모자랐다:
+	// 패널이 보지 못한 크기 변화가 있으면 기준 창 폭이 낡는다(ui/watch.go applyFittedResize, 2026-11-03).
+	fitSeqOption = "@mux_fit_seq"
 )
+
+// fitSeqNonce 는 맞춤 표식의 새 값이다. 비교는 «같은가» 뿐이라 순서가 필요 없고, 읽고-고치고-쓰지 않아도
+// 되게 시각으로 만든다. 테스트가 고정한다 — 목 키가 정확한 문자열이다.
+var fitSeqNonce = func() string { return strconv.FormatInt(time.Now().UnixNano(), 36) }
 
 // vsClient is the VS Code terminal a session is being watched from: its size,
 // and its tty, which is how refresh-client addresses it.
@@ -347,8 +371,11 @@ func syncVSCodeViewport(ctx panelCtx, panelWidth int) (fitted bool, width int) {
 	// resize-window sets this window's window-size option to manual, which is
 	// the point: tmux must stop resizing the window to whichever client was
 	// last active, or the next keystroke in VS Code undoes this.
-	if err := runner.Run("tmux", "resize-window", "-t", window,
-		"-x", strconv.Itoa(width), "-y", strconv.Itoa(height)); err != nil {
+	//
+	// 맞춤 표식과 resize 는 한 명령 목록으로 보낸다. tmux 는 한 클라이언트의 목록을 다른 클라이언트의 명령을
+	// 끼우지 않고 잇달아 돌리므로, 패널이 새 크기를 읽는 순간 표식도 이미 바뀌어 있다(fitSeqOption).
+	if err := runner.Run("tmux", "set-option", "-w", "-t", window, fitSeqOption, fitSeqNonce(), ";",
+		"resize-window", "-t", window, "-x", strconv.Itoa(width), "-y", strconv.Itoa(height)); err != nil {
 		return false, panelWidth
 	}
 

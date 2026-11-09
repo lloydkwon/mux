@@ -228,6 +228,11 @@ type watchModel struct {
 	// mouse drag arrives as a run of resize events, and pinning the border on
 	// each one pulled it back under the pointer (review, 2026-10-22).
 	refitPending bool
+
+	// fitSeq 는 이 패널이 마지막으로 읽은 맞춤 표식(tmux PaneShape 의 넷째 값)이다. fitMoved 는 이번 읽기에서
+	// 그 값이 바뀌었다는 것 — 그 사이 맞춤이 창 크기를 바꿨다 — 이고, applyResize 가 판정 하나 동안만 세운다.
+	fitSeq   string
+	fitMoved bool
 }
 
 // minWidth is the bar this pane leaves below. The same number decides whether a
@@ -713,10 +718,12 @@ func selfPane() string { return os.Getenv("TMUX_PANE") }
 // The lower clamp is the second guard: a width the panel could not render in is
 // never adopted as intent, so a transient squeeze cannot become permanent.
 func (m watchModel) applyResize(paneWidth int) (tea.Model, tea.Cmd) {
-	winWidth, winPanes, livePane, err := tmux.PaneShape(selfPane())
+	winWidth, winPanes, livePane, fitSeq, err := tmux.PaneShape(selfPane())
 	if err != nil {
 		return m, nil // nothing to compare against; leave the width alone
 	}
+	m.fitMoved = fitSeq != m.fitSeq
+	m.fitSeq = fitSeq
 	// The pane width from the same instant as the window, not the message's:
 	// see tmux.PaneShape for the stale-message drag this prevents. The
 	// message's width only stands in when tmux answered with nothing.
@@ -732,6 +739,7 @@ func (m watchModel) applyResize(paneWidth int) (tea.Model, tea.Cmd) {
 		saved = tmux.DesiredPanelWidth()
 	}
 	m, cmd := m.applyResizeWith(paneWidth, winWidth, winPanes, m.fitted, saved)
+	m.fitMoved = false
 	return m, cmd
 }
 
@@ -872,10 +880,16 @@ func (m watchModel) applyFittedResize(paneWidth, winWidth, winPanes, saved int) 
 	switch {
 	case winWidth <= 0:
 		return m, nil
-	case m.winWidth == 0, winWidth != m.winWidth:
+	case m.winWidth == 0, winWidth != m.winWidth, m.fitMoved:
 		// 첫 읽기, fit 의 resize-window. 사람의 뜻이 아니고, 고정은 그 resize 가 부른 훅에서
 		// fit 이 한다. 60→107 오염(창이 커지며 비례 배분된 폭을 드래그로 읽음)이 이 경로였으므로
 		// 여기서는 기록만 한다.
+		//
+		// 창 폭이 같아 보여도 맞춤 표식이 바뀌었으면(fitMoved) 같은 경우다(2026-11-03). PyCharm 터미널(223)이 붙은
+		// 세션을 kitty(273)가 오가면 창이 278 ↔ 273 을 오가는데, 커질 때 패널 폭은 54 → 55 → 54(fit 이 곧바로
+		// 되돌림)라 이 패널은 278 을 보지 못하고 m.winWidth 가 273 으로 낡는다. 다음에 273 으로 줄 때 tmux 가
+		// 깎은 52 가 «창은 그대로, 패널만 바뀜» 으로 보였고, 그것을 저장해 오갈 때마다 저장 폭이 59 → 54 → 50
+		// 으로 줄었다(e2e TestFittedSwitchingKeepsPanelWidth). fit 은 resize 와 같은 명령 목록에서 표식을 바꾼다.
 		m.winWidth, m.winPanes = winWidth, winPanes
 		if m.targetWidth == 0 && paneWidth >= notifyMinWidth && paneWidth <= maxPanelWidth(winWidth) {
 			m.targetWidth = paneWidth

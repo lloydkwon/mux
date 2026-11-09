@@ -99,6 +99,9 @@ func withMock(t *testing.T, fn func(m *mockRunner)) {
 	// 보관함도. 개발자의 실제 parked.json 을 읽거나 덮으면 보관해 둔 대화로 가는 길을 잃는다.
 	oldParked := parkedFile
 	parkedFile = func() (string, error) { return filepath.Join(stateDir, "parked.json"), nil }
+	// 맞춤 표식은 시각에서 만든다 — 목 키가 정확한 문자열이라 고정한다.
+	oldNonce := fitSeqNonce
+	fitSeqNonce = func() string { return "n" }
 	defer func() {
 		runner = old
 		homeDir = oldHome
@@ -106,6 +109,7 @@ func withMock(t *testing.T, fn func(m *mockRunner)) {
 		serverStateFile = oldServerState
 		eventArchiveFile = oldArchive
 		parkedFile = oldParked
+		fitSeqNonce = oldNonce
 		claudeStatusCacheMu.Lock()
 		claudeStatusCache = cachedClaudeStatuses{}
 		claudeStatusCacheMu.Unlock()

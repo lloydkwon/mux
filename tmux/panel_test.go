@@ -1196,23 +1196,25 @@ func TestWindowShapeRefusesAPartialAnswer(t *testing.T) {
 // pane 폭은 늦게 온 메시지에서 가져오면, 창이 커지며 생긴 재배치가 드래그로 읽혀 전역 저장
 // 폭이 바뀐다(실측: 막 열린 패널에서 45 → 84).
 func TestPaneShapeReadsWindowAndPaneTogether(t *testing.T) {
-	withMock(t, func(m *mockRunner) {
-		m.OnOutput([]byte("239 2 45\n"), nil, "tmux", "display-message", "-p", "-t", "%3",
-			"#{window_width} #{window_panes} #{pane_width}")
+	format := "#{window_width} #{window_panes} #{pane_width} #{" + fitSeqOption + "}"
+	// 넷째 칸은 맞춤 표식이다 — 맞춤이 창 크기를 바꿀 때마다 새 값이 된다. 한 번도 맞추지 않은 창은 비어 있다.
+	for _, tc := range []struct{ out, seq string }{{"239 2 45 k3x9\n", "k3x9"}, {"239 2 45 \n", ""}} {
+		withMock(t, func(m *mockRunner) {
+			m.OnOutput([]byte(tc.out), nil, "tmux", "display-message", "-p", "-t", "%3", format)
 
-		w, panes, pw, err := PaneShape("%3")
-		if err != nil {
-			t.Fatalf("PaneShape: %v", err)
-		}
-		if w != 239 || panes != 2 || pw != 45 {
-			t.Errorf("got %d/%d/%d, want 239/2/45", w, panes, pw)
-		}
-	})
+			w, panes, pw, seq, err := PaneShape("%3")
+			if err != nil {
+				t.Fatalf("PaneShape: %v", err)
+			}
+			if w != 239 || panes != 2 || pw != 45 || seq != tc.seq {
+				t.Errorf("got %d/%d/%d/%q, want 239/2/45/%q", w, panes, pw, seq, tc.seq)
+			}
+		})
+	}
 	for _, out := range []string{" \n", "239 2\n", "\n", "239 2 x\n"} {
 		withMock(t, func(m *mockRunner) {
-			m.OnOutput([]byte(out), nil, "tmux", "display-message", "-p", "-t", "%3",
-				"#{window_width} #{window_panes} #{pane_width}")
-			if _, _, _, err := PaneShape("%3"); err == nil {
+			m.OnOutput([]byte(out), nil, "tmux", "display-message", "-p", "-t", "%3", format)
+			if _, _, _, _, err := PaneShape("%3"); err == nil {
 				t.Errorf("output %q was accepted as a shape", out)
 			}
 		})

@@ -1219,7 +1219,8 @@ func TestWatchFittedWindowFollowsTheOneWidth(t *testing.T) {
 	for _, tc := range []struct {
 		name                  string
 		saved, target         int
-		prevWin               int // 이전 읽기의 창 폭, 0 이면 269
+		prevWin               int  // 이전 읽기의 창 폭, 0 이면 269
+		moved                 bool // 지난 읽기 뒤로 맞춤 표식(@mux_fit_seq)이 바뀌었다
 		pane, win, panes      int
 		wantTarget, wantSaved int
 		wantRefit             []int
@@ -1233,6 +1234,11 @@ func TestWatchFittedWindowFollowsTheOneWidth(t *testing.T) {
 			pane: 65, win: 130, panes: 2, wantTarget: 65, wantSaved: 72},
 		{name: "창 폭이 바뀐 비례 배분은 기록만", saved: 60, target: 60,
 			pane: 107, win: 300, panes: 2, wantTarget: 60, wantSaved: 60},
+		// 2026-11-03 의 드리프트: 이 패널이 보지 못한 사이 맞춤이 창을 278 로 키웠다가 273 으로 되돌렸다. 기준 창 폭
+		// (273)은 그대로라 tmux 가 깎은 52 가 드래그로 보였고, 그것을 저장해 오갈 때마다 59 → 54 → 50 이 됐다.
+		// 표식이 바뀌었으면 창 폭이 같아 보여도 비례 배분의 부산물이다.
+		{name: "맞춤 표식이 바뀌었으면 창 폭이 같아도 기록만", saved: 54, target: 54, prevWin: 273, moved: true,
+			pane: 52, win: 273, panes: 2, wantTarget: 54, wantSaved: 54},
 		{name: "창의 반을 넘으면 fit 으로 되돌린다", saved: 60, target: 60,
 			pane: 164, win: 269, panes: 2, wantTarget: 60, wantSaved: 60, wantRefit: []int{60}},
 		{name: "옆 pane 이 죽어 넓어지면 fit 으로 되돌린다", saved: 60, target: 60,
@@ -1249,6 +1255,7 @@ func TestWatchFittedWindowFollowsTheOneWidth(t *testing.T) {
 			if tc.prevWin > 0 {
 				m.winWidth = tc.prevWin
 			}
+			m.fitMoved = tc.moved
 
 			got, cmd := m.applyResizeWith(tc.pane, tc.win, tc.panes, true, tc.saved)
 			runCmds(cmd)

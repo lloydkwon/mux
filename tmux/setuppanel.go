@@ -189,7 +189,20 @@ func panelBlockLines(muxPath, key, focusKey string) []string {
 	for _, h := range panelHooks {
 		lines = append(lines, fmt.Sprintf("set-hook -g %-*s %s", width, h, ensure))
 	}
-	return append(append(lines, borderLines(muxPath)...), panelBlockEnd)
+	lines = append(lines, borderLines(muxPath)...)
+	return append(append(lines, fillLines()...), panelBlockEnd)
+}
+
+// fillLines 는 창보다 큰 클라이언트에게 남는 칸을 점이 아니라 빈칸으로 그리게 한다.
+//
+// 맞춤 창(viewport.go)은 «지금 쓰는 터미널» 크기로 고정되므로, 같은 세션을 보는 더 큰 화면(IntelliJ·
+// PyCharm 터미널)에는 창 밖 칸이 남는다. tmux 는 그 칸을 fill-character 로 채우는데 기본값이 점이다
+// (3.8 은 ACS «~» = ·). 2026-11-03 PyCharm 터미널(223x53) 아래 네 줄이 kitty(273x49)에 맞춘 창 밖이라
+// 점으로 찼다. 창 크기는 하나라 두 화면을 다 맞출 수는 없고 — 편집기에 맞추면 kitty 가 잘린다(사용자는
+// kitty 쪽을 골랐다) — 남는 칸이 보이는 모양만 고칠 수 있다. 공백 하나는 3.4 의 한 글자 옵션과 3.8 의
+// 포맷 둘 다에서 빈칸이다(tmux-assumptions 18절).
+func fillLines() []string {
+	return []string{`set -gw fill-character " "`}
 }
 
 // borderLines turn on the summary tmux draws above each pane.

@@ -529,6 +529,35 @@ func TestFitHoldsWithHiddenVSCodeTabWhenTerminalLeaves(t *testing.T) {
 	}
 }
 
+// 4b'. 편집기가 붙은 세션을 터미널이 오가면 창이 «편집기 + 1 + 패널»(278)과 «터미널»(273)을 오간다.
+// 그때 tmux 가 비례로 깎은 패널 폭을 드래그로 읽으면 저장 폭이 오갈 때마다 한두 칸씩 준다 —
+// 2026-11-03 kitty(273x49)·PyCharm(223x53) 이 함께 본 infra-monitor 에서 59 → 54 → 50 으로 줄었다.
+func TestFittedSwitchingKeepsPanelWidth(t *testing.T) {
+	savePanelWidth(t, 54)
+	newSession(t, "e2e-drift-a")
+	newSession(t, "e2e-drift-b")
+	term := attach(t, "e2e-drift-b", 273, 49, false)
+	attachAs(t, "e2e-drift-a", 223, 53, jetbrainsMarker)
+	eventuallyWindow(t, "e2e-drift-a", "편집기에 맞춤", 8*time.Second, func(w window) bool {
+		return w.fit == "1" && w.panel == 54
+	})
+	tty := term.tty()
+	for i := range 8 {
+		pause := time.Duration(300+250*(i%3)) * time.Millisecond
+		tm(t, "switch-client", "-c", tty, "-t", "=e2e-drift-a")
+		time.Sleep(pause)
+		tm(t, "switch-client", "-c", tty, "-t", "=e2e-drift-b")
+		time.Sleep(pause)
+	}
+	time.Sleep(3 * time.Second) // 패널 틱(2초)이 저장 폭을 따라갈 시간
+	if s := savedPanelWidth(t); s != 54 {
+		t.Errorf("저장 폭 %d, want 54 — 창 크기 변화가 드래그로 읽혔다", s)
+	}
+	if w := readWindow(t, "e2e-drift-a"); w.panel != 54 {
+		t.Errorf("패널 %d칸, want 54", w.panel)
+	}
+}
+
 // 4c. 고정된 창 안에서 패널이 틀어지면 다음 훅이 되돌린다. 창 크기가 이미 맞으면 아무것도
 // 안 하던 가드 때문에, 실측(2026-10-14) 239칸 창이 작업 74 / 패널 164 로 갈라진 채
 // 머물렀다 — 패널 프로세스는 고정된 창의 폭을 fit 에 맡기므로 fit 말고는 고칠 주체가 없다.

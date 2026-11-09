@@ -45,6 +45,10 @@ func TestUpsertBlockAppendsToPlainConf(t *testing.T) {
 			t.Errorf("block is missing %q:\n%s", want, got)
 		}
 	}
+	// 맞춤 창에서 창보다 큰 클라이언트가 보는 남는 칸은 점이 아니라 빈칸이다(fillLines).
+	if !strings.Contains(got, `set -gw fill-character " "`) {
+		t.Errorf("block is missing the blank fill-character:\n%s", got)
+	}
 	// Every hook the panel needs has to land, or the panel silently stops
 	// following you on whichever path was dropped.
 	for _, hook := range panelHooks {

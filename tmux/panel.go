@@ -549,28 +549,34 @@ func WindowShape(target string) (width, panes int, err error) {
 // alongside the grown window (239), recorded that as its first size, and then
 // read the re-laid-out width (84) of the next message as "same window, different
 // pane" — a drag — and saved it for every panel (measured 2026-10-14).
-func PaneShape(target string) (winWidth, panes, paneWidth int, err error) {
+//
+// fitSeq 는 같은 순간의 맞춤 표식(fitSeqOption)이다. 한 번도 맞추지 않은 창은 비어 있다. 패널은 이것이
+// 지난 읽기와 다르면 그 사이 맞춤이 창 크기를 바꾼 것으로 본다(ui/watch.go applyFittedResize).
+func PaneShape(target string) (winWidth, panes, paneWidth int, fitSeq string, err error) {
 	args := []string{"display-message", "-p"}
 	if target != "" {
 		args = append(args, "-t", target)
 	}
-	args = append(args, "#{window_width} #{window_panes} #{pane_width}")
+	args = append(args, "#{window_width} #{window_panes} #{pane_width} #{"+fitSeqOption+"}")
 
 	out, err := runner.Output("tmux", args...)
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("resolve pane shape: %w", err)
+		return 0, 0, 0, "", fmt.Errorf("resolve pane shape: %w", err)
 	}
 	fields := strings.Fields(string(out))
-	if len(fields) != 3 {
-		return 0, 0, 0, fmt.Errorf("parse pane shape: %q", strings.TrimSpace(string(out)))
+	if len(fields) != 3 && len(fields) != 4 {
+		return 0, 0, 0, "", fmt.Errorf("parse pane shape: %q", strings.TrimSpace(string(out)))
 	}
 	var n [3]int
-	for i, f := range fields {
+	for i, f := range fields[:3] {
 		if n[i], err = strconv.Atoi(f); err != nil {
-			return 0, 0, 0, fmt.Errorf("parse pane shape %q: %w", f, err)
+			return 0, 0, 0, "", fmt.Errorf("parse pane shape %q: %w", f, err)
 		}
 	}
-	return n[0], n[1], n[2], nil
+	if len(fields) == 4 {
+		fitSeq = fields[3]
+	}
+	return n[0], n[1], n[2], fitSeq, nil
 }
 
 // WindowWidth reports the width of target's window. Pass "" for the current

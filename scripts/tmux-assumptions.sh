@@ -532,6 +532,68 @@ ok "-c 의 # 는 포맷으로 펼쳐진다 (그래서 막는다)" "different" \
 t kill-session -t "=hash"
 rm -rf "$(dirname "$HASHDIR")"
 
+# ── 18. 창 밖 칸과 마우스 움직임 ──────────────────────────────────────────────
+# tmux/setuppanel.go 의 fillLines: 맞춤 창보다 큰 클라이언트에게 남는 칸은 fill-character 로 채워지고, 기본값은
+# 점이다(3.8 은 ACS «~» = ·). 공백으로 두면 점이 사라진다 — 3.4 의 한 글자 옵션과 3.8 의 포맷 둘 다.
+# tmux/viewport.go 머리 주석: 높이를 «마지막으로 입력한» 화면에 맞추는 규칙을 버린 이유. 모든 움직임을 요청한
+# pane(Claude Code)이 있으면 버튼 없는 움직임 하나가 client_activity 를 갱신한다 — 마우스가 스치기만 해도
+# 최근이 바뀐다. 2026-11-03 3.4·3.8 실측. 클라이언트가 받은 바이트는 script(1) 의 기록으로 센다.
+echo
+echo "창 밖 칸과 마우스 움직임 (tmux/setuppanel.go, tmux/viewport.go)"
+if command -v script >/dev/null 2>&1 && command -v mkfifo >/dev/null 2>&1; then
+	FD=$(mktemp -d)
+	mkfifo "$FD/in"
+	sleep 60 >"$FD/in" &
+	FHOLD=$!
+	t set -g mouse on
+	t new-session -d -s fill -x 100 -y 30 "printf '\033[?1003h\033[?1006h'; sleep 300"
+	SHELL=/bin/sh script -qfc "stty rows 30 cols 100; exec $TMUX_BIN -L $SOCKET -f /dev/null attach-session -t fill" \
+		"$FD/out" <"$FD/in" >/dev/null 2>&1 &
+	FPID=$!
+	for _ in $(seq 1 30); do
+		[ -n "$(t list-clients -t fill -F x 2>/dev/null)" ] && break
+		sleep 0.1
+	done
+	sleep 0.5
+	FTTY=$(t list-clients -t fill -F '#{client_tty}')
+	# 창을 클라이언트보다 9줄 낮게 — 맞춤 창이 편집기 화면에 만드는 바로 그 모양이다.
+	t resize-window -t fill -x 100 -y 20
+	# fill_after: 다시 그리게 한 뒤 새로 받은 바이트 중 점(«~» 와 «·») 바이트 수.
+	fill_after() {
+		local mark
+		mark=$(wc -c <"$FD/out")
+		t refresh-client -t "$FTTY"
+		sleep 0.6
+		tail -c +$((mark + 1)) "$FD/out" | LC_ALL=C tr -cd '~\302\267' | wc -c | tr -d ' '
+	}
+	ok "기본 fill-character 는 창 밖 칸을 점으로 채운다" "yes" "$([ "$(fill_after)" -gt 0 ] && echo yes || echo no)"
+	t set -gw fill-character " "
+	ok "fill-character 가 공백이면 점이 없다" "0" "$(fill_after)"
+	t set -gwu fill-character
+
+	ACT0=$(t list-clients -t fill -F '#{client_activity}')
+	sleep 1.1
+	timeout 5 sh -c 'printf "\033[<35;10;5M" >"$1"' _ "$FD/in"
+	sleep 0.6
+	ok "버튼 없는 마우스 움직임도 client_activity 를 갱신한다" "moved" \
+		"$([ "$(t list-clients -t fill -F '#{client_activity}')" != "$ACT0" ] && echo moved || echo same)"
+
+	# 맞춤 표식(tmux/viewport.go fitSeqOption): fit 은 표식과 resize-window 를 한 명령 목록으로 보내고, 패널은
+	# pane 을 지목한 display-message 한 번으로 창 폭·패널 폭·표식을 읽는다(PaneShape). 창 옵션이 pane 지목으로
+	# 읽혀야 하고, 목록 뒤에는 새 크기와 새 표식이 함께 보여야 한다.
+	FPANE=$(t display-message -p -t fill '#{pane_id}')
+	t set-option -w -t fill @mux_fit_seq s1 \; resize-window -t fill -x 90 -y 20
+	ok "표식과 resize 를 한 목록으로: pane 지목 읽기가 새 크기와 새 표식을 함께 본다" "90 s1" \
+		"$(t display-message -p -t "$FPANE" '#{window_width} #{@mux_fit_seq}')"
+
+	t kill-session -t fill
+	kill "$FPID" "$FHOLD" 2>/dev/null || true
+	wait "$FPID" "$FHOLD" 2>/dev/null || true
+	rm -rf "$FD"
+else
+	echo "  SKIP  script(1) 이나 mkfifo 가 없어 클라이언트를 붙이지 못했습니다"
+fi
+
 echo
 if [ "$FAILED" -eq 0 ]; then
 	echo "$CHECKED 개 전부 통과 — $VERSION 에서 mux 의 가정이 유지됩니다."

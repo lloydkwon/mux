@@ -41,7 +41,7 @@ CI (`.github/workflows/ci.yml`) runs test + build + arm64 cross-build + `scripts
 
 **`scripts/tmux-assumptions.sh` is the only thing that tests tmux itself.** Every unit test mocks the runner, which is what makes them fast and hermetic — and also means tmux can change underneath mux without a single test failing. The script starts a private server (`-L`, `-f /dev/null`, so the developer's own sessions and hooks are never touched) and asserts the behaviours the code depends on: the `tmux -V` string `getTmuxVersion` parses, `listFormat`'s field count, that `#{@user_option}` resolves a session option through a pane target, that `-l N` on `split-window` gives exactly N columns, that `list-panes` remembers `pane_start_command` (the panel's only marker), that a batched `capture-pane ; display-message ; capture-pane` emits one separator, and that `run-shell` and `after-new-session` expand `#{pane_id}`. **Add a line here whenever a comment says "measured" or "verified"** — otherwise that one assumption is the one that breaks silently on the next upgrade. `make tmux-check` runs it; `TMUX_BIN=/path/to/tmux` points it at a candidate binary instead of PATH.
 
-**Check the candidate before switching, not after.** Putting a new tmux on PATH makes the *client* new while the running *server* stays old, and the protocol mismatch rejects every tmux call — mux, its panels and any command you type — until the server restarts, which ends every session on it. `TMUX_BIN` is how the answer arrives before that price is paid. Verified this way: 22/22 on 3.4 and on 3.7c; 62/62 on 3.4 and 3.8 (2026-11-02, 3.8 은 Docker `ubuntu:24.04` 에서 `--enable-systemd --enable-utempter` 로 빌드). 3.8 은 `mouse` 의 기본값이 on 이 되어, 기본값에 기대던 13절이 `mouse off` 를 명시하게 됐다. CI 러너(ubuntu-26.04, apt 의 tmux 3.6)와 같은 컨테이너에서도 63/63 과 e2e 통과 — 러너에는 `TERM` 이 없어 스크립트가 `xterm-256color` 를 정해 준다. 2026-11-03 에 16절(`session_activity`)을 더해 3.4·3.8 모두 64/64, 같은 날 17절(보관함의 `=name` 지목, `-c` 의 `#` 이스케이프)을 더해 73/73.
+**Check the candidate before switching, not after.** Putting a new tmux on PATH makes the *client* new while the running *server* stays old, and the protocol mismatch rejects every tmux call — mux, its panels and any command you type — until the server restarts, which ends every session on it. `TMUX_BIN` is how the answer arrives before that price is paid. Verified this way: 22/22 on 3.4 and on 3.7c; 62/62 on 3.4 and 3.8 (2026-11-02, 3.8 은 Docker `ubuntu:24.04` 에서 `--enable-systemd --enable-utempter` 로 빌드). 3.8 은 `mouse` 의 기본값이 on 이 되어, 기본값에 기대던 13절이 `mouse off` 를 명시하게 됐다. CI 러너(ubuntu-26.04, apt 의 tmux 3.6)와 같은 컨테이너에서도 63/63 과 e2e 통과 — 러너에는 `TERM` 이 없어 스크립트가 `xterm-256color` 를 정해 준다. 2026-11-03 에 16절(`session_activity`)을 더해 3.4·3.8 모두 64/64, 같은 날 17절(보관함의 `=name` 지목, `-c` 의 `#` 이스케이프)과 18절(창 밖 칸의 fill-character, 마우스 움직임과 client_activity, 맞춤 표식)을 더해 77/77.
 
 Note the private server has no user config, so `base-index` is tmux's default 0 — target windows by `#{window_id}`, never `sess:1`. Releases are tag-driven via goreleaser. Commits follow Conventional Commits.
 
@@ -127,9 +127,15 @@ Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale a
 - **패널 폭은 맞춤 창에서도 하나다.** VS Code·IntelliJ 터미널이 붙은 맞춤 창의 패널도 드래그를
   기억하고 저장 폭을 따른다. 고치는 손만 다르다 — resize-pane 이 아니라 자기 창의 fit 을 다시
   돌리고(`refitOwnWindow`, `applyFittedResize`), 드래그 직후가 아니라 다음 틱에 한다(이벤트마다
-  맞추면 끄는 테두리를 당긴다, e2e `TestStepwiseDragInVSCodeOnlyWindow`). 사용자 결정으로 원칙을 바꾸면 e2e 시나리오도 같은 커밋에서
+  맞추면 끄는 테두리를 당긴다, e2e `TestStepwiseDragInVSCodeOnlyWindow`). «창 폭은 그대로» 는 맞춤 표식
+  `@mux_fit_seq` 로도 확인한다 — fit 이 표식과 resize-window 를 한 명령 목록으로 보내고, 패널은 `PaneShape` 로
+  함께 읽는다. 창 폭만 비교하면 낡은 기준 때문에 크기 변화가 드래그로 읽혀 저장 폭이 59→50 으로 줄었다(e2e
+  `TestFittedSwitchingKeepsPanelWidth`). 저장을 다음 틱으로 미루지 않는다(훅이 끼면 진짜 드래그가 버려진다). 사용자 결정으로 원칙을 바꾸면 e2e 시나리오도 같은 커밋에서
   고친다(aee4d94 가 `TestWindowNeverOutgrowsWT` 를 깨뜨린 채 들어갔다). (panel-width.md,
   e2e `TestDragInFittedWindowReachesEveryPanel`)
+- **맞춤 창은 높이도 쓰는 터미널 그대로다** — 편집기가 더 높으면 그쪽에 빈 줄이 남는다(패널 영역의 `fill-character " "`
+  가 점 대신 빈칸으로 그린다). 높이를 «마지막 입력»(마우스가 스치기만 해도 바뀐다, 18절)이나 «포커스»(kitty 가 잘린다,
+  사용자 결정)로 편집기에 맞추지 않는다, 축마다 max 도 아니다(ssh 화면을 자른다). (`tmux/viewport.go` 머리 주석)
 - **패널의 모든 tmux 호출은 `selfPane()` 을 지목한다.** `restoreFocus` 의 `PaneActive` 가드,
   클램프한 폭은 저장하지 않는다(`TestFirstSizeClampDoesNotWriteBack`), `M-Enter` 는 바인딩하지
   않는다(`TestPanelBlockLeavesAltEnterAlone`). (panel.md, panel-width.md)

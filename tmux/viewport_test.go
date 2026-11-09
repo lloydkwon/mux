@@ -196,7 +196,7 @@ func TestSyncFitsTheTerminalInUse(t *testing.T) {
 		fitted, width := syncVSCodeViewport(ctx, 57)
 		want := []string{
 			"tmux set-option -w -t @8 " + vsFitOption + " 1",
-			"tmux resize-window -t @8 -x 236 -y 50",
+			"tmux set-option -w -t @8 " + fitSeqOption + " n ; resize-window -t @8 -x 236 -y 50",
 			"tmux resize-pane -t %14 -x 57",
 		}
 		if !fitted || width != 57 || strings.Join(m.runs, "\n") != strings.Join(want, "\n") {
