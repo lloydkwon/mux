@@ -130,10 +130,118 @@
   }
   const cardFor = (name) => [...cardsEl.querySelectorAll(".card")].find((c) => c.dataset.session === name);
 
+  // ── 보관함 (TUI 의 p 로 보관한 세션, docs/design/serve.md «보관함 되살리기») ──
+  // 목록 맨 아래에 접어 둔다 — 카드 목록을 밀어내지 않게. 되살리기는 확인을 한 번 더 받고(Claude 를 띄운다), 성공하면 그
+  // 세션 페이지로 간다(TUI 의 «복원하면 바로 그 세션으로»). 보관·지우기는 폰에 없다.
+  // 카드는 .card 가 아니라 .pcard 다 — 누르기(보낼 곳)·길게 누르기(들어가기)를 받지 않게.
+  const PARKED_OLD_DAYS = 25; // Claude 가 오래된 기록을 지우기 전에 알린다(cleanupPeriodDays 기본값 30 일로 알려짐)
+  const parkUI = { open: false, confirm: "", busy: "" };
+  // parkPress 는 보관함의 버튼을 누르는 중이라는 표시(타이머 id)다. 그동안 카드를 갈아 끼우지 않는다 — 2초 폴링이 누르는
+  // 사이에 버튼을 바꾸면 클릭이 사라진다(칩의 주석과 같은 일). .card 의 press 는 .pcard 를 잡지 않는다.
+  let parkPress = 0;
+  const releaseParkPress = () => {
+    clearTimeout(parkPress);
+    parkPress = 0;
+  };
+  const daysAgo = (ms) => (Date.now() - ms) / 86400000;
+  function agoText(ms) {
+    const min = Math.max(0, Math.floor((Date.now() - ms) / 60000));
+    if (min < 60) return `${min}분 전`;
+    if (min < 1440) return `${Math.floor(min / 60)}시간 전`;
+    return `${Math.floor(min / 1440)}일 전`;
+  }
+  function parkedSection(frag) {
+    const parked = list.parked || [];
+    if (!parked.length && !list.parkedError) return;
+    const head = el("button", "group parked-head");
+    head.type = "button";
+    head.setAttribute("aria-expanded", String(parkUI.open));
+    // 깨진 보관함을 «0» 으로 보이면 빈 보관함처럼 읽힌다(park.md: 깨진 파일은 빈 목록이 아니라 오류다).
+    head.append(el("span", "", `보관함 ${parkUI.open ? "▾" : "▸"}`), el("span", "", list.parkedError ? "읽지 못함" : String(parked.length)));
+    frag.append(head);
+    if (!parkUI.open) return;
+    if (list.parkedError) frag.append(el("p", "empty", list.parkedError));
+    parked.forEach((p) => frag.append(parkedCard(p)));
+  }
+  function parkedCard(p) {
+    const card = el("div", "pcard");
+    card.dataset.parked = p.id;
+    const top = el("div", "top");
+    top.append(el("span", "glyph", "≡"), el("span", "name", p.name), el("span", "age", agoText(p.parkedAt)));
+    card.append(top);
+    const first = p.conversations[0] || {};
+    const meta = [first.dir, first.task].filter(Boolean).join(" · ");
+    if (meta) card.append(el("p", "meta", meta));
+    if (p.conversations.length > 1) card.append(el("p", "meta", `대화 ${p.conversations.length}`));
+    if (p.note) card.append(el("p", "note", "✎ " + p.note));
+    if (daysAgo(p.parkedAt) > PARKED_OLD_DAYS) {
+      card.append(el("p", "old", "보관한 지 오래됐습니다 — 곧 대화 기록이 지워져 되살릴 수 없게 될 수 있습니다"));
+    }
+    const row = el("div", "acts");
+    const btn = (label, act, cls) => {
+      const b = el("button", "btn" + (cls ? " " + cls : ""), label);
+      b.type = "button";
+      b.dataset.act = act;
+      return b;
+    };
+    if (parkUI.busy === p.id) {
+      const b = btn("되살리는 중…", "none");
+      b.disabled = true;
+      row.append(b);
+    } else if (parkUI.confirm === p.id) {
+      card.append(el("p", "ask", `‹${p.name}› 세션을 같은 대화로 되살릴까요?`));
+      row.append(btn("되살리기", "unpark-yes", "primary"), btn("아니요", "unpark-no"));
+    } else {
+      const b = btn("되살리기", "unpark-ask");
+      if (parkUI.busy) b.disabled = true; // 되살리기는 한 번에 하나
+      row.append(b);
+    }
+    card.append(row);
+    return card;
+  }
+  async function unpark(id) {
+    if (parkUI.busy) return;
+    const p = (list.parked || []).find((x) => x.id === id);
+    const name = p ? p.name : "";
+    parkUI.busy = id;
+    parkUI.confirm = "";
+    hideResult();
+    renderCards();
+    let res = null;
+    let err = null;
+    try {
+      res = await api("/api/unpark", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+    } catch (e) {
+      err = e;
+    }
+    parkUI.busy = "";
+    // 되살린 세션이 목록에 나오도록 바로 다시 읽는다 — 진행 중인 폴링은 낡은 목록을 들고 올 수 있어 기다리지 않는다.
+    try {
+      list = await api("/api/list");
+      loaded = true;
+    } catch (_) { /* 다음 폴링이 고친다 */ }
+    if (res && res.result === "restored") {
+      openPage(res.session); // 페이지를 연 뒤에 알린다 — showPage 가 알림을 지운다
+      notice(`‹${res.session}› 세션을 되살렸습니다.`);
+    } else if (res && res.result === "partial") {
+      // 페이지로 넘어가지 않는다 — 넘어가면 알림이 지워지고, 막 띄운 Claude 가 아직 안 잡히면 입력줄째 숨는다.
+      banner("warn", "되살렸지만 다 끝내지 못했습니다",
+        `‹${res.session}› 세션을 열었습니다(카드의 › 로 들어갑니다). 띄우지 못한 대화가 있거나 보관함을 고치지 못했습니다.`, res.detail || "");
+    } else if (res && res.result === "gone") {
+      notice("이미 보관함에 없습니다 — 다른 곳에서 되살렸거나 지웠습니다.");
+    } else if (res) {
+      banner("stop", "되살리지 못했습니다", `‹${name}› 세션은 보관함에 그대로 있습니다.`, res.detail || "");
+    } else {
+      // 서버는 이미 살아 있는 대화를 다시 띄우지 않으니, 다시 눌러도 두 번 뜨지 않는다.
+      banner("stop", "되살렸는지 알 수 없습니다", "목록을 확인하세요. 다시 눌러도 같은 대화가 두 번 뜨지는 않습니다.", err ? err.message : "");
+    }
+    renderCards();
+  }
+
   let cardsSig = "";
   function renderCards() {
-    if (press) return; // 누르는 중에는 카드를 갈아 끼우지 않는다 — 길게 누르기가 끊긴다
-    const sig = JSON.stringify([loaded, list, sel.session]);
+    if (press || parkPress) return; // 누르는 중에는 카드를 갈아 끼우지 않는다 — 길게 누르기가 끊기고 클릭이 사라진다
+    const sig = JSON.stringify([loaded, list, sel.session, parkUI]);
     if (sig === cardsSig) return; // 같은 목록이면 버튼을 갈아 끼우지 않는다(chips 의 주석)
     cardsSig = sig;
     const focused = document.activeElement && document.activeElement.closest && document.activeElement.closest(".card");
@@ -149,6 +257,7 @@
         frag.append(groupHead("다른 세션", list.other.length));
         list.other.forEach((c) => frag.append(plainCard(c)));
       }
+      parkedSection(frag);
     }
     cardsEl.replaceChildren(frag);
     if (keep) cardFor(keep)?.focus({ preventScroll: true });
@@ -156,7 +265,43 @@
   }
 
   // 누르기 = 보낼 곳, › 또는 길게 누르기 = 그 세션에 들어가기
+  cardsEl.addEventListener("pointerdown", (e) => {
+    if (!e.target.closest(".pcard [data-act], .parked-head")) return;
+    clearTimeout(parkPress);
+    // 손가락이 떨어지면 푼다(아래). 그 신호가 끝내 오지 않아도 다시 그리기가 멈춘 채 남지 않게 10초 뒤에는 푼다.
+    parkPress = setTimeout(() => { parkPress = 0; renderCards(); }, 10000);
+  });
+  // 손가락이 떨어지면(버튼 밖에서도) 한 박자 뒤에 푼다 — 같은 손가락의 click 이 먼저 처리되게.
+  const liftParkPress = () => {
+    if (!parkPress) return;
+    setTimeout(() => {
+      if (!parkPress) return;
+      releaseParkPress();
+      renderCards();
+    }, 0);
+  };
+  document.addEventListener("pointerup", liftParkPress, true);
+  document.addEventListener("pointercancel", liftParkPress, true);
   cardsEl.addEventListener("click", (e) => {
+    if (e.target.closest(".pcard [data-act], .parked-head")) releaseParkPress();
+    if (e.target.closest(".parked-head")) {
+      parkUI.open = !parkUI.open;
+      parkUI.confirm = "";
+      renderCards();
+      return;
+    }
+    const act = e.target.closest(".pcard [data-act]");
+    if (act) {
+      const id = act.closest(".pcard").dataset.parked;
+      if (act.dataset.act === "unpark-ask") parkUI.confirm = id;
+      else if (act.dataset.act === "unpark-no") parkUI.confirm = "";
+      else if (act.dataset.act === "unpark-yes") {
+        unpark(id);
+        return;
+      }
+      renderCards();
+      return;
+    }
     const b = e.target.closest(".enter");
     if (b) openPage(b.closest(".card").dataset.session);
   });

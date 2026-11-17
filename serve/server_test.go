@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,6 +36,18 @@ type fakeBackend struct {
 	dialogErr   error
 	answerErr   error
 	answers     []string // "pane|key|n|label|text" 또는 "pane|key|cancel"
+
+	// 보관함. Unpark 는 받은 항목 id 를 적고, 이름을 돌려주면 그 항목을 보관함에서 뺀다(RestoreParked 처럼).
+	parkMu      sync.Mutex
+	parked      []tmux.ParkedSession
+	parkedErr   error
+	unparked    []string
+	unparkAt    []time.Time // Unpark 가 불린 때
+	unparkName  string      // 비면 항목 이름
+	unparkNone  bool        // 아무것도 못 띄움(이름 없음)
+	unparkErr   error
+	unparkBlock chan struct{} // 있으면 닫힐 때까지 기다린다
+	unparkIn    chan struct{} // 있으면 Unpark 에 들어올 때 신호한다
 }
 
 func (f *fakeBackend) Sessions() ([]tmux.Session, error) { return f.sessions, f.sessionsErr }
@@ -56,6 +69,41 @@ func (f *fakeBackend) AnswerMulti(a tmux.Agent, key string, want []tmux.MultiCho
 func (f *fakeBackend) Cancel(a tmux.Agent, key string) error {
 	f.answers = append(f.answers, a.PaneID+"|"+key+"|cancel")
 	return f.answerErr
+}
+func (f *fakeBackend) Parked() ([]tmux.ParkedSession, error) {
+	f.parkMu.Lock()
+	defer f.parkMu.Unlock()
+	return append([]tmux.ParkedSession(nil), f.parked...), f.parkedErr
+}
+func (f *fakeBackend) Unpark(p tmux.ParkedSession) (string, error) {
+	f.parkMu.Lock()
+	f.unparked = append(f.unparked, p.ID)
+	f.unparkAt = append(f.unparkAt, time.Now())
+	in, block := f.unparkIn, f.unparkBlock
+	f.parkMu.Unlock()
+	if in != nil {
+		in <- struct{}{}
+	}
+	if block != nil {
+		<-block
+	}
+	f.parkMu.Lock()
+	defer f.parkMu.Unlock()
+	if f.unparkNone {
+		return "", f.unparkErr
+	}
+	name := f.unparkName
+	if name == "" {
+		name = p.Name
+	}
+	kept := f.parked[:0:0]
+	for _, q := range f.parked {
+		if q.ID != p.ID {
+			kept = append(kept, q)
+		}
+	}
+	f.parked = kept
+	return name, f.unparkErr
 }
 func (f *fakeBackend) Capture(target string) (string, error) {
 	f.captured = append(f.captured, target)

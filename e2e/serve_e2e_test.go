@@ -568,3 +568,64 @@ func TestServeTranscribes(t *testing.T) {
 		t.Errorf("multipart 녹음: %d, want 415", code)
 	}
 }
+
+// 보관함 되살리기를 빌드한 mux serve 로 끝까지 돌린다(docs/design/serve.md «보관함 되살리기»): 보관된 대화를 폰 API 로
+// 되살리면 같은 이름의 세션에서 같은 대화 id 로 이어지고, 메모가 돌아오고, 항목이 보관함에서 빠진다. TUI 의 `p` 로
+// 보관하는 길은 TestParkAndRestore 가 본다 — 여기서는 세션을 닫고 보관함에 적어 보관된 상태를 만든다.
+func TestServeUnparks(t *testing.T) {
+	const session = "e2e-unpark"
+	fake := startFake(t, session, "unparkme")
+	sid := agentByPane(t, fake).SessionID
+	tm(t, "send-keys", "-t", fake, "-l", "hello")
+	tm(t, "send-keys", "-t", fake, "Enter")
+	eventually(t, "턴이 끝나 기록이 생긴다", 15*time.Second, func() bool {
+		return strings.Contains(transcriptOf(sid), "echo: hello")
+	})
+	tm(t, "kill-session", "-t", "="+session)
+	eventually(t, "가짜 Claude 가 끝난다", 10*time.Second, func() bool {
+		for _, r := range agentRows(t) {
+			if r.SessionID == sid {
+				return false
+			}
+		}
+		return true
+	})
+	parkedPath := filepath.Join(home, ".config", "mux", "parked.json")
+	entry := fmt.Sprintf(`{"sessions":[{"id":"e2e-unpark-1","name":%q,"note":"폰에서 되살림","parked_at":%q,`+
+		`"conversations":[{"session_id":%q,"cwd":%q}]}]}`,
+		session, time.Now().Format(time.RFC3339Nano), sid, filepath.Join(home, "proj-"+session))
+	if err := os.WriteFile(parkedPath, []byte(entry+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.Remove(parkedPath)
+		tmq("kill-session", "-t", "="+session)
+	})
+
+	c := startServe(t)
+	if _, data := c.get("/api/list", true); !strings.Contains(string(data), `"id":"e2e-unpark-1"`) {
+		t.Fatalf("목록에 보관함이 없다: %s", data)
+	}
+	code, out := c.do(http.MethodPost, "/api/unpark", `{"id":"e2e-unpark-1"}`, true)
+	var v struct{ Result, Session, Detail string }
+	if err := json.Unmarshal(out, &v); err != nil || code != 200 || v.Result != "restored" || v.Session != session {
+		t.Fatalf("되살리기: %d %s", code, out)
+	}
+	eventually(t, "같은 이름의 세션에서 같은 대화가 이어진다", 15*time.Second, func() bool {
+		for _, r := range agentRows(t) {
+			if r.Session == session && r.SessionID == sid {
+				return true
+			}
+		}
+		return false
+	})
+	if note := tmq("show-options", "-v", "-t", "="+session+":", "@mux_note"); note != "폰에서 되살림" {
+		t.Errorf("메모가 돌아오지 않았다: %q", note)
+	}
+	if strings.Contains(parkedJSON(), sid) {
+		t.Errorf("되살린 대화가 보관함에 남았다:\n%s", parkedJSON())
+	}
+	if _, out := c.do(http.MethodPost, "/api/unpark", `{"id":"e2e-unpark-1"}`, true); !strings.Contains(string(out), `"result":"gone"`) {
+		t.Errorf("같은 항목을 또 누름: %s, want gone", out)
+	}
+}

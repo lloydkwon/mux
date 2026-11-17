@@ -155,6 +155,11 @@ type server struct {
 	transcribeMu sync.Mutex
 	// auth 는 패스키 로그인이다. nil 이면 꺼져 있다(--passkeys 없음).
 	auth *passkeyAuth
+	// unparkMu 는 보관함 되살리기를 줄 세운다. 겹친 요청은 기다렸다가 그 순간의 보관함을 다시 읽는다 — 같은 항목이면
+	// 이미 빠져 gone 이다(같은 대화를 두 번 띄우지 않는다).
+	unparkMu sync.Mutex
+	// lastUnpark 는 직전 되살리기가 세션을 만든 때다(unparkMu 아래에서만 읽고 쓴다).
+	lastUnpark time.Time
 }
 
 // logPasskeys 는 시작할 때 패스키 상태를 한 줄 적는다 — 등록이 없으면 무엇을 할지까지.
@@ -220,5 +225,6 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/screen", s.handleScreen)
 	mux.HandleFunc("GET /api/dialog", s.handleDialog)
 	mux.HandleFunc("POST /api/answer", s.handleAnswer)
+	mux.HandleFunc("POST /api/unpark", s.handleUnpark)
 	return s.guard(mux)
 }

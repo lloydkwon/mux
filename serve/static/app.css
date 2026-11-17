@@ -135,6 +135,16 @@ button:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline
 .card.plain .name { font-size: 16px; color: var(--soft); }
 .card.plain .age { font-size: 13px; font-weight: 400; }
 .card.plain .note, .card.plain .meta { margin: 0; font-size: 14px; color: var(--soft); }
+/* 보관함(TUI 의 p 로 보관한 세션) — 목록 맨 아래에 접어 둔다. 카드는 흐리게, 되살리기 버튼만 또렷하게 */
+.parked-head { width: 100%; margin-top: 12px; padding: 6px 4px; border: 0; background: transparent; font-family: inherit; cursor: pointer; }
+.pcard { display: grid; gap: 6px; padding: 10px 12px 12px 14px; border-radius: 14px; background: var(--card); border: 1px dashed var(--card-line); }
+.pcard .name { font-size: 16px; color: var(--soft); }
+.pcard .glyph { color: var(--soft); font-size: 16px; }
+.pcard .age { font-size: 13px; font-weight: 400; }
+.pcard .meta, .pcard .note { margin: 0; font-size: 13.5px; color: var(--soft); overflow-wrap: anywhere; }
+.pcard .old { margin: 0; font-size: 13px; color: var(--warn); }
+.pcard .ask { margin: 2px 0 0; font-size: 15px; font-weight: 600; }
+.pcard .acts { display: flex; justify-content: flex-end; gap: 8px; }
 
 /* 세션 페이지 */
 .page-head { flex: none; display: grid; gap: 7px; padding: calc(4px + env(safe-area-inset-top, 0px)) 16px 12px; border-bottom: 1px solid var(--card-line); }

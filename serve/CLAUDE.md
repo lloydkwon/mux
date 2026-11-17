@@ -10,6 +10,7 @@
 | `api.go` (목록·보내기·대화·화면, 결과 갈래), `backend.go` | serve.md, agent-api.md (`PromptAgent`·종료 코드) |
 | `dialog.go` (대화상자 읽기·답하기·여러 개 고르기·Esc) | serve.md «대화상자에 답하기» |
 | `passkey.go` (패스키 파일·등록 코드), `session.go` (로그인 쿠키·의식), `login.go` (등록·로그인 핸들러·공개 경로), `static/login.*`·`manifest.webmanifest`·`icon-*.png`, `../cmd/mux/serve.go` 의 `enroll` | serve.md «패스키 로그인 — Muxtap», «보안» 8 |
+| `unpark.go` (보관함 보기·되살리기 — `tmux.RestoreParked` 를 그대로 부른다, 보관·지우기는 없다) | serve.md «보관함 되살리기», park.md «복원» |
 | `static/` (카드, 입력줄, 받아쓰기, 세션 페이지, 화면 탭의 ANSI→HTML) | serve.md |
 | `transcribe.go` (녹음 받기·받아쓰기 명령·프로세스 묶음 죽이기), `dictation.go` (용어 파일·프롬프트·바꿔 쓰기), `dictlog.go` (받아쓰기 기록 — 받아쓴 글은 여기에만, journald 에는 없다), `static/record.js` (MediaRecorder), `../scripts/whisper/` | serve.md «받아쓰기 — 서버 Whisper» |
 

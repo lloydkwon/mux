@@ -77,6 +77,9 @@ type cardView struct {
 type listView struct {
 	AI    []cardView `json:"ai"`
 	Other []cardView `json:"other"`
+	// Parked 는 보관함이다(unpark.go). 깨진 보관함은 목록을 막지 않고 ParkedError 로 말한다.
+	Parked      []parkedView `json:"parked"`
+	ParkedError string       `json:"parkedError,omitempty"`
 }
 
 func agentViewOf(a tmux.Agent) agentView {
@@ -106,7 +109,13 @@ func (s *server) handleList(w http.ResponseWriter, r *http.Request) {
 		bySession[a.Session] = append(bySession[a.Session], agentViewOf(a))
 	}
 	ai, other := ui.PhoneRows(sessions)
-	writeJSON(w, http.StatusOK, listView{AI: cardsOf(ai, bySession), Other: cardsOf(other, bySession)})
+	v := listView{AI: cardsOf(ai, bySession), Other: cardsOf(other, bySession), Parked: []parkedView{}}
+	if parked, err := s.b.Parked(); err != nil {
+		v.ParkedError = "보관함을 읽지 못했습니다: " + err.Error()
+	} else {
+		v.Parked = parkedViews(parked)
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 func cardsOf(rows []ui.PhoneRow, bySession map[string][]agentView) []cardView {

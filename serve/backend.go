@@ -16,6 +16,9 @@ type backend interface {
 	Answer(a tmux.Agent, key string, n int, label, text string) error
 	AnswerMulti(a tmux.Agent, key string, want []tmux.MultiChoice, text string) error
 	Cancel(a tmux.Agent, key string) error
+	// 보관함(tmux/park.go). 폰은 되살리기만 한다 — 보관(세션을 닫는다)과 지우기(대화로 가는 길을 지운다)는 TUI 의 일이다.
+	Parked() ([]tmux.ParkedSession, error)
+	Unpark(p tmux.ParkedSession) (string, error)
 }
 
 // tmuxBackend 는 tmux 패키지를 그대로 부른다. 여기서 아무것도 다시 구현하지 않는다.
@@ -53,3 +56,8 @@ func (tmuxBackend) AnswerMulti(a tmux.Agent, key string, want []tmux.MultiChoice
 }
 
 func (tmuxBackend) Cancel(a tmux.Agent, key string) error { return tmux.CancelDialog(a, key) }
+
+func (tmuxBackend) Parked() ([]tmux.ParkedSession, error) { return tmux.LoadParked() }
+
+// Unpark 는 TUI 의 보관함 enter 와 같은 RestoreParked 다. attach 만 없다 — 폰은 세션에 붙지 않는다.
+func (tmuxBackend) Unpark(p tmux.ParkedSession) (string, error) { return tmux.RestoreParked(p) }
