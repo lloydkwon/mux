@@ -77,6 +77,9 @@ PhoneRow{session, state("working|approval|ready|shell|none"), glyph, age("41s"),
   들어간다**(아래 «세션에 들어가기»). Claude 가 없는 카드를 누르면 «보낼 수 없다, › 로 화면» 을 알린다.
 - 한 세션에 Claude 가 둘 이상이면(짝 합치기 뒤의 exec 세션, pair.md) 입력줄에서 이름·pane 으로 고르게 한다 —
   `ResolveAgent` 가 세션 이름으로는 고르지 않는 것과 같은 이유다. 고르기 전에는 보내기가 꺼져 있다.
+- **카드는 줄어들지 않고, 넘치면 목록이 스크롤한다**(`.cards > * { flex: none }`). 카드가 `overflow: hidden` 이라
+  flex 의 최소 높이가 0 이 되어, 세션 13개인 폰에서 카드가 화면 높이에 맞춰 눌려 잘렸다(2026-11-17, 시험의 세션 넷으로는
+  드러나지 않았다).
 - 갱신은 **2초 폴링**이고, 페이지가 가려지면(`visibilitychange`) 멈춘다. 폰 배터리와 서버 일을 같이 줄인다.
   누르고 있는 동안에는 카드를 다시 그리지 않는다(길게 누르기가 끊긴다). 카드와 Claude 고르기 칩은 **내용이 바뀔
   때만** 다시 만든다 — 2초마다 버튼을 갈아 끼우면 pointerdown 과 pointerup 의 대상이 달라져 클릭이 사라진다(데스크톱
@@ -234,8 +237,11 @@ PhoneRow{session, state("working|approval|ready|shell|none"), glyph, age("41s"),
 ## 실측할 것 (구현 뒤, 폰 실측 전에)
 
 1. `tailscale serve` 가 들어온 `Tailscale-User-*` 헤더를 지우고 자기 값을 넣는가 — curl 로 위조 헤더를
-   붙여 tailnet 쪽에서 보낸다. 지우지 않으면 2번 규칙이 무너진다.
+   붙여 tailnet 쪽에서 보낸다. 지우지 않으면 2번 규칙이 무너진다. **2026-11-17 확인(tailscale 1.104.7, 같은 기계에서
+   `https://<기계>.ts.net:8443`)**: `Tailscale-User-Login: evil@example.com` 을 붙인 요청이 200 이었고 서버 로그에
+   «허용 목록 밖» 거절이 없었다 — 들어온 값을 자기 값으로 덮어쓴다. 다른 기계(폰)에서 한 번 더 본다.
 2. 백엔드에 오는 `Host` 가 `…ts.net:8443` 인가(127.0.0.1:7690 으로 바뀌면 4번 규칙을 `X-Forwarded-Host` 로 바꾼다).
+   **2026-11-17 확인**: 그대로 온다(기본 요청 200). 127.0.0.1:7690 으로 직접 들어온 요청은 «Host 127.0.0.1:7690» 으로 403.
 3. 폰 Safari(iOS)·Chrome(Android)에서 `webkitSpeechRecognition` 이 ko-KR 로 도는가, 권한 대화상자가 뜨는가.
 4. 화면 탭에서 넓은 글자 상자로 Claude 의 선·대화상자 테두리가 맞는가. 카드의 글리프(⏳❗✅)가 폰 글꼴에서 같은 폭인가.
 5. 길게 누르기가 폰의 글자 선택·문맥 메뉴와 부딪치지 않는가(`user-select: none`, `contextmenu` 막기).

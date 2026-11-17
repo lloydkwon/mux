@@ -89,6 +89,9 @@ button:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline
   touch-action: pan-y;
   -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
 }
+/* 목록의 줄은 줄어들지 않는다. 카드는 overflow: hidden 이라 flex 의 기본 최소 높이가 0 이 되어, 세션이 많으면
+   스크롤 대신 카드가 화면 높이에 맞춰 눌려 잘렸다(폰, 세션 13개, 2026-11-17). 넘치는 만큼은 .cards 가 스크롤한다. */
+.cards > * { flex: none; }
 .group { display: flex; justify-content: space-between; margin: 4px 4px -2px; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; color: var(--soft); }
 .card + .group { margin-top: 12px; }
 .empty { margin: 4px; color: var(--soft); }
