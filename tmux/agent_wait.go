@@ -136,55 +136,88 @@ func WaitAgent(a Agent, after *AgentToken, timeout time.Duration) (Agent, error)
 //
 // 대화 기록은 턴이 끝난 뒤 조금 늦게 쓰인다. idle 이 된 지 얼마 안 됐으면 몇 번 다시 읽는다.
 func ReadAgentReply(a Agent, after *AgentToken) (string, error) {
+	turn, err := readTurn(a, after)
+	return turn.Reply, err
+}
+
+// LastTurn 은 한 턴의 «보낸 말» 과 «회신» 이다 — mux serve 의 대화 탭이 쓴다(docs/design/serve.md).
+type LastTurn struct {
+	// Prompt 는 턴을 연 줄의 글이다. 슬래시 명령은 «/이름 인자» 로 되돌리고, 끼워 넣은 블록과
+	// 이스케이프는 걷는다(turnPromptText).
+	Prompt   string
+	PromptAt time.Time
+	// Human 은 사람이(mux agent prompt 도 같다) 친 턴인가다. 아니면 작업 알림·peer·system 이 연 턴이다.
+	Human   bool
+	Reply   string
+	ReplyAt time.Time
+}
+
+// ReadLastTurn 은 마지막 턴의 보낸 말과 회신을 함께 읽는다. 회신 규칙은 ReadAgentReply 와 같다 — 진행
+// 중이면 ErrTurnRunning, 막혔으면 ErrAgentBlocked, 마지막 그룹에 글이 없으면 ErrNoReply 이고, 앞 턴이나
+// 앞 그룹으로 물러서지 않는다. 그런 오류에서도 턴을 찾았으면 보낸 말은 채워서 돌려준다.
+func ReadLastTurn(a Agent) (LastTurn, error) {
+	return readTurn(a, nil)
+}
+
+// readTurn 은 ReadAgentReply 와 ReadLastTurn 이 같이 쓰는 읽기다 — 늦게 쓰이는 기록을 기다리는 규칙이 둘에서
+// 갈라지지 않게.
+func readTurn(a Agent, after *AgentToken) (LastTurn, error) {
 	for try := 0; ; try++ {
 		fresh, err := refreshAgent(a)
 		if err != nil {
-			return "", err
+			return LastTurn{}, err
 		}
 		a = fresh
-		text, lagged, err := readReplyOnce(a, after)
+		turn, lagged, err := readTurnOnce(a, after)
 		recent := a.State == AgentIdle && agentNow().Sub(a.Since) < readLagWindow
 		if err != nil && lagged && recent && try < readLagRetries {
 			agentSleep(readLagPoll)
 			continue
 		}
-		return text, err
+		return turn, err
 	}
 }
 
-// readReplyOnce 는 기록을 한 번 읽어 회신을 꺼낸다. lagged 는 «기록이 아직 따라오지 않았을
+// readTurnOnce 는 기록을 한 번 읽어 턴을 꺼낸다. lagged 는 «기록이 아직 따라오지 않았을
 // 수 있다» 는 뜻이다 — 프롬프트 턴이 아직 없거나, 턴 뒤에 다른 턴이 없는데 회신 글이 없다.
-func readReplyOnce(a Agent, after *AgentToken) (text string, lagged bool, err error) {
+func readTurnOnce(a Agent, after *AgentToken) (turn LastTurn, lagged bool, err error) {
 	sid, at, hash := a.SessionID, (*time.Time)(nil), uint32(0)
 	if after != nil {
 		sid, at, hash = after.SessionID, &after.SentAt, after.TextHash
 	}
 	rows, ids, err := transcriptChain(sid, a.CWD)
 	if err != nil {
-		return "", false, fmt.Errorf("%s 의 대화 기록: %w", a.PaneID, err)
+		return LastTurn{}, false, fmt.Errorf("%s 의 대화 기록: %w", a.PaneID, err)
 	}
 	if after != nil {
 		if err := checkTokenChain(a, *after, ids); err != nil {
-			return "", false, err
+			return LastTurn{}, false, err
 		}
 	}
 	span, ok := findTurn(rows, at, hash)
 	if !ok {
 		if after != nil {
-			return "", true, fmt.Errorf("%w: %s", ErrPromptNotSeen, a.PaneID)
+			return LastTurn{}, true, fmt.Errorf("%w: %s", ErrPromptNotSeen, a.PaneID)
 		}
-		return "", false, fmt.Errorf("%w: %s 의 기록에 턴이 없다", ErrNoReply, a.PaneID)
+		return LastTurn{}, false, fmt.Errorf("%w: %s 의 기록에 턴이 없다", ErrNoReply, a.PaneID)
+	}
+	opener := rows[span.start]
+	turn = LastTurn{
+		Prompt:   turnPromptText(userText(opener.Message.Content)),
+		PromptAt: opener.at,
+		Human:    isHumanTurn(opener),
 	}
 	if span.open {
 		switch a.State {
 		case AgentBlocked:
-			return "", false, fmt.Errorf("%w: %s (%s)", ErrAgentBlocked, a.PaneID, a.WaitingFor)
+			return turn, false, fmt.Errorf("%w: %s (%s)", ErrAgentBlocked, a.PaneID, a.WaitingFor)
 		case AgentWorking, AgentShell, AgentUnknown:
-			return "", false, fmt.Errorf("%w: %s", ErrTurnRunning, a.PaneID)
+			return turn, false, fmt.Errorf("%w: %s", ErrTurnRunning, a.PaneID)
 		}
 	}
 	if text, final := turnReply(rows, span); final {
-		return text, false, nil
+		turn.Reply, turn.ReplyAt = text, turnReplyAt(rows, span)
+		return turn, false, nil
 	}
-	return "", span.open, fmt.Errorf("%w: %s", ErrNoReply, a.PaneID)
+	return turn, span.open, fmt.Errorf("%w: %s", ErrNoReply, a.PaneID)
 }

@@ -13,3 +13,4 @@
 | 설정 복구 호출 | tmux-config.md |
 | `setup-resurrect`, `setup`, `runResurrectHook`, `restoreSavedSessions` | resurrect.md |
 | `newAgentCmd`, `exitCode` (`agent.go`) | agent-api.md |
+| `newServeCmd` (`serve.go`) | serve.md |

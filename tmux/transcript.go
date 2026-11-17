@@ -8,8 +8,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // 트랜스크립트 — Claude 대화 기록 ~/.claude/projects/<cwd>/<sessionId>.jsonl 에서
@@ -294,6 +298,58 @@ func userText(content json.RawMessage) string {
 		}
 	}
 	return b.String()
+}
+
+// commandNameRe 는 슬래시 명령 줄의 이름이다. 인자는 claude_work.go 의 commandArgsRe 가 꺼낸다.
+var commandNameRe = regexp.MustCompile(`<command-name>(.*?)</command-name>`)
+
+// maxTurnPromptRunes 는 대화 탭에 보낼 «보낸 말» 의 상한이다. 붙여 넣은 로그가 통째로 폰에 가지 않게.
+const maxTurnPromptRunes = 4000
+
+// turnPromptText 는 턴을 연 글을 사람에게 보일 모양으로 다듬는다(mux serve 의 대화 탭). 패널의 한 줄
+// (promptWorkText)과 달리 여러 줄을 남기고, 인자 없는 슬래시 명령도 버리지 않는다 — 여기서는 «무엇을
+// 보냈나» 를 그대로 보여 주는 것이 일이다.
+//
+// 슬래시 명령은 Claude 가 <command-name>/x</command-name><command-args>y</command-args> 로 적는다 — «/x y» 로
+// 되돌린다. 끼워 넣은 블록(<system-reminder> 등)과 붙여 넣기 태그는 걷고, 이스케이프 열·제어 문자·방향
+// 문자(Cf)는 지운다. 이스케이프는 화면을 망가뜨리고 방향 문자는 줄의 순서를 뒤집는다.
+func turnPromptText(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "<command-") {
+		if m := commandNameRe.FindStringSubmatch(raw); m != nil {
+			cmd := strings.TrimSpace(m[1])
+			if args := commandArgsRe.FindStringSubmatch(raw); args != nil && strings.TrimSpace(args[1]) != "" {
+				cmd += " " + strings.TrimSpace(args[1])
+			}
+			raw = cmd
+		}
+	}
+	raw = injectedBlockRe.ReplaceAllString(raw, " ")
+	raw = pastedTagRe.ReplaceAllString(raw, "")
+	text := strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\t':
+			return r
+		case unicode.IsControl(r), unicode.Is(unicode.Cf, r):
+			return -1
+		}
+		return r
+	}, ansi.Strip(raw))
+	text = strings.TrimSpace(text)
+	if runes := []rune(text); len(runes) > maxTurnPromptRunes {
+		text = string(runes[:maxTurnPromptRunes]) + "…"
+	}
+	return text
+}
+
+// turnReplyAt 은 회신이 쓰인 시각이다 — 턴의 마지막 assistant 줄. 모르면 제로값.
+func turnReplyAt(rows []transcriptRow, span turnSpan) time.Time {
+	for i := span.end - 1; i >= span.start; i-- {
+		if r := rows[i]; r.Type == "assistant" && !r.IsSidechain {
+			return r.at
+		}
+	}
+	return time.Time{}
 }
 
 func turnIndexOf(r transcriptRow) int {

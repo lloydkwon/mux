@@ -158,27 +158,35 @@ func TestPromptHappyPath(t *testing.T) {
 }
 
 func TestPromptRefusesWithoutSendingAnything(t *testing.T) {
+	// busy 는 «--force 면 대기열에 넣는다» 갈래다. mux serve 는 이것에만 [대기열에 넣기] 를 띄운다 —
+	// 복사 모드·synchronize·입력창 없음에 띄우면 누를 수는 있어도 같은 이유로 다시 거절되거나, 대기열이 아닌
+	// 다른 일(복사 모드 빠져나오기)을 한다.
 	tests := []struct {
 		name   string
 		status string
 		force  bool
 		pane   fakePane
 		want   error
+		busy   bool
 	}{
-		{"blocked", "waiting", false, fakePane{}, ErrAgentBlocked},
-		{"blocked even with force", "waiting", true, fakePane{}, ErrAgentBlocked},
-		{"working", "busy", false, fakePane{}, ErrAgentNotReady},
-		{"unknown state", "compacting", false, fakePane{}, ErrAgentNotReady},
-		{"copy mode", "idle", false, fakePane{inMode: true}, ErrAgentNotReady},
-		{"synchronize-panes even with force", "idle", true, fakePane{sync: true}, ErrAgentNotReady},
-		{"dialog covers the box", "idle", false, fakePane{noBox: true}, ErrAgentNotReady},
+		{"blocked", "waiting", false, fakePane{}, ErrAgentBlocked, false},
+		{"blocked even with force", "waiting", true, fakePane{}, ErrAgentBlocked, false},
+		{"working", "busy", false, fakePane{}, ErrAgentNotReady, true},
+		{"unknown state", "compacting", false, fakePane{}, ErrAgentNotReady, true},
+		{"copy mode", "idle", false, fakePane{inMode: true}, ErrAgentNotReady, false},
+		{"synchronize-panes even with force", "idle", true, fakePane{sync: true}, ErrAgentNotReady, false},
+		{"dialog covers the box", "idle", false, fakePane{noBox: true}, ErrAgentNotReady, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := tt.pane
 			withPromptPane(t, tt.status, &f, func(a Agent) {
-				if _, err := PromptAgent(a, "hello", tt.force); !errors.Is(err, tt.want) {
+				_, err := PromptAgent(a, "hello", tt.force)
+				if !errors.Is(err, tt.want) {
 					t.Errorf("err = %v, want %v", err, tt.want)
+				}
+				if errors.Is(err, ErrAgentBusy) != tt.busy {
+					t.Errorf("errors.Is(err, ErrAgentBusy) = %v, want %v (err = %v)", !tt.busy, tt.busy, err)
 				}
 			})
 			if len(f.runs) != 0 {

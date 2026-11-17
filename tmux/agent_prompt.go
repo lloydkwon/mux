@@ -308,7 +308,7 @@ func preparePrompt(a Agent, force bool) (Agent, string, error) {
 		return a, "", fmt.Errorf("%w: %s (%s)", ErrAgentBlocked, a.PaneID, a.WaitingFor)
 	default:
 		if !force {
-			return a, "", fmt.Errorf("%w: %s 가 %s 상태다 (--force 면 대기열에 넣는다)", ErrAgentNotReady, a.PaneID, a.State)
+			return a, "", fmt.Errorf("%w (%w): %s 가 %s 상태다 (--force 면 대기열에 넣는다)", ErrAgentNotReady, ErrAgentBusy, a.PaneID, a.State)
 		}
 	}
 	if err := checkPaneMode(a.PaneID, force); err != nil {

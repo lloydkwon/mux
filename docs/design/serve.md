@@ -1,0 +1,283 @@
+# `mux serve` — 폰 브라우저 원격 화면 (MVP)
+
+> 관련 코드: serve/ (server.go, auth.go, api.go, backend.go, static/), ui/serve.go(`PhoneRows`),
+> tmux/agent.go(`ErrAgentBusy`), tmux/agent_wait.go(`ReadLastTurn`), tmux/transcript.go(`turnPromptText`),
+> cmd/mux/serve.go(`newServeCmd`), e2e/serve_e2e_test.go, scripts/tmux-assumptions.sh 19절
+>
+> 2026-11-17 에 설계하고 같은 날 구현했다. 요청은 claude.ai 대화에서 준비한 요청서(SERVE-REQUEST.md, 커밋하지 않음)였다.
+
+## 무엇이고 무엇이 아닌가
+
+Tailscale 로 폰 브라우저에서 mux 세션 목록을 보고, 세션을 골라 **음성으로 Claude 에게 프롬프트를
+보내고**, 세션에 들어가 **마지막으로 보낸 말과 회신, 지금 화면**을 본다. 목록은 패널(`mux watch`)이 세션을
+보여 주는 방식을 이어받는다 — 순서·글리프·나이·지금 하는 일을 패널과 같은 판정 함수가 정한다. 그리는
+모양은 폰의 것이다: 세션마다 큰 카드(아래 «목록»).
+
+시안(2026-11-17, 3판): https://claude.ai/code/artifact/c504024f-9dad-40d2-95fa-3e42d7f42297 — 1판(패널 줄을
+그대로 그린 것)을 본 사용자가 «최근 이벤트는 폰에서 보지 않아도 됨», «세션 정보를 크고 구분이 잘 되게»,
+«첫 화면에서 음성으로 했을 때 문자로 표기되는 부분이 필요» 라고 해서 2판이 됐다. 사용자는 2판의 첫 화면을
+받아들이고(«처음 화면은 괜찮음») 세션에 들어간 화면과 더 나은 들어가는 방식을 물었다 — 3판이 그 답이다.
+
+```sh
+mux serve --allow lloydkwon@gmail.com            # 127.0.0.1:7690 에만 바인드
+tailscale serve --bg --https=8443 127.0.0.1:7690  # tailnet 안에서만 https 로 연다
+```
+
+**하지 않는 것**(MVP): 승인 대화상자에 답하기(1/2/Esc), 서버 쪽 받아쓰기(Whisper), 푸시 알림,
+herdr 소스, funnel(인터넷 공개), 세션 만들기·닫기·전환. **보내기는 Claude pane 만** 한다 —
+`mux agent prompt` 의 확인 절차(입력창 정확 일치·되돌리기)가 Claude 의 `❯` 입력창에만 기대기
+때문이다(agent-api.md). 셸·개발 서버 pane 에는 보내기 버튼이 없다.
+
+## 구조 — 새 패키지 `serve/`
+
+```
+cmd/mux (serveCmd) → serve → ui (PhoneRows, 순수) → tmux
+                          ↘ tmux (ListSessions, WithClaudeWork, Agents, PromptAgent, ReadLastTurn, CapturePaneTarget)
+```
+
+- 판정 함수(`aiGlyph`·`sessionAge`·`compactAgo`·`aiWaitingLabel`·`sortByDisplayedAge`, AI 세션과 나머지의
+  나눔)는 `ui` 안에 있고 내보내지 않는다. `ui/serve.go` 에 **순수 함수 하나**만 내보낸다:
+  `PhoneRows(sessions []tmux.Session) (ai, other []PhoneRow)`. tmux 를 부르지 않으니 «`ui` 에는 목 러너가
+  없다» 와 부딪치지 않는다. 패널의 줄 렌더러(`notifyLines`)는 쓰지 않는다.
+- I/O 는 `serve` 가 한다. 핸들러는 `backend` 인터페이스(세션 읽기·에이전트 목록·보내기·
+  회신·화면)에만 기대고, 테스트는 가짜 backend 를 넣는다. 진짜 backend 는 tmux 함수를 그대로 부르는
+  얇은 껍데기이고, 그 배선은 e2e 가 확인한다.
+- 정적 파일(`index.html`·`app.js`·`app.css`)은 `//go:embed` — 빌드 단계가 없다. 외부 라이브러리를
+  쓰지 않는다(CSP 가 `'self'` 만 허용한다).
+- **접속한 클라이언트가 없으면 아무것도 돌지 않는다.** 틱·고루틴·감시가 없고, 모든 일은 요청 안에서
+  한다. 목록 계산은 뮤텍스 하나로 줄 세운다 — 탭 두 개가 같은 순간 pgrep·ps 를 두 번 돌리지 않게.
+- 정적 파일은 `Cache-Control: no-cache` 다 — 바이너리를 바꿔 띄우면 폰이 새 화면을 받는다. API 는 `no-store`.
+- 서버 로그는 한 줄씩: 시작, 거절(이유와 함께), 보내기(«로그인 → pane (세션, 글자 수, force): 갈래»). 글은 적지 않는다.
+
+## 목록 — 패널의 판정, 폰의 카드
+
+`GET /api/list` → `{"ai":[PhoneRow…], "other":[PhoneRow…]}`
+
+```
+PhoneRow{session, state("working|approval|ready|shell|none"), glyph, age("41s"), branch, worktree, dir,
+         note, work, reason, agents:[{pane, pid, name, state, waitingFor, since}]}
+```
+
+- 세션은 패널의 `loadWatchSessions` 와 같다: `tmux.ListSessions()` 다음 `tmux.WithClaudeWork`.
+  둘 다 TTL·증분 캐시 뒤에 있다(루트 `CLAUDE.md` 의 표). `agents` 는 `tmux.Agents()` 를 세션별로 묶는다.
+- **값은 패널이 정하고, 모양은 폰이 정한다.** 순서(`sortByDisplayedAge`, AI 세션이 먼저), 상태 글리프(`aiGlyph`),
+  나이(`sessionAge` → `compactAgo`), 승인 사유(`aiWaitingLabel`), 지금 하는 일(`AIWork`)은 패널과 같은 함수가
+  계산한다 — 두 번째 판정을 두면 패널 옆에서 어긋난다. 패널의 줄 렌더러(`notifyLines`)는 쓰지 않는다.
+  1판은 그것을 그대로 그렸는데, 13px 고정 폭 줄이 빽빽해 폰에서 세션이 서로 구분되지 않았다(사용자, 2026-11-17).
+- **카드 하나가 세션 하나다.** 이름을 크게(19px 고정 폭) 쓰고, 상태는 세 가지로 한 번 더 말한다: 왼쪽 색 띠,
+  상태 표(«승인 대기»·«작업 중»·«완료»), 나이의 색. 승인 대기는 카드 바탕까지 붉고, 완료는 흐리게 물러난다 —
+  패널의 «가장 흔한 완료가 초록 덩어리가 되지 않게» (panel.md, `aiTextColor`)와 같은 생각이다. Claude 가 없는
+  세션은 «다른 세션» 아래 작은 카드다.
+- **최근 이벤트는 폰에 없다**(사용자, 2026-11-17). `tmux.LoadEvents()` 도 부르지 않는다. 그래서 «지금 하는 일»
+  이 비면(대화 기록이 아직 없음) 카드는 상태 표와 나이만 보인다 — 패널처럼 그 세션의 마지막 이벤트로
+  물러서지 않는다.
+- **세션 아래 줄의 제목(Haiku)을 짓지 않는다.** `TitleNextClaudeWork` 를 부르지 않고 저장된 답만 읽는다 —
+  폰을 열어 둔 것만으로 모델 호출이 나가면 안 된다. 패널이 떠 있지 않으면 제목 대신 원문이 보인다.
+- 카드 몸통을 **누르면 보낼 곳**(아래 입력줄의 대상)이 되고, 오른쪽 [›] 나 길게 누르기로 **그 세션에
+  들어간다**(아래 «세션에 들어가기»). Claude 가 없는 카드를 누르면 «보낼 수 없다, › 로 화면» 을 알린다.
+- 한 세션에 Claude 가 둘 이상이면(짝 합치기 뒤의 exec 세션, pair.md) 입력줄에서 이름·pane 으로 고르게 한다 —
+  `ResolveAgent` 가 세션 이름으로는 고르지 않는 것과 같은 이유다. 고르기 전에는 보내기가 꺼져 있다.
+- 갱신은 **2초 폴링**이고, 페이지가 가려지면(`visibilitychange`) 멈춘다. 폰 배터리와 서버 일을 같이 줄인다.
+  누르고 있는 동안에는 카드를 다시 그리지 않는다(길게 누르기가 끊긴다). 카드와 Claude 고르기 칩은 **내용이 바뀔
+  때만** 다시 만든다 — 2초마다 버튼을 갈아 끼우면 pointerdown 과 pointerup 의 대상이 달라져 클릭이 사라진다(데스크톱
+  Chrome 에서 칩이 그렇게 눌리지 않았다, 2026-11-17).
+
+## 보내기 — 첫 화면 아래 입력줄, `PromptAgent` 를 그대로
+
+화면 맨 아래에 늘 있는 입력줄: «보낼 곳» 한 줄, [말하기] · 입력칸 · [보내기]. 따로 여는 보내기 창은 없다 —
+1판에는 있었는데, 음성으로 보내려면 카드 → 창 → 마이크로 세 번 눌러야 했다. 결과 문구는 입력줄 위에 뜬다.
+
+`POST /api/prompt` `{"pane":"%12","pid":4321,"text":"…","force":false}`
+
+- 대상은 **pane id 와 pid** 로 지목한다. 서버는 그 순간의 `tmux.Agents()` 로 `ResolveAgent(pane)` 를 하고,
+  pid 가 다르면 보내지 않는다(«대상이 바뀌었다 — 목록을 새로 고친다»). 목록을 그린 뒤 그 pane 에 다른
+  Claude 가 뜬 경우를 막는다. 대화 id 가 아니라 pid 인 이유: `/clear` 는 대화 id 를 바꾸지만 같은 Claude 다.
+- `PromptAgent(a, text, force)` 를 그대로 부른다. 검사·잠금·되돌리기는 전부 그 안에 있다. 이 패키지에서
+  다시 구현하지 않는다.
+- **«작업 중» 을 가르는 값을 하나 더한다** — `tmux.ErrAgentBusy`. 지금 `preparePrompt` 는 «작업 중»
+  (force 면 대기열에 들어간다)과 «입력창에 다른 글·복사 모드·synchronize·입력창 없음»(force 로도 안
+  되거나 다른 문제다)을 모두 `ErrAgentNotReady` 로 돌려준다. 화면은 앞의 것에만 «대기열에 넣기» 를
+  띄워야 한다. 작업 중 갈래만 `fmt.Errorf("%w: %w …", ErrAgentNotReady, ErrAgentBusy)` 로 감싸므로
+  `errors.Is(err, ErrAgentNotReady)` 는 그대로 참이고 CLI 의 종료 코드 5 는 바뀌지 않는다.
+- 결과는 늘 HTTP 200 에 `{"result": …, "detail": …}` 이다(인증·형식 오류만 4xx). `detail` 은 tmux 의 오류 글이다.
+  화면 문구는 클라이언트(`app.js` 의 `RESULTS`)가 정한다:
+
+| 오류 (`mux agent` 코드) | `result` | 화면 문구 | 버튼 |
+|---|---|---|---|
+| 성공 (0) | `sent` | 보냈다 | — |
+| 성공, `force:true` | `queued` | 대기열에 넣었다 — 지금 턴이 끝나면 처리 | — |
+| `ErrAgentBlocked` (3) | `blocked` | 승인 대기 중 — 폰에서는 답할 수 없다 | — |
+| `ErrAgentBusy` (5) | `busy` | 작업 중 — 대기열에 넣을까요? | [대기열에 넣기] (`force:true` 로 다시) |
+| 그 밖의 `ErrAgentNotReady` (5) | `not_ready` | 지금은 보낼 수 없다: <이유> — 아무것도 보내지 않았다 | — |
+| `ErrNotSubmitted` (6) | `retry` | 제출되지 않았고 되돌렸다 — 다시 보내도 된다 | [다시 보내기] |
+| `ErrPromptUnknown` (1) | `unknown` | 제출됐는지 모른다 — 화면을 확인하고 다시 보내지 말 것 | [화면 보기] |
+| `ErrPromptNotSeen` (7) | `not_seen` | 기록에 안 보인다 — 제출은 됐을 수 있으니 다시 보내지 말 것 | [화면 보기] |
+| `ErrNoAgent`·`ErrAgentGone`·`ErrAmbiguous`·pid 불일치 | `gone` | 대상 Claude 가 없다 — 다시 고른다 | — |
+| `ValidatePromptText` 의 오류 | `invalid` | 그 오류 문구(700자, `!` 시작, 제어 문자…) | — |
+| 그 밖의 오류 | `error` | 보내지 못했다: <이유> | — |
+| (클라이언트) 답을 받지 못함·5xx | — | `unknown` 과 같다 — 제출됐는지 모른다 | [화면 보기] |
+
+- 7 은 `prompt` 가 내지 않는다(`wait`·`read --after` 의 것이다). MVP 의 회신 탭은 토큰 없이 마지막 턴을
+  읽으니 나오지 않지만, 같은 표에 둔다 — 나중에 «폰에서 보낸 것의 회신» 을 읽게 되면 바로 쓰인다.
+- `force:true` 는 복사 모드도 빠져나온다(`checkPaneMode`). [대기열에 넣기] 를 누른 사람에게 그 pane 의
+  복사 모드는 중요하지 않다고 본다 — 그래도 버튼은 `busy` 에만 뜬다.
+- 줄바꿈은 보내기 전에 클라이언트가 공백으로 바꾸고 입력칸에도 그 모양을 보여 준다 — 서버는 한 줄만
+  받는다(`ValidatePromptText`). 길이(700자)도 클라이언트가 먼저 센다. 정본은 서버의 검사다.
+- `PromptAgent` 는 몇 초 걸린다(입력창 확인 0.6–2초, 제출 확인 5초 × 많아야 2). 버튼은 그동안 «보내는 중» 이다.
+- **답을 받지 못하면 «모른다» 다**, «못 보냈다» 가 아니다. 그 몇 초 사이 폰이 잠기거나 망이 바뀌면 fetch 가 실패하지만
+  서버는 보내기를 끝까지 한다 — «보내지 못했습니다» 라고 하면 사람이 다시 눌러 두 번 들어간다(리뷰, 2026-11-17).
+  응답이 없거나 5xx 면 `unknown` 문구를 띄우고, 4xx 만 «보내지 못했다» 다.
+- 결과 알림의 버튼([대기열에 넣기]·[다시 보내기]·[화면 보기])은 결과를 받은 그 Claude(pane·pid)에게만 동작한다. 그 사이
+  보낼 곳이 바뀌었으면 알림을 닫고 다시 보내라고 말한다.
+- 서버 로그에는 누가·어느 pane 에·몇 글자·결과만 남기고 **글은 남기지 않는다** — 이벤트 기록이
+  프롬프트를 담지 않는 것과 같은 이유다(panel.md).
+
+## 세션에 들어가기 — 대화와 화면
+
+카드 오른쪽 [›] 를 누르거나 카드를 길게 누르면 그 세션의 페이지로 넘어간다(옆으로 미는 전환). 시안 3판에서 정했다.
+
+- **들어가는 손잡이는 [›] 가 먼저, 길게 누르기는 지름길이다.** 1·2판은 길게 누르기뿐이었다 — 있는 줄 모르고,
+  iOS 에서는 글자 선택·링크 미리보기와 부딪친다. 카드 몸통을 누르는 것은 여전히 «보낼 곳» 이다(2판 첫 화면, 승인됨).
+- **아래에서 올라오는 창이 아니라 페이지다.** 주소에 `#s=<세션>` 을 붙인다(`history.pushState`). 폰의 뒤로 가기(iOS
+  왼쪽 가장자리 밀기 포함)가 목록으로 돌아오고, 새로 고치거나 Safari 가 탭을 다시 불러도 그 세션에 남는다.
+  [‹ 목록] 으로 돌아오면 그 기록을 `history.back()` 으로 지운다 — 우리가 넣은 기록인지는 `history.state.muxPage` 가
+  말하고(새로 고쳐도 남는다), 아니면 부르지 않는다(남의 페이지로 물러선다). 주소로 바로 들어왔으면 `replaceState`
+  로 `#s=` 만 지운다. 1판의 오른쪽 위 `×` 를 두고 사용자가 «다시 처음 화면으로는 어떻게 돌아오지?» 라고 물었다(2026-11-17).
+- 들어가면 포커스는 페이지 자체(`tabindex=-1`)로 옮긴다. [‹ 목록] 에 주면 손가락으로 연 폰에도 포커스 테두리가
+  그려졌다(headless 스크린샷으로 확인).
+- **입력줄은 그대로 아래에 있고, 보낼 곳이 그 세션이 된다.** Claude 가 둘이면 페이지 머리에서 고르고, 보고 있는
+  Claude 가 곧 보낼 Claude 다. 목록으로 돌아와도 보낼 곳은 그 세션으로 남는다 — 쓰던 글이 다른 세션으로 가지 않게.
+  Claude 가 없는 세션의 페이지에는 입력줄이 없다.
+- **첫 Claude 를 고르는 것은 들어갈 때뿐이다.** 고른 Claude 가 이번 목록에 안 보이면(상태 파일을 덮어쓰는 순간에
+  읽어 한 번 빠질 수 있다 — tmux/agent.go 의 찢어진 읽기) 다른 Claude 로 바꾸지 않고 보내기를 끈 채 «지금 목록에
+  없다» 고 말한다. 처음 구현은 첫 Claude 로 바꿨고, 고른 Claude 가 돌아와도 바뀐 채 굳어 그 뒤의 보내기가 사람 몰래
+  다른 Claude 에게 갔다(리뷰, 2026-11-17 — 상태 파일을 몇 초 치웠다 되돌려 재현하고 고친 뒤 확인). Claude 가 하나만
+  남았으면 그것으로 바꾸는 버튼을 보인다. 화면 탭도 그동안은 캡처하지 않는다(세션의 활성 pane 은 다른 pane 일 수 있다).
+- 머리: 글리프·이름(22px)·상태 표·나이, 브랜치와 폴더, (둘 이상이면) Claude 고르기. 탭은 [대화] · [화면].
+- **대화 탭은 마지막 턴의 «보낸 말» 과 «회신» 이다.** `GET /api/turn?pane=%12&pid=4321` →
+  `{prompt:{at,text}, reply:{at,text}}`. `ReadAgentReply` 는 회신만 돌려주므로, 같은 턴의 첫 줄(`findTurn` 의 시작 줄,
+  `userText`)을 함께 꺼내는 `ReadLastTurn` 을 tmux 에 더한다. 회신 규칙은 그대로다: 작업 중(`ErrTurnRunning`)이면
+  회신 자리에 «작업 중 · 경과» 와 지금 하는 일(`AIWork`), 승인 대기면 사유와 [화면에서 대화상자 보기], 글이
+  없으면(`ErrNoReply`) 그렇다고 쓴다. 앞 턴의 회신으로 물러서지 않는다(agent-api.md). 마지막 턴이 사람 턴이
+  아니면(작업 알림 등) «보낸 말» 대신 그 종류를 쓴다. 기록이 늦게 쓰이면 서버가 2초 × 8번까지 다시 읽는다 — 그동안
+  화면은 앞에 읽은 턴을 그대로 두고(처음이면 «읽는 중»), 답이 오면 바꾼다.
+  보낸 말은 사람에게 보일 모양으로 다듬는다(`turnPromptText`): 슬래시 명령은 «/이름 인자», 끼워 넣은 블록·붙여 넣기
+  태그·이스케이프·방향 문자는 걷고, 여러 줄은 남기고, 4000자에서 자른다.
+- **대화는 그 Claude 의 (pane, pid, 상태, 상태 시작 시각) 이 바뀔 때만 다시 읽는다** — 목록 응답의 `agents[].since`.
+  기록은 수 MB 일 수 있고, 회신 규칙상 턴이 끝나야 달라진다. 보낸 직후와 탭을 옮길 때는 바로 다시 읽는다.
+- **화면 탭은 열려 있는 동안 2초마다 다시 캡처한다.** `GET /api/screen?pane=%12` 또는 `?session=<이름>` →
+  `CapturePaneTarget`(`-e`, 색 포함). Claude 가 없는 세션은 활성 pane 을 `=<이름>:` 으로 지목한다 — 콜론까지 써야
+  접두사로 다른 세션을 잡지 않는다(park.md, tmux-assumptions 17절). capture-pane 에서도 그렇다 — 19절, 3.8 실측:
+  그 이름이 없으면 `=name:` 은 실패하고 맨 이름은 `name-2` 의 화면을 낸다. 화면 대상은 지금 있는 Claude pane(pane+pid)
+  이나 지금 있는 세션 이름뿐이다 — 아무 tmux 대상이나 받지 않는다.
+  맨 아래를 보고 있으면 따라 내려가고, 위로 올려 읽는 중이면 그 자리에 둔다. 가로는 스크롤한다.
+- 회신은 글 그대로(`white-space: pre-wrap`), 마크다운을 그리지 않는다.
+
+## 화면 탭의 ANSI → HTML 은 클라이언트가
+
+- 목록은 이제 ANSI 를 쓰지 않는다 — 화면 탭(`capture-pane -e`)만이다.
+- 서버는 캡처한 바이트를 그대로 보낸다. `app.js` 의 작은 해석기가 SGR(0·1·2·3·4·7·22–27,
+  30–37·90–97·38;5·38;2·39, 배경도 같다)만 읽고 나머지 이스케이프(OSC 8 등)는 버린다.
+- **글은 언제나 `textContent` 로 넣는다.** pane 내용·세션 이름·오류 문구 모두 남이 정할 수 있는 글이다.
+  `innerHTML` 은 카드의 [›] 아이콘(고정된 문자열)에만 쓴다.
+- 색은 ANSI 인덱스를 CSS 변수(`--a0`…`--a15`, 밝은·어두운 테마 두 벌, `prefers-color-scheme`)로 가리키고, 256색·
+  트루컬러는 값을 계산해 모두 CSSOM(`element.style`)으로 칠한다 — CSP 의 `style-src 'self'` 는 style 속성 글을 막지만
+  CSSOM 은 막지 않는다. 패널의 색 원칙(«팔레트는 터미널의 것», rendering.md)과 같다 — 우리가 고르는 것은 16색 표 하나뿐이다.
+- **넓은 글자는 2칸 상자로 감싼다.** 폰의 고정 폭 글꼴에는 한글이 없어 대체 글꼴로 그려지고, 그 폭이
+  정확히 2칸이 아니다 — Claude 의 `─` 선과 대화상자 테두리가 흔들린다. ASCII 가 아닌 글자는 `inline-block` 에
+  폭 `1ch`·`2ch` 를 주어 칸에 맞춘다. 폭 판정은 JS 의 범위 표(한글·CJK·전각·이모지)이고, Go 의
+  `ansi.StringWidth` 와 어긋나면 그 줄의 정렬만 틀린다(뜻은 그대로다).
+
+## 음성
+
+- 브라우저 `SpeechRecognition`(`webkitSpeechRecognition` 포함), `lang = "ko-KR"`, `interimResults = true`.
+- **듣는 동안 받아쓴 글을 입력줄 위에 크게(21px) 보여 준다**(«듣는 중» 상자). 확정된 낱말은 진하게, 아직
+  바뀔 수 있는 중간 결과는 흐리게. 듣기가 끝나면 상자가 접히고 글이 입력칸(17px)에 들어간다. 사용자 요청
+  «첫 화면에서 음성으로 했을 때 문자로 표기되는 부분» 의 답이다 — 1판은 보내기 창 안의 작은 한 줄이었다.
+- **자동으로 보내지 않는다** — 사용자가 입력칸에서 고친 뒤 [보내기]. 보낼 곳을 고르기 전에도 말할 수 있고,
+  그때는 «보낼 곳을 고르세요» 가 경고색으로 뜬다.
+- [그만] 을 누른 순간의 중간 결과도 입력칸에 넣는다 — iOS 는 멈추면 확정 결과 없이 끝날 때가 있다(실측 전, 폰에서 확인).
+  권한 거부(`not-allowed`)·말소리 없음(`no-speech`)은 알림으로 고칠 방법을 말한다.
+- 지원하지 않는 브라우저는 마이크 버튼을 숨기고 입력칸만 둔다(폰 키보드의 받아쓰기로 된다).
+- 마이크는 secure context 에서만 열린다 — `tailscale serve` 의 https 가 그 조건이다. `Permissions-Policy:
+  microphone=(self)` 를 보낸다.
+
+## 보안
+
+`mux serve` 는 사용자 권한으로 Claude 에게 글을 친다. 폰 쪽 신원은 Tailscale 이 붙이는 헤더 하나다.
+
+1. **바인드는 127.0.0.1 만.** `--addr` 가 루프백이 아니면 시작하지 않는다. tailnet·LAN 에 직접 열리지 않는다.
+2. **`Tailscale-User-Login` 이 `--allow` 목록과 같을 때만 응답한다.** 헤더가 없으면 403 — 이 기계에서
+   127.0.0.1 로 직접 들어온 요청이다. `--allow` 가 비면 시작하지 않는다(«아무나» 는 기본값이 될 수 없다).
+3. **`Tailscale-Funnel-Request` 헤더가 있으면 403.** funnel 을 쓰지 않지만, 누가 켜도 인터넷 요청이 닿지 않게.
+4. **Host 확인.** 루프백 포트는 이 기계의 브라우저에서도 닿는다. DNS 리바인딩으로 `evil.example` 을
+   127.0.0.1 로 바꾸면 그 페이지는 같은 출처로 헤더를 마음대로 붙여 읽을 수 있다. Host 의 이름이 `.ts.net`
+   으로 끝나지 않으면 403 이다(`--host-suffix` 로 다른 꼬리를 줄 수 있다). «box.ts.net.evil.example» 처럼 중간에
+   `.ts.net` 이 든 이름도 막는다.
+5. **POST 는 Origin 이 `https://<Host>` 와 같고 `Content-Type: application/json` 일 때만.** JSON 본문은
+   다른 출처에서 사전 요청 없이 보낼 수 없다. 본문은 8KB 로 자른다.
+6. **CSP** `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self';
+   frame-ancestors 'none'; base-uri 'none'; form-action 'none'` — 인라인 스크립트·스타일이 없다(테스트가 본다). 다른
+   사이트가 iframe 에 넣고 [보내기] 를 누르게 만들 수 없다(`X-Frame-Options: DENY` 도). `Permissions-Policy` 는 마이크만
+   열고, 모든 API 응답은 `Cache-Control: no-store`. 보안 헤더(CSP·X-Frame-Options·nosniff·Referrer-Policy·
+   Permissions-Policy)는 거절 응답에도 붙는다.
+7. 이 기계의 다른 프로세스는 헤더를 위조해 127.0.0.1 로 들어올 수 있다. 같은 사용자의 프로세스라면 이미
+   tmux 를 직접 부를 수 있으니 얻는 것이 없다. 이 기계를 다른 사람과 같이 쓰면 이 가정이 깨진다(아래 «버린 것»).
+
+## 띄우기 — 443 을 덮지 않는다
+
+요청서의 `tailscale serve 7690` 은 https **443** 에 건다. 이 기계의 443 은 이미 `http://127.0.0.1:7317` 에
+매여 있다(2026-11-17 `tailscale serve status`, 지금은 7317 을 듣는 프로세스가 없다). 덮지 않도록 다른 https
+포트를 쓴다: `tailscale serve --bg --https=8443 127.0.0.1:7690` → `https://<기계>.<tailnet>.ts.net:8443/`.
+끄는 것은 `tailscale serve --https=8443 off`. `mux serve` 는 tailscale 설정을 건드리지 않는다 — 사람이 한 번 건다.
+
+## 실측할 것 (구현 뒤, 폰 실측 전에)
+
+1. `tailscale serve` 가 들어온 `Tailscale-User-*` 헤더를 지우고 자기 값을 넣는가 — curl 로 위조 헤더를
+   붙여 tailnet 쪽에서 보낸다. 지우지 않으면 2번 규칙이 무너진다.
+2. 백엔드에 오는 `Host` 가 `…ts.net:8443` 인가(127.0.0.1:7690 으로 바뀌면 4번 규칙을 `X-Forwarded-Host` 로 바꾼다).
+3. 폰 Safari(iOS)·Chrome(Android)에서 `webkitSpeechRecognition` 이 ko-KR 로 도는가, 권한 대화상자가 뜨는가.
+4. 화면 탭에서 넓은 글자 상자로 Claude 의 선·대화상자 테두리가 맞는가. 카드의 글리프(⏳❗✅)가 폰 글꼴에서 같은 폭인가.
+5. 길게 누르기가 폰의 글자 선택·문맥 메뉴와 부딪치지 않는가(`user-select: none`, `contextmenu` 막기).
+6. 세션 페이지에서 뒤로 가기(Android 뒤로, iOS 왼쪽 가장자리 밀기)가 목록으로 돌아오고, `#s=<세션>` 주소로
+   새로 고치면 그 세션에 다시 들어가는가.
+
+## 검증
+
+- `go test ./serve` — 가짜 backend 로: 인증(헤더 없음·다른 사람·funnel·Host·Origin·Content-Type),
+  목록 JSON 의 모양, 보내기 결과표의 각 줄, pid 불일치, 회신·화면의 오류 문구, 정적 파일과 CSP.
+- `go test ./ui -run TestPhoneRows` — `PhoneRows` 의 순서·글리프·나이·승인 사유가 패널이 같은 세션에 그리는 값과 같다.
+- `go test ./tmux` — 작업 중 갈래가 `ErrAgentBusy` 이면서 `ErrAgentNotReady` 이고, 복사 모드 갈래는 Busy 가 아니다.
+  `ReadLastTurn` 이 마지막 턴의 보낸 말과 회신을 짝지어 돌려주고, 작업 중이면 보낸 말만 주며 `ErrTurnRunning`, 사람 턴이
+  아니면 그 종류를 돌려준다(transcript_test.go 의 기록 조각으로).
+- `go test ./cmd/mux` — `exitCode` 가 Busy 에도 5 를 낸다.
+- `scripts/tmux-assumptions.sh` — `capture-pane -t =name:` 이 그 세션만 잡고, 그 이름이 없으면 실패한다.
+- `make e2e` — 격리 서버의 가짜 Claude 에게 `mux serve` 를 거쳐 prompt 한 번(헤더·Host·Origin 을 붙인
+  POST), 목록에 그 세션이 있고, 대화(보낸 말·회신)·화면이 읽힌다. 헤더 없는 요청은 403.
+- 폰 실측: 목록 표시, 음성 → 보내기, 세션에 들어가기·돌아오기(위 «실측할 것»).
+
+2026-11-17 구현 때의 결과: 위 단위 테스트 전부, tmux-assumptions 80/80(tmux 3.8), e2e `TestServe*` 통과. 핵심 방어
+두 가지(Host 확인, pid 불일치)를 일부러 빼면 테스트가 실패하는 것도 확인했다. 화면은 격리 tmux 서버(가짜 Claude 넷 +
+셸 세션)에 `mux serve` 를 띄우고, 신원 헤더·Host·Origin 을 붙이는 임시 프록시(저장소 밖)를 앞에 둔 채 확인했다:
+headless Chrome 390×844 스크린샷(목록, `#s=` 로 연 세션 페이지 넷), 데스크톱 Chrome 에서 카드 누르기 → 보내기 →
+«보냈습니다», [›] → Claude 고르기 → 대화·화면 탭 → 브라우저 뒤로 가기, 작업 중인 Claude 에게 보내기 → «작업 중» →
+[대기열에 넣기] → 가짜 Claude 가 두 글을 모두 받음. 폰과 tailscale serve 는 아직이다(위 «실측할 것»).
+
+## 버린 것 / 2차
+
+- **SSE** — 폴링보다 빠르지만 연결을 쥐고 있어야 하고, «클라이언트가 없으면 아무것도 돌지 않는다» 를
+  지키려면 연결 수를 세야 한다. 2초면 이 쓰임에 충분하다.
+- **유닉스 소켓 바인드** (`tailscale serve unix:/run/user/1000/mux/serve.sock`) — 파일 권한이 다른 사용자와
+  브라우저(DNS 리바인딩)를 한 번에 막아 더 단단하다. tailscale 이 유닉스 소켓 백엔드에도 신원 헤더를 붙이는지
+  재지 못해 2차로 미뤘다. 재면 4번(Host) 규칙이 필요 없어진다.
+- **패널 줄을 그대로 그리기**(1판, `notifyLines` 의 `{session, ansi}`) — 요청서의 방식이었다. 13px 고정 폭 줄이
+  폰에서 빽빽해 세션이 서로 구분되지 않았다. 판정 함수만 나눠 쓰고 카드로 그린다.
+- **최근 이벤트 로그** — 폰에서는 보지 않는다(사용자). 2판에서 뺐다.
+- **따로 여는 보내기 창**(1판) — 음성으로 보내기까지 세 번 눌러야 했다. 첫 화면의 입력줄로 바꿨다.
+- **길게 누르기로만 들어가기, 아래에서 올라오는 창**(1·2판) — 길게 누르기는 있는 줄 모르고 iOS 의 글자 선택과
+  부딪친다. 창은 뒤로 가기·새로 고침과 맞지 않았다. [›] 와 페이지(`#s=<세션>`)로 바꿨다.
+- **회신만 보이는 탭**(1·2판) — 무엇에 대한 회신인지 보이지 않았다. 대화 탭이 보낸 말을 함께 보인다.
+- **서버 쪽 ANSI→HTML** — 서버가 HTML 을 만들면 이스케이프를 서버에서 책임져야 한다. 화면 탭 하나뿐이니
+  클라이언트가 한다.
+- **세션 이름·Claude 이름으로 지목** — pane id + pid 로 지목한다. 이름은 같은 것이 여럿일 수 있다(agent-api.md).
+- **승인 대화상자 응답(1/2/Esc)** — 대화상자 내용을 먼저 보여 줘야 하고, 잘못 누른 승인은 되돌릴 수 없다. 2차.

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<title>mux</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<div class="app">
+  <div class="stack" id="stack">
+    <div class="listview" id="listview">
+      <header class="apphead">
+        <span><b>mux</b><span id="count-sessions"></span></span>
+        <span class="live" id="live"><i></i><span id="live-text">불러오는 중</span></span>
+      </header>
+      <p class="offline" id="offline" role="alert" hidden></p>
+      <div class="cards" id="cards" aria-label="세션 목록"></div>
+    </div>
+
+    <section class="page" id="page" aria-labelledby="p-name" tabindex="-1" hidden>
+      <div class="page-head" id="page-head">
+        <button class="back" id="page-back" type="button">‹ 목록</button>
+        <div class="ptitle">
+          <span class="glyph" id="p-glyph"></span>
+          <h2 id="p-name"></h2>
+          <span class="state" id="p-state"></span>
+          <span class="age" id="p-age"></span>
+        </div>
+        <p class="pmeta" id="p-meta"></p>
+        <div class="targets" id="page-targets" role="radiogroup" aria-label="볼 Claude"></div>
+      </div>
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" id="tab-talk" aria-selected="true" aria-controls="panel-talk">대화</button>
+        <button class="tab" role="tab" id="tab-screen" aria-selected="false" aria-controls="panel-screen">화면</button>
+      </div>
+      <div class="panel" id="panel-talk" role="tabpanel"></div>
+      <div class="panel" id="panel-screen" role="tabpanel" hidden>
+        <p class="screen-meta">2초마다 갱신 · 가로로 밀어 봅니다</p>
+        <div class="screen-box" id="screen-box"></div>
+      </div>
+    </section>
+  </div>
+
+  <div class="composer" id="composer">
+    <div class="result" id="result" role="status" hidden></div>
+    <div class="to" id="to"></div>
+    <div class="targets" id="targets" role="radiogroup" aria-label="보낼 Claude"></div>
+    <div class="listen" id="listen" hidden>
+      <span class="lab"><i></i>듣는 중</span>
+      <p class="txt" id="listen-text" aria-live="polite"></p>
+    </div>
+    <div class="inrow">
+      <button class="round mic" id="mic" type="button" aria-label="말하기">
+        <svg class="i-mic" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="8" y="3" width="6" height="10.5" rx="3"></rect><path d="M5 10.5a6 6 0 0 0 12 0M11 16.5V19"></path></svg>
+        <svg class="i-stop" viewBox="0 0 22 22"><rect x="6.5" y="6.5" width="9" height="9" rx="2" fill="currentColor"></rect></svg>
+      </button>
+      <label for="prompt" class="sr">Claude 에게 보낼 말</label>
+      <textarea id="prompt" rows="1" placeholder="말하거나 직접 쓰세요"></textarea>
+      <button class="round go" id="sendbtn" type="button" aria-label="보내기" disabled>
+        <svg viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 18V5M5.5 10.5 11 5l5.5 5.5"></path></svg>
+      </button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -594,6 +594,24 @@ else
 	echo "  SKIP  script(1) 이나 mkfifo 가 없어 클라이언트를 붙이지 못했습니다"
 fi
 
+# ── 19. mux serve 의 화면 지목 ──────────────────────────────────────────────
+# docs/design/serve.md, serve/api.go 의 handleScreen. Claude 가 없는 세션의 화면은 그 세션의 활성 pane 을
+# «=name:» 으로 캡처한다. 맨 이름은 그 세션이 없을 때 접두사로 «name-2» 를 잡는다 — 17절의 kill-session·
+# set-option 과 같은 지목 규칙이 capture-pane 에서도 그런지 잰다.
+echo
+echo "mux serve 의 화면 지목 (docs/design/serve.md)"
+t new-session -d -s scr -x 80 -y 10 'printf "in-scr\n"; sleep 300'
+t new-session -d -s scr-2 -x 80 -y 10 'printf "in-scr-2\n"; sleep 300'
+sleep 0.3
+ok "capture-pane -e -t =name: 은 그 세션의 화면이다" "in-scr" \
+	"$(t capture-pane -p -e -t "=scr:" | grep -o 'in-scr[-0-9]*' | head -1)"
+t kill-session -t "=scr"
+ok "그 이름이 없으면 capture-pane -t =name: 은 실패한다" "fail" \
+	"$(t capture-pane -p -t "=scr:" >/dev/null 2>&1 && echo ok || echo fail)"
+ok "맨 이름은 그때 접두사로 name-2 를 잡는다 (그래서 = 와 : 를 붙인다)" "in-scr-2" \
+	"$(t capture-pane -p -t "scr" 2>/dev/null | grep -o 'in-scr[-0-9]*' | head -1)"
+t kill-session -t "=scr-2"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
 	echo "$CHECKED 개 전부 통과 — $VERSION 에서 mux 의 가정이 유지됩니다."

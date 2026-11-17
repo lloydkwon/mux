@@ -61,6 +61,9 @@ var (
 	ErrAgentGone     = errors.New("에이전트가 끝났다")
 	ErrAgentBlocked  = errors.New("에이전트가 대화상자에서 사람을 기다린다")
 	ErrAgentNotReady = errors.New("지금은 보낼 수 없다 — 아무것도 보내지 않았다")
+	// ErrAgentBusy 는 ErrAgentNotReady 중 «턴이 진행 중이라 --force 면 대기열에 들어가는» 갈래다. 늘
+	// ErrAgentNotReady 와 함께 감싸므로 종료 코드는 5 그대로다 — mux serve 가 이것에만 [대기열에 넣기] 를 띄운다.
+	ErrAgentBusy     = errors.New("작업 중이다")
 	ErrNotSubmitted  = errors.New("제출되지 않았고 입력창을 되돌렸다 — 다시 보내도 된다")
 	ErrPromptUnknown = errors.New("제출됐는지 알 수 없다 — pane 을 확인하고, 무작정 다시 보내지 마라")
 	ErrPromptNotSeen = errors.New("프롬프트가 대화 기록에 나타나지 않았다 — 제출은 됐을 수 있으니 다시 보내지 마라")

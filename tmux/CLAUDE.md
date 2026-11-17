@@ -24,5 +24,5 @@
 | `note.go` | note.md |
 | `session.go`, `types.go`, `window.go` | tui.md (`session.go` 는 tmux-config.md 의 `SessionProjectDir` 도) |
 | `language.go` | border.md (패널의 PyCharm 규칙은 panel.md) |
-| `agent.go`, `agent_prompt.go`, `agent_wait.go`, `transcript.go` | agent-api.md (상태 단어는 ai-state.md 와 대조) |
+| `agent.go`, `agent_prompt.go`, `agent_wait.go`, `transcript.go` | agent-api.md (상태 단어는 ai-state.md 와 대조). `ErrAgentBusy`·`ReadLastTurn` 은 serve.md 도 |
 | `viewport.go`, `vscodewindows.go` | 설계 문서 없음 — 파일 머리 주석이 정본 |

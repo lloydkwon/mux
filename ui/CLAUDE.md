@@ -22,3 +22,4 @@ tmux·파일·프로세스를 만지는 일은 `tea.Cmd` 로, 기능 스위치�
 | `border.go` | border.md |
 | `remote.go` | revive.md |
 | `setupoffer.go` | tmux-config.md |
+| `serve.go` (`PhoneRows` — mux serve 의 카드, 순수 함수) | serve.md |

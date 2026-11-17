@@ -85,6 +85,8 @@ func TestAgentExitCodes(t *testing.T) {
 		{tmux.ErrPromptNotSeen, 7}, // 제출은 됐을 수 있다 — 6(다시 보내도 됨)과 섞으면 두 번 제출된다
 		// tmux 가 감싸서 돌려줘도 같은 코드여야 한다.
 		{fmt.Errorf("%w: %%5 (approve)", tmux.ErrAgentBlocked), 3},
+		// ErrAgentBusy 는 mux serve 를 위한 구분일 뿐이다 — CLI 에는 여전히 «아무것도 보내지 않았다» 의 5 다.
+		{fmt.Errorf("%w (%w): %%5 가 working 상태다", tmux.ErrAgentNotReady, tmux.ErrAgentBusy), 5},
 	}
 	for _, tt := range tests {
 		if got := exitCode(tt.err); got != tt.want {
