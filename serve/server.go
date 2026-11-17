@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,12 @@ type Config struct {
 	Allow []string
 	// HostSuffix 는 Host 이름이 끝나야 하는 꼬리다(DNS 리바인딩 막기). 비면 DefaultHostSuffix.
 	HostSuffix string
+	// Whisper 는 녹음을 받아쓰는 명령이다(`<명령> --prompt=<글> <파일>` → {"text": …}). 비면 받아쓰기는 꺼지고
+	// 폰은 브라우저의 SpeechRecognition 을 쓴다.
+	Whisper string
+	// DictationFile 은 받아쓰기 용어 파일이다. 비면 읽지 않는다 — 시험이 개발자의 ~/.config/mux 에 닿지 않게
+	// 제로값이 «없음» 이고, 기본 경로는 cmd/mux 가 채운다.
+	DictationFile string
 }
 
 // normalized 는 설정을 검사하고 빈 값을 채운 사본을 돌려준다.
@@ -58,7 +65,16 @@ func (c Config) normalized() (Config, error) {
 	if !strings.HasPrefix(suffix, ".") {
 		suffix = "." + suffix
 	}
-	return Config{Addr: c.Addr, Allow: allow, HostSuffix: suffix}, nil
+	whisper := strings.TrimSpace(c.Whisper)
+	if whisper != "" {
+		// 받아쓰기를 처음 누를 때가 아니라 띄울 때 안다 — 폰에서는 «받아쓰지 못했습니다» 뿐이다.
+		path, err := exec.LookPath(whisper)
+		if err != nil {
+			return Config{}, fmt.Errorf("--whisper %q: %w (scripts/whisper/setup.sh 가 ~/.local/opt/mux-whisper/transcribe 를 만든다)", whisper, err)
+		}
+		whisper = path
+	}
+	return Config{Addr: c.Addr, Allow: allow, HostSuffix: suffix, Whisper: whisper, DictationFile: c.DictationFile}, nil
 }
 
 func isLoopback(host string) bool {
@@ -89,9 +105,17 @@ func Run(ctx context.Context, cfg Config, logOut io.Writer) error {
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  2 * time.Minute,
 		ErrorLog:     logger,
+		// 요청의 context 는 서버의 수명에서 나온다 — 끌 때(Shutdown 은 도는 요청을 취소하지 않는다) 받아쓰기 명령을
+		// 죽이고 임시 녹음을 지울 수 있게.
+		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
 	logger.Printf("http://%s 에서 듣는다 (허용: %s). 폰에서 열려면 한 번: tailscale serve --bg --https=8443 %s",
 		ln.Addr(), strings.Join(cfg.Allow, ", "), ln.Addr())
+	if cfg.Whisper != "" {
+		logger.Printf("받아쓰기: %s (용어 파일 %s)", cfg.Whisper, cfg.DictationFile)
+	} else {
+		logger.Printf("받아쓰기: 브라우저 (--whisper 없음)")
+	}
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
@@ -116,14 +140,29 @@ type server struct {
 	// listMu 는 목록 계산을 줄 세운다. 탭 두 개가 같은 순간 물어도 pgrep·ps·git 을 두 번 돌리지 않게 —
 	// 뒤에 온 쪽은 앞의 것이 채운 TTL 캐시를 읽는다.
 	listMu sync.Mutex
+	// tr 은 받아쓰기 명령이다. nil 이면 받아쓰기가 꺼져 있다(--whisper 없음).
+	tr transcriber
+	// transcribeMu 는 받아쓰기를 한 번에 한 건으로 줄 세운다 — 겹치면 기다리지 않고 busy 다.
+	transcribeMu sync.Mutex
 }
 
 func newHandler(cfg Config, b backend, logger *log.Logger) http.Handler {
-	s := &server{cfg: cfg, b: b, log: logger}
+	var tr transcriber
+	if cfg.Whisper != "" {
+		tr = commandTranscriber{path: cfg.Whisper}
+	}
+	return newHandlerWith(cfg, b, tr, logger)
+}
+
+func newHandlerWith(cfg Config, b backend, tr transcriber, logger *log.Logger) http.Handler {
+	s := &server{cfg: cfg, b: b, log: logger, tr: tr}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", serveStatic("index.html", "text/html; charset=utf-8"))
 	mux.HandleFunc("GET /app.js", serveStatic("app.js", "text/javascript; charset=utf-8"))
+	mux.HandleFunc("GET /record.js", serveStatic("record.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("GET /app.css", serveStatic("app.css", "text/css; charset=utf-8"))
+	mux.HandleFunc("GET /api/features", s.handleFeatures)
+	mux.HandleFunc("POST /api/transcribe", s.handleTranscribe)
 	mux.HandleFunc("GET /api/list", s.handleList)
 	mux.HandleFunc("POST /api/prompt", s.handlePrompt)
 	mux.HandleFunc("GET /api/turn", s.handleTurn)

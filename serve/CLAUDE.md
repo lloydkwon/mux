@@ -10,6 +10,14 @@
 | `api.go` (목록·보내기·대화·화면, 결과 갈래), `backend.go` | serve.md, agent-api.md (`PromptAgent`·종료 코드) |
 | `dialog.go` (대화상자 읽기·답하기·여러 개 고르기·Esc) | serve.md «대화상자에 답하기» |
 | `static/` (카드, 입력줄, 받아쓰기, 세션 페이지, 화면 탭의 ANSI→HTML) | serve.md |
+| `transcribe.go` (녹음 받기·받아쓰기 명령·프로세스 묶음 죽이기), `dictation.go` (용어 파일·프롬프트·바꿔 쓰기), `static/record.js` (MediaRecorder), `../scripts/whisper/` | serve.md «받아쓰기 — 서버 Whisper» |
+
+받아쓰기에서 되돌리기 쉬운데 되돌리면 안 되는 것 — 근거(측정)는 serve.md 에 있다: `transcribe.py` 의 묶음 처리
+(`BatchedInferencePipeline` — 순차 `model.transcribe` 는 30초 창 뒤에 프롬프트를 버린다, 타임스탬프는 끈 채로),
+`vad_filter=True`(끄면 무음에서 말을 지어낸다), `condition_on_previous_text=False`, `hotwords` 안 씀(뒤가 잘린다), 프롬프트는
+머리말 없는 목록(`dictationPrompt` — 머리말은 짧은 말에 새고, 문장은 용어를 망친다)이고 `--prompt=` 한 덩어리로 넘긴다
+(`-` 로 시작해도). 명령은 프로세스 묶음째 죽인다. 녹음 본문의 Content-Type 은 `audio/webm`·`audio/mp4` 뿐이다
+(`acceptsBody` — 단순 요청 형식 금지).
 
 화면 문구는 `static/app.js` 의 `RESULTS` 가 정한다 — 서버는 갈래(`result`)와 이유(`detail`)만 낸다. 글은 늘
 `textContent` 로 넣고, `innerHTML` 은 고정된 아이콘 문자열에만 쓴다(CSP 와 함께 XSS 를 막는 두 겹).

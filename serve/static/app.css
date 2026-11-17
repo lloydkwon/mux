@@ -249,6 +249,11 @@ button:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline
 .listen .txt { margin: 0; min-height: 1.45em; font-size: 21px; line-height: 1.45; font-weight: 500; word-break: keep-all; }
 .listen .txt .interim { color: var(--soft); }
 @keyframes blink { to { visibility: hidden; } }
+/* 서버 받아쓰기(.rec): 듣는 동안은 녹음 시간과 소리 크기만 — 글은 다 말한 뒤 한꺼번에 온다 */
+.listen.rec .txt { display: none; }
+.listen .lab span { font-variant-numeric: tabular-nums; }
+.meter { height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--stop) 15%, transparent); overflow: hidden; }
+.meter i { display: block; width: 0; height: 100%; border-radius: inherit; background: var(--stop); transition: width 0.1s linear; }
 
 .inrow { display: flex; align-items: flex-end; gap: 8px; }
 .inrow textarea {

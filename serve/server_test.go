@@ -202,7 +202,9 @@ func TestStaticFiles(t *testing.T) {
 	h := testServer(t, newFake())
 	tests := []struct{ path, ctype, contains string }{
 		{"/", "text/html", `src="/app.js"`},
+		{"/", "text/html", `src="/record.js"`},
 		{"/app.js", "text/javascript", "SpeechRecognition"},
+		{"/record.js", "text/javascript", "MediaRecorder"},
 		{"/app.css", "text/css", "prefers-color-scheme"},
 	}
 	for _, tt := range tests {

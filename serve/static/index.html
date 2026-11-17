@@ -8,6 +8,7 @@
 <title>mux</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/app.css">
+<script src="/record.js" defer></script>
 <script src="/app.js" defer></script>
 </head>
 <body>
@@ -51,7 +52,8 @@
     <div class="to" id="to"></div>
     <div class="targets" id="targets" role="radiogroup" aria-label="보낼 Claude"></div>
     <div class="listen" id="listen" hidden>
-      <span class="lab"><i></i>듣는 중</span>
+      <span class="lab"><i></i><span id="listen-lab">듣는 중</span></span>
+      <div class="meter" id="listen-meter" hidden><i></i></div>
       <p class="txt" id="listen-text" aria-live="polite"></p>
     </div>
     <div class="inrow">

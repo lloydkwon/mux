@@ -2,7 +2,8 @@
 
 > 관련 코드: serve/ (server.go, auth.go, api.go, backend.go, static/), ui/serve.go(`PhoneRows`),
 > tmux/agent.go(`ErrAgentBusy`), tmux/agent_wait.go(`ReadLastTurn`), tmux/transcript.go(`turnPromptText`),
-> cmd/mux/serve.go(`newServeCmd`), e2e/serve_e2e_test.go, scripts/tmux-assumptions.sh 19절
+> cmd/mux/serve.go(`newServeCmd`), e2e/serve_e2e_test.go, scripts/tmux-assumptions.sh 19절,
+> 받아쓰기는 serve/transcribe.go·dictation.go·static/record.js·scripts/whisper/(아래 «받아쓰기 — 서버 Whisper»)
 >
 > 2026-11-17 에 설계하고 같은 날 구현했다. 요청은 claude.ai 대화에서 준비한 요청서(SERVE-REQUEST.md, 커밋하지 않음)였다.
 
@@ -23,7 +24,7 @@ mux serve --allow lloydkwon@gmail.com            # 127.0.0.1:7690 에만 바인�
 tailscale serve --bg --https=8443 127.0.0.1:7690  # tailnet 안에서만 https 로 연다
 ```
 
-**하지 않는 것**: 서버 쪽 받아쓰기(Whisper), 푸시 알림, 번호 없는 메뉴(폴더 신뢰 등)에 답하기,
+**하지 않는 것**: 푸시 알림, 번호 없는 메뉴(폴더 신뢰 등)에 답하기,
 herdr 소스, funnel(인터넷 공개), 세션 만들기·닫기·전환. **보내기는 Claude pane 만** 한다 —
 `mux agent prompt` 의 확인 절차(입력창 정확 일치·되돌리기)가 Claude 의 `❯` 입력창에만 기대기
 때문이다(agent-api.md). 셸·개발 서버 pane 에는 보내기 버튼이 없다.
@@ -272,7 +273,188 @@ freeText,draft,checkbox,checked}], current, hint, multi}}`. `none` 이면 폰은
   폭 `1ch`·`2ch` 를 주어 칸에 맞춘다. 폭 판정은 JS 의 범위 표(한글·CJK·전각·이모지)이고, Go 의
   `ansi.StringWidth` 와 어긋나면 그 줄의 정렬만 틀린다(뜻은 그대로다).
 
-## 음성
+## 받아쓰기 — 서버 Whisper
+
+> 코드: serve/transcribe.go(`handleTranscribe`·`commandTranscriber`), serve/dictation.go, serve/static/record.js,
+> app.js 의 «받아쓰기 (서버 Whisper)», scripts/whisper/(setup.sh·transcribe.py·check.sh), e2e `TestServeTranscribes`.
+> 2026-11-17 에 설계하고 같은 날 구현했다.
+
+처음 설계에서 «하지 않는 것» 이던 서버 쪽 받아쓰기를 들인다. 사용자가 «contextualStrings·커스텀 언어 모델로 도메인
+용어 인식률을 높일 수 있다는데» 를 물어 확인해 보니, 그 둘은 iOS 앱 API 이고 Safari 는 웹 페이지에 넘기지 않는다
+(WebKit `WebSpeechRecognizerTask.mm` 은 `lang`·`continuous`·`interimResults`·`maxAlternatives` 만 받는다. 웹 표준의
+`SpeechRecognition.phrases` 는 데스크톱 Chrome 142+ 뿐이고 Safari·Android Chrome 에는 없다 — MDN 호환 데이터, 2026-11-17).
+그래서 같은 다섯 문장(용어 12개)을 사용자의 폰으로 녹음해 견줬다:
+
+| | Safari 받아쓰기 (그전) | Whisper, 프롬프트 없음 | Whisper 순차, 용어 프롬프트 | **Whisper 묶음, 용어 목록 (지금)** |
+|---|---|---|---|---|
+| 틀린 용어 / 12 | 10 | 7 | 4 | **2** — herdr(허더)·systemd(시스템 뒤에) |
+| 일반 낱말 틀림 | 4 (플래그→블랙, 패널에→패널 노래, 폭→쪽, 세션→세트) | 1 (기준→기지) | 1 | 1 |
+| 빠진 말 | «herdr 워크» | 없음 | 없음 | 없음 |
+
+Safari 는 따로 받아쓴 것이라 발음이 같지 않다. Whisper 는 large-v3-turbo, 41초 iPhone 음성 메모. 셋째 칸은 처음 측정 —
+`model.transcribe`(순차)에 «개발 대화. 용어: 목록.» — 이고, 넷째 칸이 구현한 것(묶음 처리 + 머리말 없는 목록, 아래
+«되돌리면 안 되는 설정»)이다. 셋째 칸에서 안 고쳐진 go vet·golangci-lint 는 녹음의 30초 뒤에 있어 **프롬프트를 받지
+못한 것**이었다(검토에서 찾음). 사용자 결정: faster-whisper 를 GPU 로, 듣는 동안은 녹음 시간만 보인다.
+
+```
+폰        [말하기] → getUserMedia → MediaRecorder(audio/webm;codecs=opus, 없으면 audio/mp4) — «녹음 중 0:12»
+          [그만] 또는 2분 → POST /api/transcribe (본문 = 녹음 그대로, Content-Type = 녹음 형식) — «받아쓰는 중…»
+mux serve 인증 → 한 번에 한 건 → 임시 파일(0600) → <--whisper 명령> --prompt=<용어> <파일>  (요청이 끊기면 죽인다)
+          → stdout {"text": …} → 바꿔 쓰기 표 → {"result":"ok","text":…}
+폰        입력칸의 글 뒤에 붙인다 — 저절로 보내지 않는다(지금과 같다)
+```
+
+**켜고 끄기.** `mux serve --whisper <명령>`. 비면 꺼짐이고(제로값), 지금의 브라우저 받아쓰기(아래 «음성»)가 그대로 돈다.
+폰은 처음에 `GET /api/features` → `{"dictation":"whisper"|"browser"}` 로 안다. MediaRecorder 가 없으면 처음부터, 녹음을
+시작하지 못하면 그 뒤로 이 페이지는 브라우저 받아쓰기다 — 곧바로 띄우지 않고 «다시 누르면 브라우저 받아쓰기» 라고 알린다(마이크를
+묻고 실패한 뒤라 사용자 동작 밖이고, Safari 의 받아쓰기가 그때 시작해 주는지 모른다). 받아쓰기가 404 면(서버가 `--whisper`
+없이 다시 떴다) 같은 식으로 물러선다. 마이크 권한을 거절당했을 때는 물러서지 않는다 — 브라우저 받아쓰기도 같은 마이크를
+쓴다 — 허용하는 자리(주소창의 aA › 웹사이트 설정 › 마이크)를 알린다. `--whisper` 는 띄울 때 `exec.LookPath` 로
+확인한다 — 없는 명령이면 받아쓰기를 처음 누를 때가 아니라 시작할 때 실패한다. 용어 파일의 기본 자리는 `--dictation` 이고,
+제로값(빈 경로)은 «읽지 않음» 이라 `go test ./serve` 가 개발자의 `~/.config/mux` 에 닿지 않는다.
+
+**받아쓰기 명령 — `mux serve` 는 Python 을 모른다.** 계약은 `<명령> --prompt=<글> <오디오 파일>` → stdout 에 JSON 한 줄
+`{"text": "…"}`, 종료 코드 0. 그 밖은 실패다. 셸을 거치지 않는다(exec). 프롬프트는 `--prompt=` 한 덩어리다 — `--prompt <글>`
+로 나눠 넘기면 `-` 로 시작하는 프롬프트(용어가 `--resume` 하나뿐)를 argparse 가 옵션으로 읽어 매번 실패한다(진짜 명령으로
+확인). 명령은 저장소의 `scripts/whisper/`:
+
+- `setup.sh` 가 `~/.local/opt/mux-whisper/` 에 uv 가상환경을 고정 버전으로 만든다 — faster-whisper 1.2.1, av 15.1.0
+  (19 는 1.2.1 이 넘기는 `metadata_errors` 를 받지 않아 열지 못했다), ctranslate2 4.8.5, nvidia-cublas-cu12 12.9.3.13,
+  nvidia-cudnn-cu12 9.27.0.42. CUDA 라이브러리는 pip 의 것이라 sudo 도 CUDA 툴킷도 필요 없다. `LD_LIBRARY_PATH` 를 거는
+  `transcribe` 래퍼를 두고, 모델(1.6GB)은 setup 때 받는다 — 첫 요청이 내려받기를 기다리지 않게.
+- `transcribe.py` 는 `language="ko"`, `beam_size=5`, `device="cuda"`, `compute_type="float16"`. CUDA 를 못 쓰면 실패로
+  끝난다 — CPU 로 몰래 물러서지 않는다(몇십 초가 걸리는데 폰은 이유를 모른다). 받아쓴 글은 stdout 에만 쓴다.
+- **요청마다 띄운다.** 41초 녹음이 1.6초(Python 시작과 모델 읽기까지, 묶음 처리 — `check.sh`)였고, GPU 메모리는 도는
+  동안만 쓴다(82초 녹음에서 최대 2.6GB, 순차는 2.3GB). m4a(AAC)·webm(Opus)을 PyAV 가 바로 읽는다(0.83·0.74초, 같은 글) —
+  ffmpeg 가 필요 없다. 상주 서버는 두지 않는다(«접속한 클라이언트가 없으면 아무것도 돌지 않는다»).
+
+**되돌리면 안 되는 설정**(2026-11-17, 같은 녹음으로 잼):
+
+- **묶음 처리(`BatchedInferencePipeline`)** — 순차 `model.transcribe` 는 이어쓰기를 끄면 첫 30초 창 뒤에 프롬프트를 버린다
+  (faster-whisper 1.2.1 `prompt_reset_since = len(all_tokens)`). 같은 녹음을 두 번 이은 82초에서 순차는 뒤 절반이 «묵스·티묵스·
+  인텔리제이·파이참·이 두위» 로 돌아갔고, 묶음 처리는 VAD 로 자른 30초 이하 조각마다 프롬프트를 붙여 두 절반 모두 mux·tmux·
+  IntelliJ·PyCharm·e2e·go vet·golangci-lint·origin·push 를 맞혔다. 무음·잡음은 그대로 빈 글이고 더 빠르다(82초 0.85초,
+  순차 1.24초). 묶음 처리의 기본값 `without_timestamps=True` 를 바꾸지 않는다 — 타임스탬프를 켜자 3초 조각이 «go vet, go
+  vet, …» 를 열두 번 되풀이했다. 낱말 중간에서 자른 3–4초 조각 여섯은 순차와 묶음이 번갈아 나았다(묶음은 5개 용어
+  프롬프트에서 «mux 패널에서» 를 «mux, panel.» 로, 순차는 «커밋 메시지» 를 «commit message» 로) — 짧은 실제 발화는 폰에서 본다.
+- `vad_filter=True` — 끄면 8초 무음·잡음에서 «다음 영상에서 만나요.» 를 지어냈다(whisper.cpp 는 «감사합니다.»). 켜면 빈 글이다.
+- `condition_on_previous_text=False` — 순차에서 켜 둔 채 프롬프트를 주면 마지막 문장을 여섯 번 되풀이하거나 뒤 절반이 «Opt if
+  the bend for the bend…» 가 됐고, 돌릴 때마다 달랐다(온도 폴백). 묶음 처리는 늘 끄지만 뜻을 남겨 둔다.
+- `hotwords` 를 쓰지 않는다 — «Go, pect,» 에서 끊겨 뒷부분을 잃었다.
+- 프롬프트는 문장이 아니라 **목록**이다 — 문장으로 쓴 프롬프트는 «kitty 기준» 을 «pt기즈», mux 를 «mx» 로 바꿨다.
+- 프롬프트에 **머리말을 붙이지 않는다.** 브라우저 시험에서 3초짜리 녹음이 «용어:" mux 패널에서» 로 나왔다 — 짧은 말에서는
+  프롬프트의 글이 받아쓴 글로 샌다. 같은 녹음을 잘라 견줬다(용어 26개, 순차 처리 때 잰 것 — 묶음 처리에서도 목록만 둔 3초
+  조각은 «mux 패널에서» 였다):
+
+  | 프롬프트 | 3초 «mux 패널에서» | 41초 전체에서 놓친 용어 |
+  |---|---|---|
+  | «개발 대화. 용어: 목록.» | «용어. mux 패널에서» | 없음 |
+  | «개발 대화. 목록.» | 바름 | Haiku(하이쿠)·e2e(이트위) |
+  | «목록.» (지금) | 바름 | e2e(이트위) |
+
+  잘라 낸 다른 조각(3–5초 넷)은 셋 다 같았다. 낱말 중간에서 자른 2초 조각은 프롬프트가 없어도 엉뚱한 말(«그 다음에 거기서»)이
+  나왔다 — 아주 짧은 녹음은 원래 믿을 수 없다. 순차에서 목록만 두면 놓치던 e2e 는 묶음 처리에서 맞았다.
+
+**용어와 바꿔 쓰기 — `~/.config/mux/dictation.txt`.** 한 줄에 하나: `용어` 는 프롬프트로, `틀린 말 => 바른 말` 은 받아쓴 뒤
+바꿔 쓰기로, `#` 은 주석. 요청마다 읽는다(고친 뒤 다시 띄울 필요가 없다). 파일이 없으면 세션 이름만 쓴다.
+
+- 프롬프트는 지금 세션 이름 + 파일의 용어를 쉼표로 늘어놓고 마침표로 끝낸 목록이다(`dictationPrompt`). 숫자뿐인 세션 이름은
+  빼고, 파일 용어와 겹치는 이름은 파일 쪽에 한 번만 둔다. faster-whisper 는 프롬프트의 **끝** 223 토큰만 쓴다(`get_prompt`)
+  — 넘치면 앞의 세션 이름부터 잘리도록 사람이 고른 파일 용어를 뒤에 둔다. 용어 26개가 97 토큰(머리말 포함)이었다. tmux 를
+  읽지 못하면 세션 이름 없이 받아쓴다.
+- 바꿔 쓰기는 글자 그대로(정규식이 아니다), 파일 순서대로. 프롬프트로 안 고쳐진 herdr·systemd 가 이 표의 몫이다. 잘못
+  바뀌어도 사람이 입력칸에서 보고 고친다 — 저절로 보내지 않는다.
+
+**서버 — `POST /api/transcribe`.**
+
+- 인증은 다른 POST 와 같다(신원 헤더·Host·Origin). Content-Type 은 이 경로에서만 `audio/webm`·`audio/mp4` 를 받는다. 둘 다
+  CORS 의 단순 요청 형식이 아니어서 다른 출처는 사전 요청 없이 보내지 못한다 — JSON 만 받는 이유와 같다. 단순 요청 형식인
+  `multipart/form-data`·`text/plain` 은 받지 않는다.
+- 본문 상한 10MB(413). 폰은 32kbps 로 녹음한다(`audioBitsPerSecond`, 2분 약 0.5MB) — Chrome 의 기본값으로는 2분이 1.9MB
+  였고, 32kbps Opus 로 바꾼 녹음은 원본과 같은 글이 나왔다. 41초 AAC 음성 메모는 0.7MB. 한 번에 한 건이고 겹치면 `busy`.
+- 녹음은 0600 임시 파일에 쓰고 끝나면 지운다. 명령은 요청의 context 에 60초 상한을 걸어 돌린다 — 폰이 끊으면(잠김·망 바뀜,
+  보내기를 눌러 거둠) 프로세스를 죽인다. **프로세스 묶음째 죽인다**(`Setpgid` + `kill(-pgid)`) — 래퍼가 exec 하지 않았거나
+  자식을 띄웠어도 GPU 를 쥔 Python 이 남지 않게. stdout 은 64KB 까지 읽고, 오류는 stderr 의 마지막 줄이다.
+- 서버 전체의 ReadTimeout(15초)·WriteTimeout(60초)은 JSON 요청에 맞춘 것이라, 이 요청만 `http.ResponseController` 로
+  읽기 60초·쓰기 130초로 늘린다(느린 망의 녹음 올리기와 받아쓰기).
+- 요청의 context 는 서버의 수명에서 나온다(`BaseContext`) — 끌 때(`Shutdown` 은 도는 요청을 취소하지 않는다) 받아쓰기를
+  죽이고 임시 녹음을 지운다.
+- 응답은 늘 200 에 `{result, text?, detail?}` 다(인증·형식 오류만 4xx): `ok`, `empty`(말소리를 못 들었다), `busy`,
+  `error`(detail 은 명령의 마지막 오류 줄).
+- 로그는 «받아쓰기 로그인 N KB 1.9초: ok (M자)» 한 줄. 녹음과 글은 남기지 않는다. 명령이 계약을 어겨 JSON 이 아닌 것을 내면
+  그 내용도 싣지 않는다(바이트 수만) — 받아쓴 맨 글일 수 있다.
+
+**폰.**
+
+- [말하기] → «녹음 중 0:12» 와 소리 크기 막대(`AnalyserNode` — 들리고 있는지 보인다). [그만] 또는 2분에 끝난다.
+  끝나면 «받아쓰는 중…», 글이 오면 입력칸의 글 뒤에 붙인다.
+- 끝나는 즉시 마이크 트랙을 멈춘다 — iPhone 의 마이크 표시가 남지 않게. 페이지가 가려지면 거기까지 녹음한 것을 받아쓴다
+  (말한 것을 버리지 않는다).
+- 받아쓰기가 실패하면 녹음을 들고 있다가 [다시 받아쓰기] 를 띄운다 — 다시 말하지 않아도 된다. 다음 녹음을 시작하면 버린다.
+  `empty` 는 «말소리를 듣지 못했습니다». 답을 받지 못했어도 Claude 에게는 아무것도 가지 않았으니 그렇게 말한다.
+- 서버가 녹음을 거절하면(4xx) [다시 받아쓰기] 를 띄우지 않는다 — 다시 올려도 같다. 404 는 위 «켜고 끄기» 처럼 물러선다.
+- 받아쓰는 동안 마이크 버튼은 꺼진다. [보내기]·답하기는 정말 보낼 때 녹음·받아쓰기를 거둔다(올리는 중이면 fetch 를 끊는다 —
+  서버가 명령을 죽인다). 늦게 온 글이 보낸 뒤의 입력칸에 붙지 않는다. 700자 넘김처럼 보내기가 막히면 거두지 않는다 — 아직
+  받아쓰지 않은 녹음을 버리지 않게.
+- Claude 가 없는 세션의 페이지로 넘어가 입력줄이 숨으면 거기까지를 받아쓴다 — 숨은 [그만] 뒤에서 마이크가 2분 동안 켜져
+  있지 않게. 글은 목록으로 돌아오면 입력칸에 있다.
+- 녹음은 조각으로 나눠 받지 않는다(MediaRecorder 의 timeslice 없음) — 멈출 때 한 덩어리로 받는다. Safari 가 조각마다 내는
+  mp4 를 이어 붙인 파일이 온전한지는 재지 않았다. [그만] 뒤 끝 신호(`stop` 사건)가 2초 안에 안 오면 그때까지 받은 것으로
+  마치고 마이크를 놓는다 — 브라우저 받아쓰기에서 iOS 가 끝 신호를 안 보낸 일이 있다(MediaRecorder 로는 재지 않았다).
+  녹음기를 만들거나 시작하다 실패해도 마이크를 놓는다. 소리 크기의 `AudioContext` 는 누른 순간에 만든다(iOS 는 사용자 동작
+  밖에서 만든 것을 멈춰 둔다).
+- 녹음 코드는 새 파일 `static/record.js`(`window.MuxRecorder`)에 둔다 — `app.js` 가 이미 1300줄이다.
+
+**버린 것.** whisper.cpp CPU(41초에 9.7초, «PR 올리기» 를 «돌리기» 로 들었다). whisper.cpp GPU(이 기계에 CUDA 툴킷이 없고,
+Docker 에 NVIDIA 런타임이 없다). 상주 서버(GPU 2.6GB 를 늘 쥐고 서비스가 하나 는다 — 요청마다 2초 안팎이면 된다). 듣는 동안은
+Safari 글을 보이고 끝나면 Whisper 글로 바꾸기(iPhone 이 마이크를 두 곳에 함께 주는지 모른다, 사용자 결정으로 하지 않음).
+클라우드 받아쓰기(녹음이 기계 밖으로 나간다). iOS 앱의 `contextualStrings`(macOS·Xcode 가 있어야 빌드한다).
+
+**검증.**
+
+- `go test ./serve`(transcribe_test.go·dictation_test.go) — 꺼짐(404, `features` 가 browser), Content-Type(받아쓰기는
+  audio/webm·audio/mp4 만, 다른 POST 는 JSON 만 — multipart·text/plain·form 은 어디서도 415), 다른 Origin 403, 빈 녹음 400,
+  413, `busy`(한 번에 한 건), `empty`, `error`, `ok` 와 바꿔 쓰기, 용어 파일을 요청마다 읽음, 프롬프트의 모양, tmux 없이도
+  받아씀, 0600 임시 파일이 끝나면 사라짐, 폰이 끊으면 명령의 context 가 끝남, 로그에 글이 없음. 명령 쪽은 **테스트 바이너리
+  자신**을 가짜 받아쓰기로 띄워(`TestMain` 의 `MUX_FAKE_WHISPER`) 진짜 exec 를 거친다 — 계약대로의 인자(프롬프트의 `$(…)` 는
+  글자 그대로, `-` 로 시작하는 프롬프트도 한 덩어리), stderr 마지막 줄, JSON 아닌 출력(그 내용이 오류에 실리지 않음), 64KB
+  넘는 출력, 시간 초과에 **자식 프로세스까지** 죽음.
+- 핵심 방어를 하나씩 빼면 테스트가 실패하는지 봤다(2026-11-17, 10가지 모두 잡힘): 묶음째 죽이기, 녹음 파일 지우기, 한 번에 한 건,
+  다른 경로의 multipart·text/plain 허용, 파일 용어를 앞에 두기, 폰이 끊어도 계속, 로그에 글, 오류에 명령 출력.
+- `scripts/whisper/check.sh` — 진짜 모델로 무음 webm·무음 m4a·잡음 webm 을 받아써 빈 글인지(읽기와 VAD 가드). 3/3, 그리고
+  사용자 녹음 41초가 1.6초(묶음 처리).
+- 검토(새 컨텍스트의 리뷰 에이전트)가 찾은 것을 고쳤다: 프롬프트가 첫 30초에만 걸림(→ 묶음 처리), 녹음기 시작 실패에 마이크를
+  놓지 않음, 끝 신호를 기다리는 시간 상한 없음, `-` 로 시작하는 프롬프트, 오류 로그에 명령 출력, 막힌 보내기가 녹음을 버림,
+  물러서기 알림이 곧바로 지워짐, 끌 때 받아쓰기가 남음, 숨은 입력줄 뒤의 녹음, 4xx 에 [다시 받아쓰기].
+- e2e `TestServeTranscribes` — 빌드한 mux 를 `--whisper <가짜 셸 스크립트> --dictation <파일>` 로 띄워 features·녹음 올리기·
+  세션 이름이 든 프롬프트·바꿔 쓰기·임시 파일 없음·multipart 415.
+- 브라우저(저장소 밖 시험): 격리 tmux 서버 + 작업 트리의 `mux serve` + 신원 헤더를 붙이는 프록시 + headless Chrome 157 을
+  CDP 로 몰았다. 가짜 마이크에 **사용자 녹음**을 넣어(`--use-file-for-fake-audio-capture`, 오디오 서비스 샌드박스를 꺼야 파일을
+  읽는다) 녹음(webm, 12초 47KB — 32kbps 로 정하기 전에는 189KB) → 올리기 → 진짜 Whisper 1.4초 → 입력칸까지. 그 밖에 받아쓰기
+  실패 → [다시 받아쓰기] 가 같은 녹음(같은 바이트 수)을 다시 올림, `empty` 알림, 마이크 거절 알림, 녹음기 시작 실패 → 마이크
+  트랙이 모두 끝나고 다시 누르면 브라우저 받아쓰기, 녹음 중 Claude 없는 세션 페이지로 → 입력줄이 숨고 녹음을 올림, 화면을
+  가리면 녹음을 올림, `--whisper` 없이 띄우면 아무것도 올리지 않고 브라우저 받아쓰기, 2분 상한에서 저절로 올림(1분 58초에
+  녹음 중, 2분에 올림). 390×844 스크린샷으로 녹음 중·받아쓰는 중·실패 알림의 모양을 봤다.
+- 폰에서 볼 것(«실측할 것» 7).
+
+**띄우기.** `scripts/whisper/setup.sh` 한 번(uv 필요, 모델이 이미 캐시에 있으면 몇 초), `scripts/whisper/check.sh` 로 확인,
+`~/.config/mux/dictation.txt` 쓰기, mux-serve 서비스의 `ExecStart` 에 `--whisper %h/.local/opt/mux-whisper/transcribe` 를
+더하기(dotfiles 의 유닛 파일). 측정에서 나온 시작점 — 묶음 처리에서도 남은 것은 herdr·systemd 둘이다:
+
+```
+# 용어 — Whisper 의 프롬프트로
+herdr
+systemd
+golangci-lint
+go vet
+e2e
+# 틀린 말 => 바른 말 — 받아쓴 뒤 글자 그대로 바꾼다
+허더 워크트리 => herdr 워크트리
+허드워크트리 => herdr 워크트리
+허드 워크트리 => herdr 워크트리
+```
+
+## 음성 — 브라우저 받아쓰기 (`--whisper` 가 없을 때)
 
 - 브라우저 `SpeechRecognition`(`webkitSpeechRecognition` 포함), `lang = "ko-KR"`, `interimResults = true`.
 - **듣는 동안 받아쓴 글을 입력줄 위에 크게(21px) 보여 준다**(«듣는 중» 상자). 확정된 낱말은 진하게, 아직
@@ -314,7 +496,9 @@ freeText,draft,checkbox,checked}], current, hint, multi}}`. `none` 이면 폰은
    으로 끝나지 않으면 403 이다(`--host-suffix` 로 다른 꼬리를 줄 수 있다). «box.ts.net.evil.example» 처럼 중간에
    `.ts.net` 이 든 이름도 막는다.
 5. **POST 는 Origin 이 `https://<Host>` 와 같고 `Content-Type: application/json` 일 때만.** JSON 본문은
-   다른 출처에서 사전 요청 없이 보낼 수 없다. 본문은 8KB 로 자른다.
+   다른 출처에서 사전 요청 없이 보낼 수 없다. 본문은 8KB 로 자른다. 받아쓰기(`/api/transcribe`)만 녹음 형식
+   `audio/webm`·`audio/mp4` 를 받는다(10MB) — 이 둘도 CORS 의 단순 요청 형식이 아니다. 단순 요청 형식(`multipart/form-data`·
+   `text/plain`·form)은 어느 경로도 받지 않는다(`acceptsBody`).
 6. **CSP** `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self';
    frame-ancestors 'none'; base-uri 'none'; form-action 'none'` — 인라인 스크립트·스타일이 없다(테스트가 본다). 다른
    사이트가 iframe 에 넣고 [보내기] 를 누르게 만들 수 없다(`X-Frame-Options: DENY` 도). `Permissions-Policy` 는 마이크만
@@ -343,6 +527,9 @@ freeText,draft,checkbox,checked}], current, hint, multi}}`. `none` 이면 폰은
 5. 길게 누르기가 폰의 글자 선택·문맥 메뉴와 부딪치지 않는가(`user-select: none`, `contextmenu` 막기).
 6. 세션 페이지에서 뒤로 가기(Android 뒤로, iOS 왼쪽 가장자리 밀기)가 목록으로 돌아오고, `#s=<세션>` 주소로
    새로 고치면 그 세션에 다시 들어가는가.
+7. 서버 받아쓰기(`--whisper`): iPhone Safari 가 무슨 형식으로 녹음하는가(서버 로그의 크기와 `file`), 마이크 권한을 들어올
+   때마다 묻는가, 녹음이 끝나면 상태 막대의 마이크 표시가 꺼지는가, 소리 크기 막대가 움직이는가, 화면을 잠갔다 돌아오면
+   [다시 받아쓰기] 가 뜨는가, 같은 다섯 문장의 결과.
 
 ## 검증
 

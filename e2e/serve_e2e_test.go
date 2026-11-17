@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -29,8 +30,8 @@ type serveClient struct {
 	base string
 }
 
-// startServe 는 빈 포트에 mux serve 를 띄우고, 듣기 시작할 때까지 기다린다.
-func startServe(t *testing.T) *serveClient {
+// startServe 는 빈 포트에 mux serve 를 띄우고, 듣기 시작할 때까지 기다린다. args 는 serve 에 더 줄 플래그다.
+func startServe(t *testing.T, args ...string) *serveClient {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -39,7 +40,7 @@ func startServe(t *testing.T) *serveClient {
 	addr := ln.Addr().String()
 	ln.Close()
 
-	cmd := exec.Command(muxBin, "serve", "--addr", addr, "--allow", serveLogin)
+	cmd := exec.Command(muxBin, append([]string{"serve", "--addr", addr, "--allow", serveLogin}, args...)...)
 	cmd.Env = append(os.Environ(), "TMUX_PANE=")
 	var log bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &log, &log
@@ -93,6 +94,26 @@ func (c *serveClient) do(method, path, body string, signed bool) (int, []byte) {
 
 func (c *serveClient) get(path string, signed bool) (int, []byte) {
 	return c.do(http.MethodGet, path, "", signed)
+}
+
+// postAudio 는 폰의 녹음 올리기다 — 본문은 녹음 그대로, Content-Type 은 녹음 형식.
+func (c *serveClient) postAudio(body, contentType string) (int, []byte) {
+	c.t.Helper()
+	req, err := http.NewRequest(http.MethodPost, c.base+"/api/transcribe", strings.NewReader(body))
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	req.Host = serveHost
+	req.Header.Set("Tailscale-User-Login", serveLogin)
+	req.Header.Set("Origin", "https://"+serveHost)
+	req.Header.Set("Content-Type", contentType)
+	resp, err := (&http.Client{Timeout: 70 * time.Second}).Do(req)
+	if err != nil {
+		return 0, nil
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, data
 }
 
 type serveAgent struct {
@@ -432,4 +453,49 @@ func TestServeAnswersAMultiSelect(t *testing.T) {
 		t.Fatalf("제출: %v", res)
 	}
 	eventually(t, "고른 것이 Claude 에게 닿는다", 15*time.Second, func() bool { return c.reply(a) == "answers: 중단, 로그 보강" })
+}
+
+// 받아쓰기를 가짜 명령으로 끝까지 돌린다(docs/design/serve.md «받아쓰기 — 서버 Whisper»): 플래그 → 녹음 올리기 →
+// 계약대로 부른 명령 → 세션 이름과 용어가 든 프롬프트 → 바꿔 쓰기 → 임시 파일 지우기. 진짜 모델은
+// scripts/whisper/check.sh 의 일이다.
+func TestServeTranscribes(t *testing.T) {
+	startFake(t, "e2e-dict", "dict")
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "fake-whisper")
+	script := "#!/bin/sh\n" +
+		"# 가짜 받아쓰기: 계약(--prompt=<글> <파일>)대로 받았는지 글로 돌려준다\n" +
+		"case $1 in --prompt=*) ;; *) exit 2 ;; esac\n" +
+		"printf '{\"text\": \"허드 %s %s\"}\\n' \"$(wc -c <\"$2\" | tr -d ' ')\" \"${1#--prompt=}\"\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dict := filepath.Join(dir, "dictation.txt")
+	if err := os.WriteFile(dict, []byte("golangci-lint\n허드 => herdr\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	leftovers := func() []string {
+		m, _ := filepath.Glob(filepath.Join(os.TempDir(), "mux-dictation-*"))
+		return m
+	}
+	before := len(leftovers())
+	c := startServe(t, "--whisper", fake, "--dictation", dict)
+
+	if code, data := c.get("/api/features", true); code != 200 || !strings.Contains(string(data), `"whisper"`) {
+		t.Fatalf("features: %d %s", code, data)
+	}
+	code, data := c.postAudio("webm-bytes", "audio/webm;codecs=opus")
+	var v struct{ Result, Text, Detail string }
+	if err := json.Unmarshal(data, &v); err != nil || code != 200 || v.Result != "ok" {
+		t.Fatalf("받아쓰기: %d %s", code, data)
+	}
+	if !strings.HasPrefix(v.Text, "herdr 10 ") || !strings.Contains(v.Text, "e2e-dict") ||
+		!strings.HasSuffix(v.Text, ", golangci-lint.") {
+		t.Errorf("글 %q — 바꿔 쓴 글, 녹음 크기, 세션 이름이 앞이고 파일 용어가 뒤인 프롬프트여야 한다", v.Text)
+	}
+	if n := len(leftovers()); n != before {
+		t.Errorf("받아쓰기 뒤 임시 녹음 파일이 남았다: %v", leftovers())
+	}
+	if code, _ := c.postAudio("x", "multipart/form-data; boundary=x"); code != http.StatusUnsupportedMediaType {
+		t.Errorf("multipart 녹음: %d, want 415", code)
+	}
 }

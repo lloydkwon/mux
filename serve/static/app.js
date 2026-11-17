@@ -298,7 +298,10 @@
     invalid: { tone: "stop", title: "보낼 수 없는 글입니다", body: () => "", why: true },
     error: { tone: "stop", title: "보내지 못했습니다", body: () => "", why: true },
   };
-  const ACT_LABEL = { queue: "대기열에 넣기", cancel: "보내지 않기", screen: "화면 보기", resend: "다시 보내기", dialog: "대화상자 보기" };
+  const ACT_LABEL = {
+    queue: "대기열에 넣기", cancel: "보내지 않기", screen: "화면 보기", resend: "다시 보내기", dialog: "대화상자 보기",
+    retranscribe: "다시 받아쓰기",
+  };
 
   function hideResult() {
     clearTimeout(hideTimer);
@@ -316,9 +319,14 @@
     if (acts && acts.length) {
       const row = el("div", "acts");
       for (const act of acts) {
-        const b = el("button", "btn" + (act === "queue" || act === "resend" ? " primary" : ""), ACT_LABEL[act]);
+        const b = el("button", "btn" + (act === "queue" || act === "resend" || act === "retranscribe" ? " primary" : ""), ACT_LABEL[act]);
         b.type = "button";
         b.addEventListener("click", () => {
+          // 다시 받아쓰기는 보낼 곳과 상관없다 — 글은 입력칸으로 간다.
+          if (act === "retranscribe") {
+            retranscribe();
+            return;
+          }
           const now = selAgent();
           if (target && (!now || now.pane !== target.pane || now.pid !== target.pid)) {
             notice("보낼 곳이 바뀌어 이 알림을 닫았습니다. 보낼 곳을 확인하고 다시 보내세요.");
@@ -360,12 +368,13 @@
     prompt.value = text;
     grow();
     if (!text) { renderTarget(); return; }
-    stopListening(false);
     if ([...text].length > MAX_RUNES) {
       banner("stop", RESULTS.invalid.title, `${MAX_RUNES}자를 넘었습니다. 긴 글은 파일에 쓰고 그 경로를 보내세요.`);
       renderTarget();
       return;
     }
+    // 정말 보낼 때만 받아쓰기를 거둔다 — 막힌 보내기가 아직 받아쓰지 않은 녹음을 버리지 않게.
+    stopDictation(false);
     hideResult();
     sending = true;
     sendBtn.classList.add("busy");
@@ -423,7 +432,18 @@
   const listenText = $("listen-text");
   // listen 은 한 번 누른 받아쓰기다: kept(앞서 마친 글 조각) + cur(지금 인식기의 글), interim(그중 아직 바뀔 수 있는 끝).
   let listen = null;
-  if (!speechCtor()) mic.hidden = true; // 폰 키보드의 받아쓰기로 입력칸에 바로 말하면 된다
+  // 받아쓰기는 둘 중 하나다: 서버 Whisper(mux serve --whisper, 녹음을 올린다) 또는 브라우저의 SpeechRecognition.
+  // 서버가 /api/features 로 알려 준다. 둘 다 안 되면 마이크를 숨긴다 — 폰 키보드의 받아쓰기로 입력칸에 바로 말하면 된다.
+  let dictationMode = "browser";
+  const useWhisper = () => dictationMode === "whisper" && !!window.MuxRecorder && MuxRecorder.supported();
+  const updateMic = () => { mic.hidden = !(useWhisper() || speechCtor()); };
+  updateMic();
+  // 들은 글을 입력칸의 글 뒤에 붙인다 — 저절로 보내지 않는다.
+  function appendHeard(text) {
+    prompt.value = prompt.value.trim() ? `${prompt.value.trim()} ${text}` : text;
+    grow();
+    renderTarget();
+  }
 
   // 낱말 비교 — 대소문자·문장부호를 빼고 낱말로 나눈다. 띄어쓰기를 다르게 보낸 같은 말은 같다고 보지 않는다.
   const speechWords = (t) => t.toLowerCase().replace(/[.,!?…"'“”‘’]/g, " ").split(/\s+/).filter(Boolean);
@@ -561,9 +581,7 @@
     // 실패 안내는 저절로 접지 않고, 받은 사건 순서를 작게 붙인다 — 폰 화면을 찍어 보내면 무엇이 일어났는지 안다.
     const how = `받은 사건: ${l.trace.slice(-10).join(" → ")}${err ? ` · 오류 ${err}` : ""}`;
     if (commit && text) {
-      prompt.value = prompt.value.trim() ? `${prompt.value.trim()} ${text}` : text;
-      grow();
-      renderTarget();
+      appendHeard(text);
     } else if (!commit) {
       // 보내기·답하기가 받아쓰기를 거뒀다 — 알릴 것이 없다.
     } else if ((err === "not-allowed" || err === "service-not-allowed") && !l.restarts) {
@@ -597,7 +615,176 @@
       finishListening(true);
     }, STOP_GRACE_MS));
   }
-  mic.addEventListener("click", () => (listen ? stopListening(true) : startListening()));
+
+  // ── 받아쓰기 (서버 Whisper, docs/design/serve.md «받아쓰기 — 서버 Whisper») ──
+  // 녹음을 올리면 서버가 받아쓴다. 듣는 동안은 녹음 시간과 소리 크기만 보인다(사용자 결정) — 글은 다 말한 뒤 한꺼번에
+  // 온다. Safari 받아쓰기의 버릇(끊김·겹침·끝 신호 없음)과 상관없다.
+  // rec 은 누른 받아쓰기 하나다: phase opening(마이크 여는 중) → recording → transcribing(올리고 기다림).
+  let rec = null;
+  // lastClip 은 받아쓰지 못한 녹음이다 — [다시 받아쓰기] 가 다시 말하지 않고 올린다. 다음 녹음을 시작하면 버린다.
+  let lastClip = null;
+  const listenLab = $("listen-lab");
+  const meter = $("listen-meter");
+  const meterBar = meter.firstElementChild;
+  const mmss = (ms) => {
+    const s = Math.floor(ms / 1000);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  };
+  function showRecBox(label, withMeter) {
+    listenBox.hidden = false;
+    listenBox.classList.add("rec");
+    listenLab.textContent = label;
+    meter.hidden = !withMeter;
+    if (!withMeter) meterBar.style.width = "0";
+  }
+  function endRecUI() {
+    mic.classList.remove("on", "busy");
+    mic.disabled = false;
+    mic.setAttribute("aria-label", "말하기");
+    listenBox.hidden = true;
+    listenBox.classList.remove("rec");
+    listenLab.textContent = "듣는 중";
+    meter.hidden = true;
+  }
+  async function startRecording() {
+    hideResult();
+    lastClip = null;
+    const r = { phase: "opening", handle: null, timer: 0, abort: null };
+    rec = r;
+    mic.classList.add("on");
+    mic.setAttribute("aria-label", "그만 말하기");
+    showRecBox("마이크 여는 중", false);
+    try {
+      r.handle = await MuxRecorder.start({
+        maxMs: LISTEN_MAX_MS,
+        onLevel: (v) => { if (rec === r) meterBar.style.width = `${Math.round(v * 100)}%`; },
+        onAuto: () => { if (rec === r && r.phase === "recording") stopRecording(true); },
+      });
+    } catch (e) {
+      if (rec !== r) return;
+      rec = null;
+      endRecUI();
+      const name = (e && e.name) || "";
+      const why = `${name} ${(e && e.message) || ""}`.trim();
+      if (name === "NotAllowedError" || name === "SecurityError") {
+        banner("stop", "마이크를 쓸 수 없습니다",
+          "iPhone 은 주소창의 aA › 웹사이트 설정 › 마이크, 또는 설정 › Safari › 마이크에서 이 사이트를 허용하세요.", name);
+      } else if (speechCtor()) {
+        // 녹음이 안 되는 브라우저 — 이 페이지에서는 브라우저 받아쓰기로 물러선다. 바로 띄우지 않고 다시 누르게 한다:
+        // 마이크를 묻고 실패한 뒤라 사용자 동작 밖이고, Safari 의 받아쓰기가 그때 시작해 주는지 모른다.
+        dictationMode = "browser";
+        banner("warn", "녹음을 시작하지 못했습니다", "마이크를 다시 누르면 브라우저 받아쓰기로 듣습니다.", why);
+      } else {
+        banner("stop", "녹음을 시작하지 못했습니다", "입력줄을 누른 뒤 키보드의 마이크로 말하세요.", why);
+      }
+      return;
+    }
+    if (rec !== r) { // 마이크를 여는 사이 거뒀다(보내기·답하기)
+      r.handle.cancel();
+      return;
+    }
+    r.phase = "recording";
+    showRecBox("녹음 중 0:00", true);
+    r.timer = setInterval(() => {
+      if (rec === r && r.phase === "recording") listenLab.textContent = `녹음 중 ${mmss(Date.now() - r.handle.started)}`;
+    }, 250);
+  }
+  // stopRecording(true) 는 «그만»(또는 2분·화면 가림) — 녹음을 올려 받아쓴다. stopRecording(false) 는 거두기(보내기·
+  // 답하기 때) — 녹음을 버리고, 올리는 중이면 끊는다(서버가 명령을 죽인다).
+  async function stopRecording(commit) {
+    const r = rec;
+    if (!r) return;
+    clearInterval(r.timer);
+    if (!commit || r.phase === "opening") {
+      rec = null;
+      if (r.handle) r.handle.cancel();
+      if (r.abort) r.abort.abort();
+      endRecUI();
+      return;
+    }
+    if (r.phase !== "recording") return;
+    r.phase = "transcribing";
+    const clip = await r.handle.stop();
+    if (rec !== r) return;
+    if (!clip || !clip.blob.size) {
+      rec = null;
+      endRecUI();
+      banner("warn", "녹음이 비었습니다", "다시 눌러 말하세요.");
+      return;
+    }
+    await transcribe(r, clip);
+  }
+  async function transcribe(r, clip) {
+    rec = r;
+    r.phase = "transcribing";
+    r.abort = new AbortController();
+    mic.classList.remove("on");
+    mic.classList.add("busy");
+    mic.disabled = true;
+    showRecBox("받아쓰는 중…", false);
+    let res = null;
+    let err = null;
+    try {
+      res = await api("/api/transcribe", {
+        method: "POST", headers: { "Content-Type": clip.type }, body: clip.blob, signal: r.abort.signal,
+      });
+    } catch (e) {
+      err = e;
+    }
+    if (rec !== r) return; // 거뒀다 — 알릴 것이 없다
+    rec = null;
+    endRecUI();
+    if (res && res.result === "ok" && res.text) {
+      lastClip = null;
+      appendHeard(res.text);
+      return;
+    }
+    if (res && res.result === "empty") {
+      lastClip = null;
+      banner("warn", "말소리를 듣지 못했습니다", "다시 눌러 말하세요. 폰을 입 가까이 두면 낫습니다.");
+      return;
+    }
+    // 서버가 녹음을 거절했다(4xx) — 다시 올려도 같다. 404 는 서버가 --whisper 없이 다시 떴다는 뜻이라, 이 페이지는
+    // 브라우저 받아쓰기로 물러선다(features 는 페이지를 열 때 한 번 읽는다).
+    if (err && err.status >= 400 && err.status < 500) {
+      lastClip = null;
+      if (err.status === 404) {
+        dictationMode = "browser";
+        updateMic();
+        banner("warn", "서버 받아쓰기가 꺼졌습니다", "마이크를 다시 누르면 브라우저 받아쓰기로 듣습니다.", err.message);
+      } else {
+        banner("stop", "녹음을 받지 않았습니다", "다시 말해 주세요.", err.message);
+      }
+      return;
+    }
+    // 그 밖의 실패에도 Claude 에게는 아무것도 가지 않았다 — 녹음을 들고 있다가 다시 올린다.
+    lastClip = clip;
+    if (res && res.result === "busy") {
+      banner("warn", "다른 받아쓰기가 돌고 있습니다", "잠깐 뒤 다시 받아쓰세요. 녹음은 들고 있습니다.", "", ["retranscribe"]);
+    } else if (res) {
+      banner("stop", "받아쓰지 못했습니다", "녹음은 들고 있습니다. 다시 받아쓰거나 다시 말하세요.", res.detail || "", ["retranscribe"]);
+    } else {
+      banner("stop", "받아쓰기 답을 받지 못했습니다",
+        "Claude 에게는 아무것도 보내지 않았습니다. 녹음은 들고 있습니다.", err ? err.message : "", ["retranscribe"]);
+    }
+  }
+  function retranscribe() {
+    const clip = lastClip;
+    if (!clip || rec || listen) return;
+    hideResult();
+    transcribe({ phase: "transcribing", handle: null, timer: 0, abort: null }, clip);
+  }
+  // stopDictation 은 둘 중 도는 받아쓰기를 멈춘다. commit 이 false 면 거둔다(보내기·답하기 때).
+  function stopDictation(commit) {
+    if (rec) stopRecording(commit);
+    stopListening(commit);
+  }
+  mic.addEventListener("click", () => {
+    if (listen) stopListening(true);
+    else if (rec) stopRecording(true);
+    else if (useWhisper()) startRecording();
+    else startListening();
+  });
 
   // ── 세션 페이지 ──────────────────────────────────────────────────────
   // 주소는 #s=<세션> 이다. 폰의 뒤로 가기(iOS 왼쪽 가장자리 밀기 포함)가 목록으로 돌아오고, Safari 가 탭을
@@ -659,6 +846,12 @@
     // 페이지 자체로 포커스를 옮긴다 — 버튼에 주면 손가락으로 연 폰에도 포커스 테두리가 그려진다.
     if (!same) pageEl.focus({ preventScroll: true });
   }
+  // hideComposer 는 입력줄을 숨긴다(Claude 가 없는 세션의 페이지). 듣거나 녹음하던 중이면 거기까지를 받아쓴다 — 숨은
+  // [그만] 버튼 뒤에서 마이크가 2분 상한까지 켜져 있지 않게, 말한 것은 버리지 않게. 글은 목록으로 돌아오면 입력칸에 있다.
+  function hideComposer() {
+    if (!composer.hidden && (rec || listen)) stopDictation(true);
+    composer.hidden = true;
+  }
   function hidePage() {
     if (!page.open) return;
     const name = page.session;
@@ -687,7 +880,7 @@
       $("tab-talk").hidden = true;
       $("panel-talk").hidden = true;
       $("panel-screen").hidden = true;
-      composer.hidden = true;
+      hideComposer();
       return;
     }
     // 들어간 세션이 곧 보낼 곳이다. 들어갈 때(다른 세션이 골라져 있었거나 아직 Claude 를 안 골랐을 때)만 여기서
@@ -712,7 +905,8 @@
       refreshPage();
     });
     const hasTalk = c.agents.length > 0;
-    composer.hidden = !hasTalk;
+    if (hasTalk) composer.hidden = false;
+    else hideComposer();
     $("tab-talk").hidden = !hasTalk;
     const onTalk = page.tab === "talk" && hasTalk;
     $("tab-talk").setAttribute("aria-selected", String(onTalk));
@@ -1088,7 +1282,7 @@
       }
       body = { key: page.pending.key, n: page.pending.n, label: page.pending.label, text };
     }
-    stopListening(false);
+    stopDictation(false);
     hideResult();
     sending = true;
     sendBtn.classList.add("busy");
@@ -1287,12 +1481,27 @@
     schedule(POLL_MS);
   }
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) clearTimeout(pollTimer);
-    else schedule(0);
+    if (document.hidden) {
+      clearTimeout(pollTimer);
+      // 화면이 가려지면 거기까지 녹음한 것을 받아쓴다 — 말한 것을 버리지 않는다. 올리기가 끊기면 돌아와서 다시 받아쓴다.
+      if (rec && rec.phase === "recording") stopRecording(true);
+    } else schedule(0);
   });
+
+  // 서버가 받아쓰기를 맡는지 묻는다. 답이 없으면 브라우저 받아쓰기다.
+  async function loadFeatures() {
+    try {
+      const f = await api("/api/features");
+      dictationMode = f && f.dictation === "whisper" ? "whisper" : "browser";
+    } catch (_) {
+      dictationMode = "browser";
+    }
+    updateMic();
+  }
 
   routeFromHash();
   renderCards();
   renderTarget();
+  loadFeatures();
   poll();
 })();

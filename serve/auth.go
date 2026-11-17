@@ -66,10 +66,20 @@ func (s *server) refuse(r *http.Request) (int, string) {
 	if origin := r.Header.Get("Origin"); origin != "https://"+r.Host {
 		return http.StatusForbidden, "Origin " + origin
 	}
-	if ct, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || ct != "application/json" {
+	if ct, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || !acceptsBody(r.URL.Path, ct) {
 		return http.StatusUnsupportedMediaType, "Content-Type " + r.Header.Get("Content-Type")
 	}
 	return 0, ""
+}
+
+// acceptsBody 는 그 경로가 받는 본문 형식인가다. 받아쓰기만 녹음(audio/webm·audio/mp4)을 받는다 — 둘 다 JSON 처럼
+// CORS 의 단순 요청 형식이 아니다. 단순 요청 형식(multipart/form-data·text/plain·form)은 어느 경로도 받지 않는다.
+func acceptsBody(path, contentType string) bool {
+	if path == "/api/transcribe" {
+		_, ok := audioTypes[contentType]
+		return ok
+	}
+	return contentType == "application/json"
 }
 
 func (s *server) allowed(login string) bool {

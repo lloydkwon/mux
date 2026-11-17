@@ -1,0 +1,9 @@
+# mux serve 받아쓰기 명령의 의존성(scripts/whisper/setup.sh 가 --exclude-newer 2026-11-03 과 함께 설치한다).
+# 2026-11-17 측정에 쓴 버전 그대로다. av 19.0.2 는 faster-whisper 1.2.1 이 넘기는 metadata_errors 를 받지 않아
+# 열지 못했다 — 15.1.0 에서 잰 대로 고정한다(16–18 은 재지 않았다).
+faster-whisper==1.2.1
+ctranslate2==4.8.5
+av==15.1.0
+# CUDA 라이브러리는 pip 의 것을 쓴다 — sudo 도 CUDA 툴킷도 필요 없다(드라이버만, CUDA 12 이상).
+nvidia-cublas-cu12==12.9.3.13
+nvidia-cudnn-cu12==9.27.0.42

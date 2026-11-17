@@ -22,7 +22,7 @@ load-bearing 인지. 2026-10-14 까지는 전부 루트 `CLAUDE.md` 한 파일(1
 | [border.md](border.md) | 작업 pane 위 테두리 줄 `mux border` |
 | [revive.md](revive.md) | 소켓만 잃은 tmux 서버를 SIGUSR1 로 되살리기 |
 | [resurrect.md](resurrect.md) | 세션 저장·복원 영역 `# mux resurrect { }` — 왜 pane 내용 저장이 필수인가, 복원 직후 훅(활성 pane·죽은 패널), mux 시작 시 복원, 플러그인 고정, 이미 쓰는 사용자 |
-| [serve.md](serve.md) | `mux serve` — 폰 브라우저 화면: 세션 카드, 첫 화면 음성 입력줄, 세션 페이지(보낸 말·회신·화면), 신원 헤더·Host·Origin 보안, tailscale serve 8443 |
+| [serve.md](serve.md) | `mux serve` — 폰 브라우저 화면: 세션 카드, 첫 화면 음성 입력줄, 서버 Whisper 받아쓰기(--whisper, 용어 파일), 세션 페이지(보낸 말·회신·화면), 신원 헤더·Host·Origin 보안, tailscale serve 8443 |
 | [agent-api.md](agent-api.md) | `mux agent ls/prompt/wait/read` — 대상 지목, 입력창으로 하는 제출 확인, 토큰, 턴 끝 판정, 회신 추출, 종료 코드, herdr 대응표 |
 | [tmux-config.md](tmux-config.md) | `setup-keybind`/`setup-panel` 영역, 자가 복구, 폭·VS Code 게이트, 훅, 첫 실행 제안 |
 
