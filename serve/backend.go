@@ -10,6 +10,12 @@ type backend interface {
 	Prompt(a tmux.Agent, text string, force bool) error
 	LastTurn(a tmux.Agent) (tmux.LastTurn, error)
 	Capture(target string) (string, error)
+	// 대화상자에 답하기 — 누르기 직전에 화면을 다시 읽어, 폰이 본 대화상자(key)와 선택지일 때만 누른다
+	// (tmux/agent_dialog.go).
+	Dialog(a tmux.Agent) (tmux.Dialog, error)
+	Answer(a tmux.Agent, key string, n int, label, text string) error
+	AnswerMulti(a tmux.Agent, key string, want []tmux.MultiChoice, text string) error
+	Cancel(a tmux.Agent, key string) error
 }
 
 // tmuxBackend 는 tmux 패키지를 그대로 부른다. 여기서 아무것도 다시 구현하지 않는다.
@@ -35,3 +41,15 @@ func (tmuxBackend) Prompt(a tmux.Agent, text string, force bool) error {
 func (tmuxBackend) LastTurn(a tmux.Agent) (tmux.LastTurn, error) { return tmux.ReadLastTurn(a) }
 
 func (tmuxBackend) Capture(target string) (string, error) { return tmux.CapturePaneTarget(target) }
+
+func (tmuxBackend) Dialog(a tmux.Agent) (tmux.Dialog, error) { return tmux.ReadDialog(a) }
+
+func (tmuxBackend) Answer(a tmux.Agent, key string, n int, label, text string) error {
+	return tmux.AnswerDialog(a, key, n, label, text)
+}
+
+func (tmuxBackend) AnswerMulti(a tmux.Agent, key string, want []tmux.MultiChoice, text string) error {
+	return tmux.AnswerMulti(a, key, want, text)
+}
+
+func (tmuxBackend) Cancel(a tmux.Agent, key string) error { return tmux.CancelDialog(a, key) }

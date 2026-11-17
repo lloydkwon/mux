@@ -128,5 +128,7 @@ func newHandler(cfg Config, b backend, logger *log.Logger) http.Handler {
 	mux.HandleFunc("POST /api/prompt", s.handlePrompt)
 	mux.HandleFunc("GET /api/turn", s.handleTurn)
 	mux.HandleFunc("GET /api/screen", s.handleScreen)
+	mux.HandleFunc("GET /api/dialog", s.handleDialog)
+	mux.HandleFunc("POST /api/answer", s.handleAnswer)
 	return s.guard(mux)
 }

@@ -57,6 +57,7 @@ type fake struct {
 	history   []string
 	input     []rune // 입력창의 글
 	turn      int
+	ask       *fakeAsk // 떠 있는 질문 대화상자(ask.go). 있으면 키가 그리로 간다
 }
 
 func main() {
@@ -144,7 +145,41 @@ func (f *fake) readKeys(queue chan string) {
 		if err != nil || c == 0x03 || c == 0x04 { // 끝, C-c, C-d
 			return
 		}
+		if c == 0x1b {
+			// 이스케이프 열(화살표 ESC [ A/B, ESC O A/B)이면 대화상자의 커서를 옮기고 나머지는 버린다. 홀로 온 Esc 만
+			// 대화상자를 거둔다(tmux 의 send-keys Escape).
+			if r.Buffered() > 0 {
+				if next, _, _ := r.ReadRune(); next == '[' || next == 'O' {
+					x, _, err := r.ReadRune()
+					for ; err == nil && !(x >= 0x40 && x <= 0x7e); x, _, err = r.ReadRune() {
+					}
+					f.mu.Lock()
+					if f.ask != nil && (x == 'A' || x == 'B') {
+						d := 1
+						if x == 'A' {
+							d = -1
+						}
+						f.ask.arrow(d)
+					}
+					f.mu.Unlock()
+					f.draw()
+				}
+				continue
+			}
+			f.mu.Lock()
+			if f.ask != nil {
+				f.ask.cancel()
+			}
+			f.mu.Unlock()
+			continue
+		}
 		f.mu.Lock()
+		if f.ask != nil {
+			f.ask.key(c)
+			f.mu.Unlock()
+			f.draw()
+			continue
+		}
 		var submit string
 		switch {
 		case c == '\r' || c == '\n':
@@ -183,6 +218,10 @@ func (f *fake) work(queue chan string) {
 			"turnPosition": map[string]any{"promptIndex": n, "turnIndex": n},
 			"message":      map[string]any{"role": "user", "content": line},
 		})
+		if line == "/fake-ask" || line == "/fake-ask-multi" {
+			f.finishTurn(n, f.waitAsk(line == "/fake-ask-multi"))
+			continue
+		}
 		f.appendTranscript(map[string]any{
 			"type": "assistant", "timestamp": iso(time.Now()), "requestId": fmt.Sprintf("req_%d_a", n),
 			"message": map[string]any{"role": "assistant", "stop_reason": "tool_use", "content": []any{
@@ -219,6 +258,41 @@ func (f *fake) work(queue chan string) {
 	}
 }
 
+// waitAsk 는 질문 대화상자를 띄우고 답(또는 취소)을 기다려 회신 글을 돌려준다.
+func (f *fake) waitAsk(multi bool) string {
+	a := newFakeAsk(multi)
+	f.mu.Lock()
+	f.ask = a
+	f.mu.Unlock()
+	f.writeStateWaiting("input needed")
+	f.draw()
+	answers := <-a.done
+	f.mu.Lock()
+	f.ask = nil
+	f.mu.Unlock()
+	f.writeState("busy")
+	if answers == nil {
+		return "declined"
+	}
+	return "answers: " + strings.Join(answers, " / ")
+}
+
+// finishTurn 은 회신 글로 턴을 끝낸다(응답 그룹, turn_duration, idle).
+func (f *fake) finishTurn(n int, text string) {
+	f.appendTranscript(map[string]any{
+		"type": "assistant", "timestamp": iso(time.Now()), "requestId": fmt.Sprintf("req_%d_b", n),
+		"message": map[string]any{"role": "assistant", "stop_reason": "end_turn", "content": []any{
+			map[string]any{"type": "text", "text": text},
+		}},
+	})
+	f.appendTranscript(map[string]any{"type": "system", "subtype": "turn_duration", "timestamp": iso(time.Now())})
+	f.writeState("idle")
+	f.mu.Lock()
+	f.history = append(f.history, "● "+text)
+	f.mu.Unlock()
+	f.draw()
+}
+
 // draw 는 화면을 다시 그리고 커서를 입력창 줄의 «❯ » 뒤에 둔다 — tty 에코가 거기에 찍힌다.
 func (f *fake) draw() {
 	f.mu.Lock()
@@ -233,16 +307,29 @@ func (f *fake) draw() {
 	for _, l := range h {
 		b.WriteString(l + "\r\n")
 	}
+	if f.ask != nil {
+		b.WriteString(strings.Join(f.ask.lines(), "\r\n"))
+		os.Stdout.WriteString(b.String())
+		return
+	}
 	b.WriteString(line + "\r\n❯\u00a0" + string(f.input) + "\x1b7\r\n" + line + "\r\n  ⏵⏵ fake mode\x1b8")
 	os.Stdout.WriteString(b.String())
 }
 
-func (f *fake) writeState(status string) {
+func (f *fake) writeState(status string) { f.writeStatus(status, "") }
+
+// writeStateWaiting 은 대화상자에서 사람을 기다린다고 쓴다(진짜는 질문이 "input needed", 권한이 "permission prompt").
+func (f *fake) writeStateWaiting(waitingFor string) { f.writeStatus("waiting", waitingFor) }
+
+func (f *fake) writeStatus(status, waitingFor string) {
 	now := time.Now().UnixMilli()
 	st := map[string]any{
 		"pid": f.pid, "sessionId": f.sid, "cwd": f.cwd, "startedAt": f.started, "procStart": f.procStart,
 		"version": "2.1.312-fake", "kind": "interactive", "tmux": f.ref, "name": *name, "nameSource": "user",
 		"status": status, "updatedAt": now, "statusUpdatedAt": now,
+	}
+	if waitingFor != "" {
+		st["waitingFor"] = waitingFor
 	}
 	dir := filepath.Join(f.home, ".claude", "sessions")
 	os.MkdirAll(dir, 0o700)

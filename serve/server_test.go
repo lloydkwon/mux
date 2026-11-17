@@ -31,6 +31,10 @@ type fakeBackend struct {
 	sent        []string // "pane|text|force"
 	captured    []string
 	sessionsErr error
+	dialog      tmux.Dialog
+	dialogErr   error
+	answerErr   error
+	answers     []string // "pane|key|n|label|text" 또는 "pane|key|cancel"
 }
 
 func (f *fakeBackend) Sessions() ([]tmux.Session, error) { return f.sessions, f.sessionsErr }
@@ -40,6 +44,19 @@ func (f *fakeBackend) Prompt(a tmux.Agent, text string, force bool) error {
 	return f.promptErr
 }
 func (f *fakeBackend) LastTurn(tmux.Agent) (tmux.LastTurn, error) { return f.turn, f.turnErr }
+func (f *fakeBackend) Dialog(tmux.Agent) (tmux.Dialog, error)     { return f.dialog, f.dialogErr }
+func (f *fakeBackend) Answer(a tmux.Agent, key string, n int, label, text string) error {
+	f.answers = append(f.answers, fmt.Sprintf("%s|%s|%d|%s|%s", a.PaneID, key, n, label, text))
+	return f.answerErr
+}
+func (f *fakeBackend) AnswerMulti(a tmux.Agent, key string, want []tmux.MultiChoice, text string) error {
+	f.answers = append(f.answers, fmt.Sprintf("%s|%s|multi|%v|%s", a.PaneID, key, want, text))
+	return f.answerErr
+}
+func (f *fakeBackend) Cancel(a tmux.Agent, key string) error {
+	f.answers = append(f.answers, a.PaneID+"|"+key+"|cancel")
+	return f.answerErr
+}
 func (f *fakeBackend) Capture(target string) (string, error) {
 	f.captured = append(f.captured, target)
 	return f.screen, nil
@@ -369,5 +386,183 @@ func TestScreenTargets(t *testing.T) {
 	}
 	if len(f.captured) != 2 {
 		t.Errorf("거절해야 할 대상을 캡처했다: %v", f.captured)
+	}
+}
+
+// ── 대화상자에 답하기 ─────────────────────────────────────────────────────
+
+func questionDialog() tmux.Dialog {
+	return tmux.Dialog{
+		Kind:   tmux.DialogQuestion,
+		Tabs:   []tmux.DialogTab{{Label: "방식", Done: true}, {Label: "주기"}, {Label: "Submit", Submit: true}},
+		Prompt: []string{"반영 주기를 골라 주세요."},
+		Options: []tmux.DialogOption{
+			{N: 1, Label: "5분", Detail: "5분마다 반영합니다."},
+			{N: 2, Label: "10분", Chosen: true},
+			{N: 3, Label: "Type something.", FreeText: true},
+			{N: 4, Label: "Chat about this"},
+		},
+		Current: 1,
+		Hint:    "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+	}
+}
+
+func TestDialogView(t *testing.T) {
+	f := newFake()
+	f.dialog = questionDialog()
+	got := decode[dialogResponse](t, do(testServer(t, f), request("GET", "/api/dialog?pane=%2512&pid=4321", "", nil)))
+	if got.Result != "ok" || got.Dialog == nil {
+		t.Fatalf("%+v", got)
+	}
+	d := got.Dialog
+	if d.Kind != "question" || d.Current != 1 || len(d.Tabs) != 3 || !d.Tabs[0].Done || !d.Tabs[2].Submit {
+		t.Errorf("dialog = %+v", d)
+	}
+	if len(d.Options) != 4 || d.Options[0].Detail == "" || !d.Options[1].Chosen || !d.Options[2].FreeText || d.Options[2].Draft != "" {
+		t.Errorf("options = %+v", d.Options)
+	}
+	if d.Key == "" || d.Key != f.dialog.Key() {
+		t.Errorf("열쇠 = %q, want %q", d.Key, f.dialog.Key())
+	}
+	// 직접 쓰기 칸에 쓰다 만 글이 있으면 폰이 그 글을 보여 준다 — 그 칸으로 답하면 지우고 새로 쓴다.
+	f.dialog.Options[2].Label = "PC 에서 쓰던 글"
+	got = decode[dialogResponse](t, do(testServer(t, f), request("GET", "/api/dialog?pane=%2512&pid=4321", "", nil)))
+	if o := got.Dialog.Options[2]; !o.FreeText || o.Draft != "PC 에서 쓰던 글" || got.Dialog.Key == d.Key {
+		t.Errorf("쓰다 만 글 = %+v, 열쇠 %q", o, got.Dialog.Key)
+	}
+
+	for _, tt := range []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("%w: %%12 가 idle 상태다", tmux.ErrNoDialog), "none"},
+		{fmt.Errorf("%w: %%12", tmux.ErrAgentGone), "gone"},
+		{errors.New("tmux 가 죽었다"), "error"},
+	} {
+		f := newFake()
+		f.dialogErr = tt.err
+		got := decode[dialogResponse](t, do(testServer(t, f), request("GET", "/api/dialog?pane=%2512&pid=4321", "", nil)))
+		if got.Result != tt.want || got.Dialog != nil {
+			t.Errorf("%v: %+v, want %s", tt.err, got, tt.want)
+		}
+	}
+	// pid 가 다르면 읽지도 않는다.
+	if got := decode[dialogResponse](t, do(testServer(t, newFake()), request("GET", "/api/dialog?pane=%2512&pid=1", "", nil))); got.Result != "gone" {
+		t.Errorf("낡은 pid: %+v", got)
+	}
+}
+
+func TestAnswerResults(t *testing.T) {
+	tests := []struct {
+		name, body string
+		err        error
+		want       string
+		sent       string
+	}{
+		{"고른다", `{"pane":"%12","pid":4321,"key":"k1","n":2,"label":"10분"}`, nil, "answered", "%12|k1|2|10분|"},
+		{"직접 쓴다", `{"pane":"%12","pid":4321,"key":"k1","n":3,"label":"Type something.","text":"7분"}`, nil, "answered", "%12|k1|3|Type something.|7분"},
+		{"취소한다", `{"pane":"%12","pid":4321,"key":"k1","cancel":true}`, nil, "cancelled", "%12|k1|cancel"},
+		{"바뀌었다", `{"pane":"%12","pid":4321,"key":"k1","n":2,"label":"이벤트"}`, fmt.Errorf("%w: …", tmux.ErrDialogChanged), "changed", "%12|k1|2|이벤트|"},
+		{"닫혔다", `{"pane":"%12","pid":4321,"key":"k1","n":1,"label":"5분"}`, fmt.Errorf("%w: …", tmux.ErrNoDialog), "none", "%12|k1|1|5분|"},
+		{"모른다", `{"pane":"%12","pid":4321,"key":"k1","n":1,"label":"5분"}`, fmt.Errorf("%w: …", tmux.ErrAnswerUnknown), "unknown", "%12|k1|1|5분|"},
+		{"복사 모드", `{"pane":"%12","pid":4321,"key":"k1","n":1,"label":"5분"}`, fmt.Errorf("%w: 복사 모드", tmux.ErrAgentNotReady), "not_ready", "%12|k1|1|5분|"},
+		{"글이 안 된다", `{"pane":"%12","pid":4321,"key":"k1","n":3,"label":"Type something.","text":"x"}`, fmt.Errorf("%w: 보낼 글이 비었다", tmux.ErrAnswerText), "invalid", "%12|k1|3|Type something.|x"},
+	}
+	for _, tt := range tests {
+		f := newFake()
+		f.answerErr = tt.err
+		w := do(testServer(t, f), request("POST", "/api/answer", tt.body, nil))
+		got := decode[promptView](t, w)
+		if w.Code != 200 || got.Result != tt.want {
+			t.Errorf("%s: %d %+v, want %s", tt.name, w.Code, got, tt.want)
+		}
+		if strings.Join(f.answers, ",") != tt.sent {
+			t.Errorf("%s: backend 가 받은 것 = %v, want %s", tt.name, f.answers, tt.sent)
+		}
+	}
+}
+
+func TestAnswerSendsNothingWhenItShouldNot(t *testing.T) {
+	tests := []struct {
+		name, body, want string
+		code             int
+	}{
+		{"pid 가 바뀌었다", `{"pane":"%12","pid":999,"key":"k1","n":1,"label":"5분"}`, "gone", 200},
+		{"직접 쓰기 글이 여러 줄", `{"pane":"%12","pid":4321,"key":"k1","n":3,"label":"Type something.","text":"a\nb"}`, "invalid", 200},
+		{"번호가 없다", `{"pane":"%12","pid":4321,"key":"k1","label":"5분"}`, "", 400},
+		{"글을 안 봤다", `{"pane":"%12","pid":4321,"key":"k1","n":1}`, "", 400},
+		{"pane id 가 아니다", `{"pane":"mux","pid":4321,"key":"k1","n":1,"label":"5분"}`, "", 400},
+		{"모르는 필드", `{"pane":"%12","pid":4321,"key":"k1","n":1,"label":"5분","keys":"Enter"}`, "", 400},
+		// 폰이 본 대화상자의 열쇠가 없으면 그사이 뜬 다른 대화상자(같은 «1. Yes»)를 가리지 못한다.
+		{"열쇠가 없다", `{"pane":"%12","pid":4321,"n":1,"label":"Yes"}`, "", 400},
+		{"Esc 도 열쇠가 있어야 한다", `{"pane":"%12","pid":4321,"cancel":true}`, "", 400},
+		{"여러 개 고르기도", `{"pane":"%12","pid":4321,"multi":true,"options":[{"n":1,"label":"중단","checked":true}]}`, "", 400},
+		{"열쇠가 너무 길다", `{"pane":"%12","pid":4321,"key":"` + strings.Repeat("k", 65) + `","n":1,"label":"Yes"}`, "", 400},
+	}
+	for _, tt := range tests {
+		f := newFake()
+		w := do(testServer(t, f), request("POST", "/api/answer", tt.body, nil))
+		if w.Code != tt.code {
+			t.Errorf("%s: %d, want %d (%s)", tt.name, w.Code, tt.code, w.Body.String())
+		}
+		if tt.want != "" {
+			if got := decode[promptView](t, w); got.Result != tt.want {
+				t.Errorf("%s: %+v, want %s", tt.name, got, tt.want)
+			}
+		}
+		if len(f.answers) != 0 {
+			t.Errorf("%s: 누르지 말아야 하는데 %v", tt.name, f.answers)
+		}
+	}
+	// 답하기도 쓰는 요청이다 — 다른 출처에서는 막힌다.
+	f := newFake()
+	w := do(testServer(t, f), request("POST", "/api/answer", `{"pane":"%12","pid":4321,"key":"k1","n":1,"label":"5분"}`,
+		func(r *http.Request) { r.Header.Set("Origin", "https://evil.example") }))
+	if w.Code != 403 || len(f.answers) != 0 {
+		t.Errorf("다른 출처의 답하기: %d %v", w.Code, f.answers)
+	}
+}
+
+func TestAnswerLogNeverCarriesTheText(t *testing.T) {
+	var buf strings.Builder
+	f := newFake()
+	cfg, _ := Config{Addr: "127.0.0.1:7690", Allow: []string{testLogin}}.normalized()
+	h := newHandler(cfg, f, log.New(&buf, "", 0))
+	do(h, request("POST", "/api/answer", `{"pane":"%12","pid":4321,"key":"k1","n":3,"label":"Type something.","text":"비밀 계획"}`, nil))
+	do(h, request("POST", "/api/prompt", `{"pane":"%12","pid":4321,"text":"비밀 프롬프트"}`, nil))
+	if strings.Contains(buf.String(), "비밀") || !strings.Contains(buf.String(), "답하기") {
+		t.Errorf("로그:\n%s", buf.String())
+	}
+}
+
+func TestAnswerMultiSelect(t *testing.T) {
+	f := newFake()
+	f.dialog = tmux.Dialog{Kind: tmux.DialogQuestion, Multi: true, SubmitLine: true, Options: []tmux.DialogOption{
+		{N: 1, Label: "중단", Checkbox: true, Checked: true}, {N: 2, Label: "재시도", Checkbox: true},
+		{N: 3, Label: "Type something", Checkbox: true, FreeText: true}, {N: 4, Label: "Chat about this"},
+	}}
+	got := decode[dialogResponse](t, do(testServer(t, f), request("GET", "/api/dialog?pane=%2512&pid=4321", "", nil)))
+	if !got.Dialog.Multi || !got.Dialog.Options[0].Checkbox || !got.Dialog.Options[0].Checked || got.Dialog.Options[3].Checkbox {
+		t.Errorf("여러 개 고르기 = %+v", got.Dialog)
+	}
+
+	body := `{"pane":"%12","pid":4321,"key":"k1","multi":true,"options":[{"n":1,"label":"중단","checked":true},{"n":2,"label":"재시도","checked":false},{"n":3,"label":"Type something","checked":true}],"text":"로그"}`
+	w := do(testServer(t, f), request("POST", "/api/answer", body, nil))
+	if r := decode[promptView](t, w); r.Result != "answered" {
+		t.Errorf("답 = %+v", r)
+	}
+	if want := "%12|k1|multi|[{1 중단 true} {2 재시도 false} {3 Type something true}]|로그"; strings.Join(f.answers, ",") != want {
+		t.Errorf("backend 가 받은 것 = %v", f.answers)
+	}
+
+	for _, bad := range []string{
+		`{"pane":"%12","pid":4321,"key":"k1","multi":true,"options":[]}`,
+		`{"pane":"%12","pid":4321,"key":"k1","multi":true,"options":[{"n":0,"label":"x","checked":true}]}`,
+		`{"pane":"%12","pid":4321,"key":"k1","multi":true,"options":[{"n":1,"label":"","checked":true}]}`,
+	} {
+		f := newFake()
+		if w := do(testServer(t, f), request("POST", "/api/answer", bad, nil)); w.Code != 400 || len(f.answers) != 0 {
+			t.Errorf("%s: %d %v", bad, w.Code, f.answers)
+		}
 	}
 }

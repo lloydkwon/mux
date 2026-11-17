@@ -199,3 +199,237 @@ func TestServePromptRoundTrip(t *testing.T) {
 		t.Errorf("세션 화면: %d %s", code, data)
 	}
 }
+
+type serveDialog struct {
+	Result string
+	Dialog *struct {
+		Key  string
+		Kind string
+		Tabs []struct {
+			Label        string
+			Done, Submit bool
+		}
+		Prompt  []string
+		Options []struct {
+			N        int
+			Label    string
+			FreeText bool
+			Draft    string
+		}
+		Current int
+	}
+}
+
+func (c *serveClient) post(path string, body any) map[string]string {
+	c.t.Helper()
+	data, _ := json.Marshal(body)
+	code, out := c.do(http.MethodPost, path, string(data), true)
+	var res map[string]string
+	if code != 200 || json.Unmarshal(out, &res) != nil {
+		c.t.Fatalf("POST %s %s: %d %s", path, data, code, out)
+	}
+	return res
+}
+
+func (c *serveClient) dialog(a serveAgent) serveDialog {
+	c.t.Helper()
+	_, out := c.get(fmt.Sprintf("/api/dialog?pane=%s&pid=%d", url.QueryEscape(a.Pane), a.PID), true)
+	var d serveDialog
+	json.Unmarshal(out, &d)
+	return d
+}
+
+func (c *serveClient) agentState(session string) string {
+	if card := c.card(session); card != nil && len(card.Agents) == 1 {
+		return card.Agents[0].State
+	}
+	return ""
+}
+
+func (c *serveClient) reply(a serveAgent) string {
+	_, out := c.get(fmt.Sprintf("/api/turn?pane=%s&pid=%d", url.QueryEscape(a.Pane), a.PID), true)
+	var turn struct {
+		Result string
+		Reply  *struct{ Text string }
+	}
+	if json.Unmarshal(out, &turn) != nil || turn.Result != "ok" || turn.Reply == nil {
+		return ""
+	}
+	return turn.Reply.Text
+}
+
+// TestServeAnswersADialog 는 폰에서 Claude 의 질문 대화상자에 답한다(docs/design/serve.md «대화상자에 답하기»).
+// 가짜 Claude 의 대화상자는 진짜 2.1.312 에서 잰 모양과 키를 흉내 낸다(e2e/fakeclaude/ask.go).
+func TestServeAnswersADialog(t *testing.T) {
+	startFake(t, "e2e-dlg", "dlg")
+	c := startServe(t)
+	var a serveAgent
+	eventually(t, "카드에 가짜 Claude 가 있다", 10*time.Second, func() bool {
+		card := c.card("e2e-dlg")
+		if card == nil || len(card.Agents) != 1 {
+			return false
+		}
+		a = card.Agents[0]
+		return true
+	})
+
+	ask := func() {
+		t.Helper()
+		if res := c.post("/api/prompt", map[string]any{"pane": a.Pane, "pid": a.PID, "text": "/fake-ask"}); res["result"] != "sent" {
+			t.Fatalf("질문 띄우기: %v", res)
+		}
+		eventually(t, "Claude 가 질문을 띄우고 기다린다", 10*time.Second, func() bool { return c.agentState("e2e-dlg") == "blocked" })
+	}
+	// 상태 파일의 waiting 이 화면보다 먼저 쓰일 수 있다 — 폰처럼 다시 읽는다. 끝내 못 읽으면 그때의 화면을 남긴다.
+	readDialog := func() serveDialog {
+		t.Helper()
+		var d serveDialog
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if d = c.dialog(a); d.Result == "ok" {
+				return d
+			}
+			time.Sleep(150 * time.Millisecond)
+		}
+		t.Fatalf("대화상자를 읽지 못했다: %+v\n화면:\n%s", d, tmq("capture-pane", "-p", "-t", a.Pane))
+		return d
+	}
+
+	// PC 에서 직접 쓰기 칸으로 가서 1 을 쳐 두었다 — 리뷰에서 재현한 화면 «❯ 3. 1». 이 칸에서는 숫자키가 글자로 들어간다.
+	// readDraft 는 칸의 글이 draft 가 될 때까지 다시 읽는다.
+	readDraft := func(draft string) serveDialog {
+		t.Helper()
+		var d serveDialog
+		eventually(t, "직접 쓰기 칸에 «"+draft+"»", 5*time.Second, func() bool {
+			d = c.dialog(a)
+			return d.Result == "ok" && len(d.Dialog.Options) > 2 && d.Dialog.Options[2].Draft == draft
+		})
+		return d
+	}
+
+	ask()
+	d := readDialog()
+	if d.Result != "ok" || d.Dialog.Kind != "question" || len(d.Dialog.Options) != 4 || d.Dialog.Options[1].Label != "배" ||
+		!d.Dialog.Options[2].FreeText || len(d.Dialog.Tabs) != 3 || d.Dialog.Key == "" {
+		t.Fatalf("첫 질문 = %+v %+v", d, d.Dialog)
+	}
+	tmq("send-keys", "-t", a.Pane, "3")
+	tmq("send-keys", "-t", a.Pane, "1")
+	d = readDraft("1")
+	if res := c.post("/api/answer", map[string]any{"pane": a.Pane, "pid": a.PID, "key": d.Dialog.Key, "n": 2, "label": "배"}); res["result"] != "answered" {
+		t.Fatalf("배 고르기: %v\n화면:\n%s", res, tmq("capture-pane", "-p", "-t", a.Pane))
+	}
+	first := d.Dialog.Key
+	d = readDialog()
+	if d.Result != "ok" || strings.Join(d.Dialog.Prompt, "") != "색을 골라 주세요." || !d.Dialog.Tabs[0].Done {
+		t.Fatalf("둘째 질문 = %+v", d.Dialog)
+	}
+	// 폰이 첫 질문을 보던 채로 «2. 배» 를 한 번 더 눌렀다 — 다른 대화상자라 누르지 않는다.
+	if res := c.post("/api/answer", map[string]any{"pane": a.Pane, "pid": a.PID, "key": first, "n": 2, "label": "배"}); res["result"] != "changed" {
+		t.Fatalf("낡은 화면의 답: %v", res)
+	}
+	// 둘째 질문에도 PC 에서 쓰다 만 글이 있다. 폰은 그 글을 보고 직접 쓰기를 골랐다 — 지우고 새로 쓴다.
+	tmq("send-keys", "-t", a.Pane, "3")
+	tmq("send-keys", "-t", a.Pane, "-l", "초록")
+	d = readDraft("초록")
+	if res := c.post("/api/answer", map[string]any{"pane": a.Pane, "pid": a.PID, "key": d.Dialog.Key, "n": 3, "label": "초록", "text": "보라"}); res["result"] != "answered" {
+		t.Fatalf("직접 쓰기: %v\n화면:\n%s", res, tmq("capture-pane", "-p", "-t", a.Pane))
+	}
+	d = readDialog()
+	if d.Result != "ok" || len(d.Dialog.Options) != 2 || d.Dialog.Options[0].Label != "Submit answers" ||
+		!strings.Contains(strings.Join(d.Dialog.Prompt, "\n"), "→ 보라") {
+		t.Fatalf("Submit 탭 = %+v", d.Dialog)
+	}
+	if res := c.post("/api/answer", map[string]any{"pane": a.Pane, "pid": a.PID, "key": d.Dialog.Key, "n": 1, "label": "Submit answers"}); res["result"] != "answered" {
+		t.Fatalf("제출: %v", res)
+	}
+	eventually(t, "답이 Claude 에게 닿아 회신이 된다", 15*time.Second, func() bool { return c.reply(a) == "answers: 배 / 보라" })
+
+	// Esc 로 거두면 «답하지 않음» 이다. 폰이 본 대화상자가 아니면 거두지 않는다.
+	ask()
+	d = readDialog()
+	if res := c.post("/api/answer", map[string]any{"pane": a.Pane, "pid": a.PID, "key": first, "cancel": true}); res["result"] != "changed" {
+		t.Fatalf("다른 대화상자의 Esc: %v", res)
+	}
+	if res := c.post("/api/answer", map[string]any{"pane": a.Pane, "pid": a.PID, "key": d.Dialog.Key, "cancel": true}); res["result"] != "cancelled" {
+		t.Fatalf("취소: %v", res)
+	}
+	eventually(t, "거둔 질문은 답하지 않음으로 끝난다", 15*time.Second, func() bool { return c.reply(a) == "declined" })
+	if d := c.dialog(a); d.Result == "ok" {
+		t.Errorf("닫힌 뒤에도 대화상자가 있다: %+v", d.Dialog)
+	}
+}
+
+// TestServeAnswersAMultiSelect 는 여러 개 고르기에 답한다 — 체크를 맞추고, 직접 쓰기 칸에 글을 치고, Submit 줄에서
+// Enter 한 뒤, 검토 탭에서 제출한다(tmux.AnswerMulti, 가짜는 e2e/fakeclaude/ask.go).
+func TestServeAnswersAMultiSelect(t *testing.T) {
+	startFake(t, "e2e-multi", "multi")
+	c := startServe(t)
+	var a serveAgent
+	eventually(t, "카드에 가짜 Claude 가 있다", 10*time.Second, func() bool {
+		card := c.card("e2e-multi")
+		if card == nil || len(card.Agents) != 1 {
+			return false
+		}
+		a = card.Agents[0]
+		return true
+	})
+	if res := c.post("/api/prompt", map[string]any{"pane": a.Pane, "pid": a.PID, "text": "/fake-ask-multi"}); res["result"] != "sent" {
+		t.Fatalf("질문 띄우기: %v", res)
+	}
+	var raw struct {
+		Result string
+		Dialog *struct {
+			Key     string
+			Multi   bool
+			Prompt  []string
+			Options []struct {
+				N        int
+				Label    string
+				Checkbox bool
+				FreeText bool
+			}
+		}
+	}
+	readDialog := func() {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			_, out := c.get(fmt.Sprintf("/api/dialog?pane=%s&pid=%d", url.QueryEscape(a.Pane), a.PID), true)
+			if json.Unmarshal(out, &raw) == nil && raw.Result == "ok" {
+				return
+			}
+			time.Sleep(150 * time.Millisecond)
+		}
+		t.Fatalf("대화상자를 읽지 못했다: %+v\n화면:\n%s", raw, tmq("capture-pane", "-p", "-t", a.Pane))
+	}
+
+	readDialog()
+	if !raw.Dialog.Multi || len(raw.Dialog.Options) != 4 || !raw.Dialog.Options[2].FreeText || raw.Dialog.Options[3].Checkbox {
+		t.Fatalf("여러 개 고르기 = %+v", raw.Dialog)
+	}
+	// PC 에서 직접 쓰기 칸으로 가서 1 을 쳐 두었다(«❯ 3. [✔] 1») — 이 칸에서 1 을 누르면 «중단» 이 아니라 글자가 된다.
+	tmq("send-keys", "-t", a.Pane, "-N", "2", "Down")
+	tmq("send-keys", "-t", a.Pane, "1")
+	eventually(t, "직접 쓰기 칸에 «1»", 5*time.Second, func() bool {
+		readDialog()
+		return raw.Dialog.Options[2].Label == "1"
+	})
+	options := []map[string]any{
+		{"n": 1, "label": "중단", "checked": true},
+		{"n": 2, "label": "재시도", "checked": false},
+		{"n": 3, "label": "1", "checked": true},
+	}
+	if res := c.post("/api/answer", map[string]any{"pane": a.Pane, "pid": a.PID, "key": raw.Dialog.Key, "multi": true, "options": options, "text": "로그 보강"}); res["result"] != "answered" {
+		t.Fatalf("여러 개 고르기 답: %v\n화면:\n%s", res, tmq("capture-pane", "-p", "-t", a.Pane))
+	}
+	readDialog()
+	if raw.Dialog.Multi || len(raw.Dialog.Options) != 2 || raw.Dialog.Options[0].Label != "Submit answers" ||
+		!strings.Contains(strings.Join(raw.Dialog.Prompt, "\n"), "→ 중단, 로그 보강") {
+		t.Fatalf("검토 탭 = %+v", raw.Dialog)
+	}
+	if res := c.post("/api/answer", map[string]any{"pane": a.Pane, "pid": a.PID, "key": raw.Dialog.Key, "n": 1, "label": "Submit answers"}); res["result"] != "answered" {
+		t.Fatalf("제출: %v", res)
+	}
+	eventually(t, "고른 것이 Claude 에게 닿는다", 15*time.Second, func() bool { return c.reply(a) == "answers: 중단, 로그 보강" })
+}

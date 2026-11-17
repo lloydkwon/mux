@@ -24,7 +24,13 @@
   let loaded = false;
   // 보낼 곳은 이름으로 기억한다 — 목록은 2초마다 새로 오고, 객체는 그때마다 바뀐다.
   let sel = { session: null, pane: null };
-  const page = { open: false, session: null, tab: "talk", stick: true, turn: null, turnFor: "", turnKey: "" };
+  const page = {
+    open: false, session: null, tab: "talk", stick: true, turn: null, turnFor: "", turnKey: "", talkSig: "",
+    // 답을 기다리는 대화상자와 고르던 선택지({n, label, free, key}), Esc 를 확인 중인 대화상자의 열쇠.
+    // key 는 서버가 준 대화상자 열쇠다 — 보낼 때 그대로 돌려보내, 그사이 다른 대화상자가 떴으면 서버가 누르지 않는다.
+    dialog: null, dialogFor: "", dialogSig: "", pending: null, confirmCancel: "",
+    multi: null, // 여러 개 고르기의 폰 쪽 체크 {key, checked: {n: bool}}
+  };
 
   // ── 서버 ────────────────────────────────────────────────────────────
   // status 0 은 응답을 받지 못했다는 뜻이다 — 요청이 서버에 닿았는지 모른다(보내기에서는 «모름» 으로 다룬다).
@@ -246,6 +252,10 @@
     } else if (!c) {
       to.append(el("span", "", "고른 세션이 목록에 없습니다. 다시 고르세요"));
       to.classList.add("need");
+    } else if (answering() && a) {
+      // 대화상자의 «직접 쓰기» 를 고른 동안 입력줄은 그 답을 쓰는 칸이다.
+      to.append(el("span", "", "답"));
+      to.append(el("b", "", `직접 쓰기 · ${a.name || "claude"} ${a.pane}`));
     } else {
       to.append(el("span", "", "보낼 곳"));
       to.append(el("b", "", a ? `${c.agents.length > 1 ? c.session + " · " : ""}${a.name || "claude"} ${a.pane}` : c.session));
@@ -264,7 +274,9 @@
       renderTarget();
     });
     sendBtn.disabled = !a || n === 0 || sending;
+    sendBtn.setAttribute("aria-label", answering() ? "답하기" : "보내기");
   }
+  const answering = () => page.open && !!page.pending && page.pending.free;
 
   function grow() {
     prompt.style.height = "auto";
@@ -277,7 +289,7 @@
     sent: { tone: "ok", title: "보냈습니다", body: (a) => `${a.name || "claude"} ${a.pane} 의 입력창에 넣고 제출된 것을 확인했습니다.`, fade: true },
     queued: { tone: "ok", title: "대기열에 넣었습니다", body: () => "지금 턴이 끝나면 이어서 처리합니다.", fade: true },
     busy: { tone: "warn", title: "작업 중입니다", body: () => "지금 턴을 처리하고 있습니다. 대기열에 넣으면 이 턴이 끝난 뒤 처리합니다.", acts: ["queue", "cancel"] },
-    blocked: { tone: "stop", title: "승인을 기다리고 있습니다", body: () => "대화상자에 답하기 전에는 보낼 수 없습니다. 폰에서 답하는 기능은 다음 단계에 넣습니다.", acts: ["screen"] },
+    blocked: { tone: "stop", title: "답을 기다리고 있습니다", body: () => "Claude 가 질문이나 권한 확인을 띄웠습니다. 먼저 대화상자에 답하세요.", acts: ["dialog"] },
     not_ready: { tone: "stop", title: "지금은 보낼 수 없습니다", body: () => "아무것도 보내지 않았습니다.", why: true, acts: ["screen"] },
     retry: { tone: "warn", title: "제출되지 않았습니다", body: () => "친 글을 입력창에서 지웠습니다. 다시 보내도 됩니다.", acts: ["resend"] },
     unknown: { tone: "stop", title: "제출됐는지 알 수 없습니다", body: () => "화면을 확인하세요. 같은 글을 다시 보내면 두 번 들어갈 수 있습니다.", why: true, acts: ["screen"] },
@@ -286,7 +298,7 @@
     invalid: { tone: "stop", title: "보낼 수 없는 글입니다", body: () => "", why: true },
     error: { tone: "stop", title: "보내지 못했습니다", body: () => "", why: true },
   };
-  const ACT_LABEL = { queue: "대기열에 넣기", cancel: "보내지 않기", screen: "화면 보기", resend: "다시 보내기" };
+  const ACT_LABEL = { queue: "대기열에 넣기", cancel: "보내지 않기", screen: "화면 보기", resend: "다시 보내기", dialog: "대화상자 보기" };
 
   function hideResult() {
     clearTimeout(hideTimer);
@@ -314,6 +326,7 @@
           }
           if (act === "queue") send(true);
           else if (act === "resend") send(false);
+          else if (act === "dialog" && target) openPage(sel.session, target.pane, "talk");
           else if (act === "screen" && target) openPage(sel.session, target.pane, "screen");
           else if (act === "screen" && sel.session) openPage(sel.session, sel.pane, "screen");
           else hideResult();
@@ -387,7 +400,11 @@
       schedule(300);
     }
   }
-  sendBtn.addEventListener("click", () => send(false));
+  sendBtn.addEventListener("click", () => {
+    if (!answering()) send(false);
+    else if (page.pending.multi) answerMulti();
+    else answer({});
+  });
 
   // ── 받아쓰기 (SpeechRecognition, ko-KR). 듣는 동안의 글을 입력줄 위에 크게 보이고, 저절로 보내지 않는다 ──
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -522,6 +539,8 @@
       page.stick = true;
       page.turn = null;
       page.turnFor = "";
+      page.talkSig = "";
+      clearDialog();
       $("screen-box").replaceChildren();
     }
     pageEl.hidden = false;
@@ -558,7 +577,7 @@
       $("p-state").textContent = "";
       $("p-age").textContent = "";
       $("p-meta").textContent = loaded ? "이 세션이 목록에 없습니다. 닫혔거나 이름이 바뀌었습니다." : "불러오는 중…";
-      $("page-targets").replaceChildren();
+      chips($("page-targets"), [], null, () => {}); // 바뀐 것만 그리는 표시(dataset.sig)도 같이 비운다
       $("tab-talk").hidden = true;
       $("panel-talk").hidden = true;
       $("panel-screen").hidden = true;
@@ -580,6 +599,7 @@
       sel.pane = pane;
       page.stick = true;
       page.turnKey = "";
+      clearDialog(); // 고르던 선택지는 앞 Claude 의 대화상자 것이다
       hideResult();
       renderPage();
       renderTarget();
@@ -618,6 +638,9 @@
     if (page.tab === "talk" && a) {
       const key = `${a.pane}|${a.pid}|${a.state}|${a.since || 0}`;
       if (key !== page.turnKey) fetchTurn(a, key);
+      // 막혀 있는 동안은 갱신마다 대화상자를 읽는다 — 질문이 여럿이면 답할 때마다 다음 질문으로 바뀐다.
+      if (a.state === "blocked") fetchDialog(a);
+      else if (page.dialog) clearDialog();
     } else if (a || !c.agents.length) {
       // Claude 가 있는 세션인데 고른 Claude 가 안 보이면 캡처하지 않는다 — 세션의 활성 pane 은 다른 pane 일 수 있다.
       fetchScreen(c, a);
@@ -647,8 +670,17 @@
     if (page.open) renderPage();
   }
 
+  // 대화 탭은 내용이 바뀔 때만 다시 그린다. 2초마다 갈아 끼우면 대화상자의 선택지 버튼이 누르는 사이 바뀌어 클릭이
+  // 사라지고(칩과 같은 문제), 회신 글을 손가락으로 골라 복사할 수도 없다.
   function renderTalk(c, a) {
     const panel = $("panel-talk");
+    const t = a && page.turnFor === a.pane ? page.turn : null;
+    const dlg = a && a.state === "blocked" && page.dialogFor === a.pane ? page.dialog : null;
+    const sig = JSON.stringify([a && a.pane, a && a.state, t, dlg, page.pending, page.multi, page.confirmCancel, sending,
+      a && a.state === "working" ? c.age : "", c.work, c.reason, c.agents.length]);
+    if (sig === page.talkSig) return;
+    page.talkSig = sig;
+
     const out = [el("p", "turn-note", "마지막 턴")];
     if (!a) {
       // 고른 Claude 가 이번 목록에 없다. 잠깐 빠진 것이면 다음 갱신에 돌아온다. 보내기는 그동안 꺼져 있다.
@@ -656,38 +688,34 @@
       if (c.agents.length === 1) {
         // Claude 가 하나면 머리에 고르기 칩이 없다 — 여기서 고르게 한다.
         const only = c.agents[0];
-        const btn = el("button", "btn", `${only.name || "claude"} ${only.pane} 로 고르기`);
-        btn.type = "button";
-        btn.addEventListener("click", () => {
+        out.push(button("btn", `${only.name || "claude"} ${only.pane} 로 고르기`, () => {
           sel.pane = only.pane;
           page.turnKey = "";
           hideResult();
           renderPage();
           renderTarget();
           refreshPage();
-        });
-        out.push(btn);
+        }));
       }
       panel.replaceChildren(...out);
       return;
     }
-    const t = page.turnFor === a.pane ? page.turn : null;
-    if (!t) {
-      out.push(el("p", "muted", "대화 기록을 읽는 중…"));
-      panel.replaceChildren(...out);
-      return;
-    }
-    if (t.prompt) {
+    if (t && t.prompt) {
       const me = el("div", "me");
       const who = t.human ? "보낸 말" : "사람이 연 턴이 아님 (작업 알림 등)";
       me.append(el("span", "lbl", who + (t.prompt.at ? ` · ${hhmm(t.prompt.at)}` : "")), el("div", t.human ? "bubble" : "bubble other", t.prompt.text));
       out.push(me);
     }
-    if (t.result === "ok" && t.reply) {
+    if (a.state === "blocked") {
+      // 답을 기다리는 대화상자 — 대화 기록이 아니라 화면에서 읽은 것이다.
+      out.push(dialogBox(c, a));
+    } else if (!t) {
+      out.push(el("p", "muted", "대화 기록을 읽는 중…"));
+    } else if (t.result === "ok" && t.reply) {
       const cl = el("div", "cl");
       cl.append(el("span", "lbl", `Claude 회신${t.reply.at ? " · " + hhmm(t.reply.at) : ""} · 대화 기록에서 읽음`), el("p", "txt", t.reply.text));
       out.push(cl);
-    } else if (t.result === "running") {
+    } else if (t.result === "running" || a.state === "working") {
       const w = el("div", "wait");
       const row = el("div", "row1");
       row.append(el("i"), el("span", "", `작업 중 · ${c.age}`));
@@ -696,28 +724,303 @@
       if (c.work && c.agents.length === 1) w.append(el("p", "now", c.work));
       w.append(el("p", "muted", "끝나면 회신이 여기에 나옵니다."));
       out.push(w);
-    } else if (t.result === "blocked") {
-      const w = el("div", "wait stop");
-      const row = el("div", "row1");
-      row.append(el("span", "", "승인을 기다리고 있습니다"));
-      const btn = el("button", "btn", "화면에서 대화상자 보기");
-      btn.type = "button";
-      btn.addEventListener("click", () => {
-        page.tab = "screen";
-        page.stick = true;
-        renderPage();
-        refreshPage();
-      });
-      w.append(row, el("p", "cmd", c.reason || a.waitingFor || ""), el("p", "", "폰에서 답하는 기능은 다음 단계에 넣습니다."), btn);
-      out.push(w);
     } else if (t.result === "no_reply") {
       out.push(el("p", "muted", "마지막 턴에 회신 글이 없습니다."));
     } else if (t.result === "gone") {
       out.push(el("p", "muted", "이 Claude 가 끝났거나 바뀌었습니다. 목록으로 돌아가 다시 고르세요."));
-    } else {
+    } else if (t.result !== "blocked") {
       out.push(el("p", "muted", `대화를 읽지 못했습니다. ${t.detail || ""}`));
     }
     panel.replaceChildren(...out);
+  }
+
+  function button(cls, text, onClick) {
+    const b = el("button", cls, text);
+    b.type = "button";
+    b.addEventListener("click", onClick);
+    return b;
+  }
+  function toScreenTab() {
+    page.tab = "screen";
+    page.stick = true;
+    renderPage();
+    refreshPage();
+  }
+
+  // ── 대화상자에 답하기 (질문·권한 확인). 선택지를 누르면 확인을 한 번 더 받고, 서버는 누르기 직전에 화면을 다시
+  // 읽어 폰이 본 선택지(번호와 글)일 때만 숫자키를 누른다(tmux/agent_dialog.go). ──
+  const DIALOG_KIND = { question: "질문", permission: "권한 확인", other: "대화상자" };
+  const shorten = (s, n) => ([...s].length > n ? [...s].slice(0, n - 1).join("") + "…" : s);
+
+  function dialogBox(c, a) {
+    const box = el("div", "dlg");
+    const r = page.dialogFor === a.pane ? page.dialog : null;
+    if (!r) {
+      box.append(el("p", "muted", "대화상자를 읽는 중…"));
+      return box;
+    }
+    if (r.result !== "ok") {
+      box.append(el("p", "dlg-kind", c.reason || "승인 대기"));
+      box.append(el("p", "", r.result === "none"
+        ? "번호로 고를 수 있는 대화상자가 아닙니다. 화면 탭에서 확인하세요."
+        : `대화상자를 읽지 못했습니다. ${r.detail || ""}`));
+      box.append(button("btn", "화면 보기", toScreenTab));
+      return box;
+    }
+    const d = r.dialog;
+    const questions = d.tabs.filter((tab) => !tab.submit);
+    let kind = DIALOG_KIND[d.kind] || "대화상자";
+    if (questions.length > 1) {
+      const at = questions.findIndex((tab) => !tab.done);
+      kind += at < 0 ? " · 검토하고 제출" : ` ${at + 1}/${questions.length} · ${questions[at].label}`;
+    }
+    if (d.multi) kind += " · 여러 개 고르기";
+    box.append(el("p", "dlg-kind", kind));
+    if (d.tabs.length) {
+      const tabs = el("div", "dlg-tabs");
+      for (const tab of d.tabs) tabs.append(el("span", "dlg-tab" + (tab.done ? " done" : "") + (tab.submit ? " submit" : ""), (tab.done ? "☒ " : tab.submit ? "✔ " : "☐ ") + tab.label));
+      box.append(tabs);
+    }
+    if (d.prompt.length) box.append(el("div", "dlg-prompt" + (d.kind === "permission" ? " mono" : ""), d.prompt.join("\n")));
+
+    if (d.multi) {
+      box.append(multiOptions(d));
+    } else {
+      const opts = el("div", "dlg-opts");
+      for (const o of d.options) {
+        const picked = page.pending && page.pending.n === o.n;
+        const b = el("button", "opt" + (picked ? " picked" : ""));
+        b.type = "button";
+        b.setAttribute("aria-pressed", String(picked));
+        const head = el("span", "ohead");
+        head.append(el("span", "onum", String(o.n)), el("span", "olabel", o.freeText ? "직접 쓰기" : o.label));
+        if (o.chosen) head.append(el("span", "ochosen", "✔ 앞서 고름"));
+        b.append(head);
+        const detail = o.freeText
+          ? (o.draft ? `칸에 쓰다 만 글 «${shorten(o.draft, 40)}» — 고르면 지우고 새로 씁니다` : "아래 입력줄에 쓰거나 말해서 보냅니다")
+          : o.detail;
+        if (detail) b.append(el("span", "odetail", detail));
+        b.addEventListener("click", () => {
+          page.pending = { n: o.n, label: o.label, free: o.freeText, key: d.key };
+          page.confirmCancel = "";
+          hideResult();
+          renderPage();
+          renderTarget();
+        });
+        opts.append(b);
+      }
+      box.append(opts);
+
+      if (page.pending) {
+        const bar = el("div", "dlg-confirm");
+        if (page.pending.free) {
+          bar.append(el("p", "", "아래 입력줄에 답을 쓰거나 말한 뒤 ↑ 를 누르세요."));
+        } else {
+          bar.append(button("btn primary", sending ? "보내는 중…" : `«${shorten(page.pending.label, 28)}» 로 답하기`, () => {
+            if (page.pending) answer({ key: page.pending.key, n: page.pending.n, label: page.pending.label });
+          }));
+        }
+        bar.append(button("btn", "다시 고르기", () => {
+          page.pending = null;
+          renderPage();
+          renderTarget();
+        }));
+        box.append(bar);
+      }
+    }
+    const cancel = el("div", "dlg-cancel");
+    if (!page.confirmCancel) {
+      cancel.append(button("linkish", "답하지 않고 닫기 (Esc)", () => {
+        page.confirmCancel = d.key;
+        page.pending = null;
+        renderPage();
+        renderTarget();
+      }));
+    } else {
+      cancel.append(el("p", "", d.kind === "permission" ? "닫으면 이 실행을 거절합니다." : "닫으면 이 질문에 답하지 않은 것이 됩니다."));
+      cancel.append(button("btn stop", "닫기", () => answer({ key: page.confirmCancel, cancel: true })), button("btn", "아니요", () => {
+        page.confirmCancel = "";
+        renderPage();
+      }));
+    }
+    box.append(cancel);
+    return box;
+  }
+
+  // 여러 개 고르기 — 체크박스는 폰 안에서만 켜고 끄고(page.multi), «다음» 을 누르면 한 번에 보낸다. 서버는 다른 체크만
+  // 숫자키로 맞추고, 직접 쓰기 글은 화살표로 그 칸에 가서 치고, Submit 줄에서 Enter 한다(tmux.AnswerMulti). 그다음
+  // 뜨는 Submit 탭(검토)은 한 개 고르기처럼 확인을 한 번 더 받고 제출한다.
+  function multiBoxes(d) {
+    return d.options.filter((o) => o.checkbox);
+  }
+  function multiOptions(d) {
+    const boxes = multiBoxes(d);
+    if (!page.multi || page.multi.key !== d.key) {
+      page.multi = { key: d.key, checked: Object.fromEntries(boxes.map((o) => [o.n, o.checked])) };
+    }
+    const wrap = el("div", "dlg-opts");
+    for (const o of boxes) {
+      const on = !!page.multi.checked[o.n];
+      const b = el("button", "opt check" + (on ? " picked" : ""));
+      b.type = "button";
+      b.setAttribute("role", "checkbox");
+      b.setAttribute("aria-checked", String(on));
+      const head = el("span", "ohead");
+      head.append(el("span", "obox", on ? "✓" : ""), el("span", "olabel", o.freeText ? "직접 쓰기" : o.label));
+      b.append(head);
+      const detail = o.freeText
+        ? (o.draft ? `칸에 쓰다 만 글 «${shorten(o.draft, 40)}» — 켜면 지우고 아래 입력줄의 글로 바꿉니다` : "켜면 아래 입력줄에 쓴 글을 답으로 더합니다")
+        : o.detail;
+      if (detail) b.append(el("span", "odetail", detail));
+      b.addEventListener("click", () => {
+        page.multi.checked[o.n] = !on;
+        if (o.freeText) page.pending = !on ? { n: o.n, label: o.label, free: true, multi: true, key: d.key } : null;
+        page.confirmCancel = "";
+        hideResult();
+        renderPage();
+        renderTarget();
+      });
+      wrap.append(b);
+    }
+    const count = boxes.filter((o) => page.multi.checked[o.n]).length;
+    const bar = el("div", "dlg-confirm");
+    if (page.pending && page.pending.multi) bar.append(el("p", "", "직접 쓰기 글은 아래 입력줄에 쓰거나 말하세요."));
+    const next = button("btn primary", sending ? "보내는 중…" : `고른 ${count}개로 다음 →`, () => answerMulti());
+    next.disabled = count === 0 || sending;
+    bar.append(next);
+    const out = el("div", "dlg-multi");
+    out.append(wrap, bar);
+    return out;
+  }
+  function answerMulti() {
+    const d = page.dialog && page.dialog.dialog;
+    if (!d || !d.multi || !page.multi) return;
+    const boxes = multiBoxes(d);
+    // 그사이 다른 대화상자로 바뀌었으면 고른 체크는 그 대화상자의 것이 아니다 — 보내지 않는다.
+    if (page.multi.key !== d.key) return;
+    const options = boxes.map((o) => ({ n: o.n, label: o.label, checked: !!page.multi.checked[o.n] }));
+    if (!options.some((o) => o.checked)) return;
+    const free = boxes.find((o) => o.freeText && page.multi.checked[o.n]);
+    let text = "";
+    if (free) {
+      text = prompt.value.replace(/\s*\n+\s*/g, " ").trim();
+      prompt.value = text;
+      grow();
+      if (!text) {
+        banner("warn", "직접 쓰기 글이 없습니다", "아래 입력줄에 쓰거나 말한 뒤 다시 누르세요. 직접 쓰기를 끄면 글 없이 보냅니다.");
+        return;
+      }
+    }
+    answer({ key: page.multi.key, multi: true, options, text });
+  }
+
+  let dialogBusy = false;
+  async function fetchDialog(a) {
+    if (dialogBusy) return;
+    dialogBusy = true;
+    let r;
+    try {
+      r = await api(`/api/dialog?pane=${encodeURIComponent(a.pane)}&pid=${a.pid}`);
+    } catch (e) {
+      r = { result: "error", detail: e.message };
+    } finally {
+      dialogBusy = false;
+    }
+    if (sel.pane !== a.pane || !page.open) return;
+    const sig = JSON.stringify(r);
+    if (sig === page.dialogSig) return;
+    page.dialogSig = sig;
+    page.dialog = r;
+    page.dialogFor = a.pane;
+    // 다른 대화상자가 됐으면(열쇠가 다르다) 고르던 선택지·Esc 확인·체크를 모두 푼다 — 번호와 글이 같아도 다른
+    // 대화상자일 수 있다(권한 확인은 어느 것이나 «1. Yes»). 서버도 열쇠를 다시 보지만, 폰이 먼저 보여 주지 않는다.
+    const key = r.result === "ok" ? r.dialog.key : "";
+    if (page.pending && page.pending.key !== key) page.pending = null;
+    if (page.confirmCancel && page.confirmCancel !== key) page.confirmCancel = "";
+    if (page.multi && page.multi.key !== key) page.multi = null;
+    renderPage();
+    renderTarget();
+  }
+  function forgetChoice() {
+    page.pending = null;
+    page.multi = null;
+    page.confirmCancel = "";
+  }
+  function clearDialog() {
+    page.dialog = null;
+    page.dialogFor = "";
+    page.dialogSig = "";
+    page.pending = null;
+    page.multi = null;
+    page.confirmCancel = "";
+  }
+
+  const ANSWER_RESULTS = {
+    answered: { tone: "ok", title: "답했습니다", body: () => "Claude 가 다음으로 넘어갑니다.", fade: true },
+    cancelled: { tone: "ok", title: "대화상자를 닫았습니다", body: () => "", fade: true },
+    changed: { tone: "warn", title: "대화상자가 바뀌었습니다", body: () => "보던 화면과 지금 화면이 달라 누르지 않았습니다. 새 화면을 보고 다시 고르세요." },
+    none: { tone: "info", title: "대화상자가 이미 닫혔습니다", body: () => "" },
+    unknown: { tone: "stop", title: "답이 들어갔는지 알 수 없습니다", body: () => "화면 탭에서 확인하세요. 같은 답을 다시 누르면 다음 질문에 들어갈 수 있습니다.", why: true, acts: ["screen"] },
+    not_ready: { tone: "stop", title: "지금은 답할 수 없습니다", body: () => "아무것도 누르지 않았습니다.", why: true, acts: ["screen"] },
+    gone: { tone: "stop", title: "대상 Claude 가 없습니다", body: () => "", why: true },
+    invalid: { tone: "stop", title: "보낼 수 없는 글입니다", body: () => "", why: true },
+    error: { tone: "stop", title: "답하지 못했습니다", body: () => "", why: true },
+  };
+
+  async function answer(body) {
+    const a = selAgent();
+    if (!a || sending) return;
+    let text;
+    if (page.pending && page.pending.free && !page.pending.multi && !body.cancel && !body.multi) {
+      text = prompt.value.replace(/\s*\n+\s*/g, " ").trim();
+      prompt.value = text;
+      grow();
+      if (!text) { renderTarget(); return; }
+      if ([...text].length > MAX_RUNES) {
+        banner("stop", ANSWER_RESULTS.invalid.title, `${MAX_RUNES}자를 넘었습니다.`);
+        return;
+      }
+      body = { key: page.pending.key, n: page.pending.n, label: page.pending.label, text };
+    }
+    stopListening(false);
+    hideResult();
+    sending = true;
+    sendBtn.classList.add("busy");
+    renderPage();
+    renderTarget();
+    try {
+      const res = await api("/api/answer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pane: a.pane, pid: a.pid, ...body }),
+      });
+      const r = ANSWER_RESULTS[res.result] || ANSWER_RESULTS.error;
+      banner(r.tone, r.title, r.body(), r.why ? res.detail : "", r.acts, { pane: a.pane, pid: a.pid });
+      if (r.fade) hideTimer = setTimeout(hideResult, 4000);
+      // 보낼 수 없는 글(invalid)만 고르기를 남겨 글을 고쳐 다시 보내게 한다. 나머지는 모두 푼다 — 들어갔는지 모를
+      // 때(unknown) 같은 고르기를 남기면, 다음에 뜬 대화상자에 같은 답을 다시 누르기 쉽다.
+      if (res.result !== "invalid") forgetChoice();
+      if (res.result === "answered") {
+        const sentText = text || body.text;
+        if (sentText && prompt.value === sentText) { prompt.value = ""; grow(); }
+      }
+    } catch (e) {
+      forgetChoice();
+      if (e.status === 0 || e.status >= 500) {
+        const r = ANSWER_RESULTS.unknown;
+        banner(r.tone, r.title, r.body(), e.message, r.acts, { pane: a.pane, pid: a.pid });
+      } else {
+        banner("stop", ANSWER_RESULTS.error.title, "", e.message);
+      }
+    } finally {
+      sending = false;
+      sendBtn.classList.remove("busy");
+      page.dialogSig = ""; // 넘어간 다음 화면을 바로 다시 읽는다
+      page.turnKey = "";
+      renderPage();
+      renderTarget();
+      schedule(300);
+    }
   }
 
   let screenBusy = false;

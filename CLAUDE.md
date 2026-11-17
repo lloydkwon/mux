@@ -185,5 +185,10 @@ Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale a
 - **`mux serve` 는 127.0.0.1 에만 바인드하고, `Tailscale-User-Login` 이 `--allow` 목록일 때만 응답한다.** Host(`.ts.net`
   — DNS 리바인딩)·POST 의 Origin·JSON·CSP 확인을 빼지 않는다. 보내기는 `PromptAgent` 를 그대로 부르고 pane id + pid 로
   지목한다(pid 가 다르면 보내지 않는다). [대기열에 넣기] 는 `ErrAgentBusy` 에만 띄운다. 폰을 연 것만으로 제목 모델(Haiku)을
-  부르지 않고, 보낸 글은 로그에 남기지 않는다. 목록 값은 패널의 판정 함수(`PhoneRows`)로, 모양은 폰의 카드로. (serve.md)
+  부르지 않고, 보낸 글은 로그에 남기지 않는다. 목록 값은 패널의 판정 함수(`PhoneRows`)로, 모양은 폰의 카드로.
+  Claude 의 질문·권한 확인에 답할 때는 **누르기 직전에 화면을 다시 읽어 폰이 본 대화상자(`Key`)·번호·글일 때만** 누른다
+  (`AnswerDialog`, 낡은 화면의 숫자가 Submit 탭의 Cancel 을 누른 일이 있다; 권한 확인은 어느 것이나 «1. Yes» 라 열쇠 없이는
+  다음 권한 확인을 승인한다 — Esc 도 열쇠를 본다). 직접 쓰기 칸은 라벨이 아니라 자리로 알고, 커서가 그 칸이면 숫자 전에
+  빼낸다(그 칸에서는 숫자가 글자다). 여러 개 고르기는 숫자키가 체크만 바꾸므로 `AnswerMulti`
+  (체크 맞추기 → 직접 쓰기는 화살표로 → Submit 줄에서 Enter)로만 답한다. 대화 탭은 내용이 바뀔 때만 다시 그린다. (serve.md)
 - **주석에 «measured»·«verified» 를 쓰면** `scripts/tmux-assumptions.sh` 에 그 단언을 한 줄 더한다.
