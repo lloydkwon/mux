@@ -44,6 +44,9 @@ func fakeWhisper(mode string, args []string) int {
 			return 1
 		}
 		json.NewEncoder(os.Stdout).Encode(map[string]string{"text": prompt + "|" + string(data)})
+	case "info":
+		// 진단 값까지 내는 진짜 transcribe.py 의 모양.
+		fmt.Println(`{"text": "안녕", "duration": 12.5, "speech": 9.25}`)
 	case "fail":
 		fmt.Fprintln(os.Stderr, "Traceback (most recent call last):")
 		fmt.Fprintln(os.Stderr, "RuntimeError: CUDA failed with error no CUDA-capable device is detected")
@@ -72,6 +75,8 @@ func fakeWhisper(mode string, args []string) int {
 // fakeTranscriber 는 핸들러 시험용이다. 받은 파일의 내용·권한과 프롬프트를 적어 둔다.
 type fakeTranscriber struct {
 	text    string
+	seconds float64 // 녹음 길이(초) — 명령이 주는 진단 값
+	speech  float64 // VAD 가 말소리로 본 길이(초)
 	err     error
 	block   chan struct{} // 있으면 닫힐 때까지(또는 ctx 가 끝날 때까지) 기다린다
 	started chan struct{}
@@ -86,7 +91,7 @@ type fakeTranscriber struct {
 	stillOn bool // 돌아올 때 파일이 아직 있었나
 }
 
-func (f *fakeTranscriber) Transcribe(ctx context.Context, path, prompt string) (string, error) {
+func (f *fakeTranscriber) Transcribe(ctx context.Context, path, prompt string) (transcription, error) {
 	data, _ := os.ReadFile(path)
 	st, _ := os.Stat(path)
 	f.mu.Lock()
@@ -106,10 +111,10 @@ func (f *fakeTranscriber) Transcribe(ctx context.Context, path, prompt string) (
 			f.mu.Lock()
 			f.ctxErr = ctx.Err()
 			f.mu.Unlock()
-			return "", ctx.Err()
+			return transcription{}, ctx.Err()
 		}
 	}
-	return f.text, f.err
+	return transcription{Text: f.text, Audio: f.seconds, Speech: f.speech}, f.err
 }
 
 func whisperServer(t *testing.T, b backend, tr transcriber, dictationFile string, logOut io.Writer) http.Handler {
@@ -359,8 +364,8 @@ func TestCommandTranscriberFollowsTheContract(t *testing.T) {
 		"--resume.",         // - 로 시작해도 옵션이 되지 않는다(--prompt= 한 덩어리)
 		"",
 	} {
-		text, err := fakeCommand(t, "echo").Transcribe(context.Background(), audioFile(t, "녹음"), prompt)
-		if err != nil || text != prompt+"|녹음" {
+		got, err := fakeCommand(t, "echo").Transcribe(context.Background(), audioFile(t, "녹음"), prompt)
+		if text := got.Text; err != nil || text != prompt+"|녹음" {
 			t.Errorf("프롬프트 %q: Transcribe = %q, %v", prompt, text, err)
 		}
 	}

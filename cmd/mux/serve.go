@@ -32,7 +32,8 @@ client is connected.
 With --whisper the phone records and uploads, and the server transcribes with
 that command (scripts/whisper/setup.sh installs ~/.local/opt/mux-whisper/transcribe).
 Terms for the prompt and "wrong => right" fixes come from --dictation, read on
-every request. Without --whisper the phone uses the browser's own dictation.`,
+every request; each transcription is appended to --dictation-log (the audio is
+never kept). Without --whisper the phone uses the browser's own dictation.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -45,15 +46,17 @@ every request. Without --whisper the phone uses the browser's own dictation.`,
 	cmd.Flags().StringArrayVar(&cfg.Allow, "allow", nil, "Tailscale login allowed in (repeatable; required)")
 	cmd.Flags().StringVar(&cfg.HostSuffix, "host-suffix", serve.DefaultHostSuffix, "the Host name must end with this (DNS rebinding guard)")
 	cmd.Flags().StringVar(&cfg.Whisper, "whisper", "", "command that transcribes a recording: <cmd> --prompt=<terms> <file> → {\"text\": …} (empty: the browser's dictation)")
-	cmd.Flags().StringVar(&cfg.DictationFile, "dictation", defaultDictationFile(), "dictation terms and \"wrong => right\" fixes, one per line (used with --whisper)")
+	cmd.Flags().StringVar(&cfg.DictationFile, "dictation", muxConfigFile("dictation.txt"), "dictation terms and \"wrong => right\" fixes, one per line (used with --whisper)")
+	cmd.Flags().StringVar(&cfg.DictationLog, "dictation-log", muxConfigFile("dictation-log.jsonl"), "append each transcription (heard text, fixed text, durations) as a JSON line; empty: keep none")
 	return cmd
 }
 
-// defaultDictationFile 은 받아쓰기 용어 파일의 기본 자리다(~/.config/mux/dictation.txt). 없어도 된다.
-func defaultDictationFile() string {
+// muxConfigFile 은 ~/.config/mux 안의 파일 자리다 — 받아쓰기 용어 파일(dictation.txt, 없어도 된다)과 받아쓰기
+// 기록(dictation-log.jsonl).
+func muxConfigFile(name string) string {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(dir, "mux", "dictation.txt")
+	return filepath.Join(dir, "mux", name)
 }

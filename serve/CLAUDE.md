@@ -10,7 +10,7 @@
 | `api.go` (목록·보내기·대화·화면, 결과 갈래), `backend.go` | serve.md, agent-api.md (`PromptAgent`·종료 코드) |
 | `dialog.go` (대화상자 읽기·답하기·여러 개 고르기·Esc) | serve.md «대화상자에 답하기» |
 | `static/` (카드, 입력줄, 받아쓰기, 세션 페이지, 화면 탭의 ANSI→HTML) | serve.md |
-| `transcribe.go` (녹음 받기·받아쓰기 명령·프로세스 묶음 죽이기), `dictation.go` (용어 파일·프롬프트·바꿔 쓰기), `static/record.js` (MediaRecorder), `../scripts/whisper/` | serve.md «받아쓰기 — 서버 Whisper» |
+| `transcribe.go` (녹음 받기·받아쓰기 명령·프로세스 묶음 죽이기), `dictation.go` (용어 파일·프롬프트·바꿔 쓰기), `dictlog.go` (받아쓰기 기록 — 받아쓴 글은 여기에만, journald 에는 없다), `static/record.js` (MediaRecorder), `../scripts/whisper/` | serve.md «받아쓰기 — 서버 Whisper» |
 
 받아쓰기에서 되돌리기 쉬운데 되돌리면 안 되는 것 — 근거(측정)는 serve.md 에 있다: `transcribe.py` 의 묶음 처리
 (`BatchedInferencePipeline` — 순차 `model.transcribe` 는 30초 창 뒤에 프롬프트를 버린다, 타임스탬프는 끈 채로),

@@ -33,18 +33,26 @@ const (
 // 녹음한다. 둘 다 CORS 의 단순 요청 형식이 아니어서 다른 출처는 사전 요청 없이 보내지 못한다(auth.go).
 var audioTypes = map[string]string{"audio/webm": ".webm", "audio/mp4": ".m4a"}
 
+// transcription 은 받아쓰기 명령의 결과다. Audio·Speech 는 명령이 주면 채우는 진단 값이고(녹음 길이와 VAD 가
+// 말소리로 본 길이, 초), 받아쓰기 기록에만 쓴다.
+type transcription struct {
+	Text          string
+	Audio, Speech float64
+}
+
 // transcriber 는 녹음 파일 하나를 글로 바꾼다. 진짜는 commandTranscriber, 핸들러 시험은 가짜를 넣는다.
 type transcriber interface {
-	Transcribe(ctx context.Context, audioPath, prompt string) (string, error)
+	Transcribe(ctx context.Context, audioPath, prompt string) (transcription, error)
 }
 
 // commandTranscriber 는 `<path> --prompt=<글> <오디오 파일>` 을 돌려 stdout 의 JSON 한 줄 {"text": …} 을 읽는다.
+// "duration"(녹음 길이)·"speech"(VAD 가 말소리로 본 길이)는 있으면 읽는다.
 // mux serve 는 Python 을 모른다 — 명령은 scripts/whisper/setup.sh 가 설치한 래퍼다. 셸을 거치지 않는다.
 // 프롬프트는 `--prompt=` 한 덩어리다 — 따로 넘기면 `-` 로 시작하는 프롬프트(용어가 `--resume` 하나뿐)를 argparse 가
 // 옵션으로 읽어 받아쓰기가 매번 실패한다.
 type commandTranscriber struct{ path string }
 
-func (c commandTranscriber) Transcribe(ctx context.Context, audioPath, prompt string) (string, error) {
+func (c commandTranscriber) Transcribe(ctx context.Context, audioPath, prompt string) (transcription, error) {
 	cmd := exec.CommandContext(ctx, c.path, "--prompt="+prompt, audioPath)
 	// 래퍼가 exec 하지 않았거나 명령이 자식을 띄웠어도 다 죽도록 프로세스 묶음째 죽인다 — 폰이 끊은 뒤에도 GPU 를
 	// 쥔 Python 이 남으면 안 된다.
@@ -57,27 +65,29 @@ func (c commandTranscriber) Transcribe(ctx context.Context, audioPath, prompt st
 	err := cmd.Run()
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		if errors.Is(ctxErr, context.DeadlineExceeded) {
-			return "", fmt.Errorf("받아쓰기가 시간 안에 끝나지 않았다: %w", ctxErr)
+			return transcription{}, fmt.Errorf("받아쓰기가 시간 안에 끝나지 않았다: %w", ctxErr)
 		}
-		return "", ctxErr
+		return transcription{}, ctxErr
 	}
 	if err != nil {
 		if last := lastLine(stderr.String()); last != "" {
-			return "", fmt.Errorf("받아쓰기 명령 실패(%v): %s", err, last)
+			return transcription{}, fmt.Errorf("받아쓰기 명령 실패(%v): %s", err, last)
 		}
-		return "", fmt.Errorf("받아쓰기 명령 실패: %w", err)
+		return transcription{}, fmt.Errorf("받아쓰기 명령 실패: %w", err)
 	}
 	if stdout.overflow {
-		return "", fmt.Errorf("받아쓰기 명령의 출력이 %d바이트를 넘었다", maxTranscriberOutput)
+		return transcription{}, fmt.Errorf("받아쓰기 명령의 출력이 %d바이트를 넘었다", maxTranscriberOutput)
 	}
 	var out struct {
-		Text *string `json:"text"`
+		Text     *string `json:"text"`
+		Duration float64 `json:"duration"`
+		Speech   float64 `json:"speech"`
 	}
 	if err := json.Unmarshal([]byte(lastLine(stdout.String())), &out); err != nil || out.Text == nil {
 		// 출력의 내용은 싣지 않는다 — 이 오류는 로그로 가고, 계약을 어긴 명령의 출력은 받아쓴 글일 수 있다.
-		return "", fmt.Errorf("받아쓰기 명령의 출력이 {\"text\": …} 한 줄이 아니다 (%d바이트)", len(stdout.String()))
+		return transcription{}, fmt.Errorf("받아쓰기 명령의 출력이 {\"text\": …} 한 줄이 아니다 (%d바이트)", len(stdout.String()))
 	}
-	return *out.Text, nil
+	return transcription{Text: *out.Text, Audio: out.Duration, Speech: out.Speech}, nil
 }
 
 // cappedBuffer 는 max 바이트까지만 담는다. keepTail 이면 넘칠 때 앞을 버리고 끝을 남긴다(오류는 끝에 있다).
@@ -179,21 +189,38 @@ func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), transcribeTimeout)
 	defer cancel()
 	start := time.Now()
-	text, err := s.tr.Transcribe(ctx, path, prompt)
+	got, err := s.tr.Transcribe(ctx, path, prompt)
 	took := time.Since(start).Seconds()
-	// 로그에는 누가·크기·시간·갈래만. 녹음과 글은 남기지 않는다(보낸 글을 남기지 않는 것과 같은 이유).
+	entry := dictationEntry{At: start.Format(time.RFC3339), Login: requestLogin(r), Type: ct, Bytes: size, Took: round2(took)}
+	// 서버 로그(journald)에는 누가·크기·시간·갈래만 — 글은 받아쓰기 기록 파일(0600)에만 남긴다(recordDictation).
 	switch {
 	case err != nil:
 		s.log.Printf("받아쓰기 %s %dKB %.1f초: error: %v", requestLogin(r), size>>10, took, err)
+		entry.Result, entry.Error = "error", err.Error()
 		writeJSON(w, http.StatusOK, transcribeView{Result: "error", Detail: err.Error()})
 	default:
-		text = strings.TrimSpace(d.fix(strings.TrimSpace(text)))
+		heard := strings.TrimSpace(got.Text)
+		text := strings.TrimSpace(d.fix(heard))
 		result := "ok"
 		if text == "" {
 			result = "empty"
 		}
 		s.log.Printf("받아쓰기 %s %dKB %.1f초: %s (%d자)", requestLogin(r), size>>10, took, result, len([]rune(text)))
+		entry.Result, entry.Heard, entry.Text = result, heard, text
+		entry.Audio, entry.Speech = round2(got.Audio), round2(got.Speech)
 		writeJSON(w, http.StatusOK, transcribeView{Result: result, Text: text})
+	}
+	s.recordDictation(entry)
+}
+
+// recordDictation 은 받아쓰기 기록에 한 줄을 붙인다. 경로가 비면(제로값) 쓰지 않는다. 못 써도 받아쓰기는 이미
+// 폰에 갔다 — 서버 로그에 이유만 남긴다(글은 싣지 않는다).
+func (s *server) recordDictation(e dictationEntry) {
+	if s.cfg.DictationLog == "" {
+		return
+	}
+	if err := appendDictationLog(s.cfg.DictationLog, e); err != nil {
+		s.log.Printf("받아쓰기 기록을 쓰지 못했다: %v", err)
 	}
 }
 

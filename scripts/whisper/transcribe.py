@@ -1,7 +1,7 @@
 """mux serve 의 받아쓰기 명령(docs/design/serve.md «받아쓰기 — 서버 Whisper»).
 
 쓰임: transcribe --prompt=<용어 목록> <오디오 파일>
-stdout 에 JSON 한 줄 {"text": "..."} 만 쓴다. 받아쓴 글은 stdout 에만 나간다 — mux serve 는 stderr 의 마지막 줄을
+stdout 에 JSON 한 줄 {"text": "...", "duration": 녹음 초, "speech": VAD 가 말소리로 본 초} 만 쓴다. 받아쓴 글은 stdout 에만 나간다 — mux serve 는 stderr 의 마지막 줄을
 오류로 로그에 남긴다. 실패는 0 이 아닌 종료 코드다. 프롬프트는 `--prompt=` 한 덩어리로 받는다 — `-` 로 시작하는
 용어 하나뿐이면 `--prompt <글>` 은 옵션으로 읽혀 실패한다.
 
@@ -29,7 +29,7 @@ def main() -> int:
     model = WhisperModel(MODEL, device="cuda", compute_type="float16", local_files_only=True)
     # 묶음 처리: VAD 로 자른 30초 이하 조각마다 프롬프트를 새로 붙인다. 순차 model.transcribe 는 이어쓰기를 끄면
     # 프롬프트가 첫 30초 창에만 걸려, 82초 녹음의 뒤 절반에서 mux 가 «묵스», PyCharm 이 «파이참» 으로 돌아갔다.
-    segments, _ = BatchedInferencePipeline(model).transcribe(
+    segments, info = BatchedInferencePipeline(model).transcribe(
         a.audio,
         language=LANGUAGE,
         beam_size=5,
@@ -43,7 +43,9 @@ def main() -> int:
         # hotwords 는 쓰지 않는다 — 뒷부분이 끊겨 사라졌다.
     )
     text = " ".join(s.text.strip() for s in segments).strip()
-    sys.stdout.write(json.dumps({"text": text}, ensure_ascii=False) + "\n")
+    # duration·speech 는 mux serve 의 받아쓰기 기록에 남는 진단 값이다 — 둘의 차이가 크면 VAD 가 말을 잘라냈을 수 있다.
+    out = {"text": text, "duration": round(info.duration, 2), "speech": round(info.duration_after_vad, 2)}
+    sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
     return 0
 
 

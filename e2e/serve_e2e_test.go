@@ -478,7 +478,8 @@ func TestServeTranscribes(t *testing.T) {
 		return m
 	}
 	before := len(leftovers())
-	c := startServe(t, "--whisper", fake, "--dictation", dict)
+	logPath := filepath.Join(dir, "dictation-log.jsonl")
+	c := startServe(t, "--whisper", fake, "--dictation", dict, "--dictation-log", logPath)
 
 	if code, data := c.get("/api/features", true); code != 200 || !strings.Contains(string(data), `"whisper"`) {
 		t.Fatalf("features: %d %s", code, data)
@@ -494,6 +495,11 @@ func TestServeTranscribes(t *testing.T) {
 	}
 	if n := len(leftovers()); n != before {
 		t.Errorf("받아쓰기 뒤 임시 녹음 파일이 남았다: %v", leftovers())
+	}
+	// 받아쓴 글은 기록 파일에 남는다 — Whisper 가 낸 그대로와 바꿔 쓴 뒤의 글을 둘 다.
+	if data, err := os.ReadFile(logPath); err != nil || !strings.Contains(string(data), `"heard":"허드 10 `) ||
+		!strings.Contains(string(data), `"text":"herdr 10 `) || strings.Count(string(data), "\n") != 1 {
+		t.Errorf("받아쓰기 기록: %v\n%s", err, data)
 	}
 	if code, _ := c.postAudio("x", "multipart/form-data; boundary=x"); code != http.StatusUnsupportedMediaType {
 		t.Errorf("multipart 녹음: %d, want 415", code)

@@ -36,6 +36,9 @@ type Config struct {
 	// DictationFile 은 받아쓰기 용어 파일이다. 비면 읽지 않는다 — 시험이 개발자의 ~/.config/mux 에 닿지 않게
 	// 제로값이 «없음» 이고, 기본 경로는 cmd/mux 가 채운다.
 	DictationFile string
+	// DictationLog 는 받아쓰기 기록(JSON 줄, 받아쓴 글 포함)이다. 비면 쓰지 않는다 — 제로값이 «없음» 인 이유는
+	// DictationFile 과 같다.
+	DictationLog string
 }
 
 // normalized 는 설정을 검사하고 빈 값을 채운 사본을 돌려준다.
@@ -74,7 +77,7 @@ func (c Config) normalized() (Config, error) {
 		}
 		whisper = path
 	}
-	return Config{Addr: c.Addr, Allow: allow, HostSuffix: suffix, Whisper: whisper, DictationFile: c.DictationFile}, nil
+	return Config{Addr: c.Addr, Allow: allow, HostSuffix: suffix, Whisper: whisper, DictationFile: c.DictationFile, DictationLog: c.DictationLog}, nil
 }
 
 func isLoopback(host string) bool {
@@ -112,7 +115,7 @@ func Run(ctx context.Context, cfg Config, logOut io.Writer) error {
 	logger.Printf("http://%s 에서 듣는다 (허용: %s). 폰에서 열려면 한 번: tailscale serve --bg --https=8443 %s",
 		ln.Addr(), strings.Join(cfg.Allow, ", "), ln.Addr())
 	if cfg.Whisper != "" {
-		logger.Printf("받아쓰기: %s (용어 파일 %s)", cfg.Whisper, cfg.DictationFile)
+		logger.Printf("받아쓰기: %s (용어 파일 %s, 기록 %s)", cfg.Whisper, cfg.DictationFile, cfg.DictationLog)
 	} else {
 		logger.Printf("받아쓰기: 브라우저 (--whisper 없음)")
 	}

@@ -23,7 +23,8 @@ for f in "$DIR"/silence.webm "$DIR"/silence.m4a "$DIR"/noise.webm; do
   total=$((total + 1))
   out=$("$T" --prompt="mux, tmux." "$f" 2>"$DIR/err")
   code=$?
-  if [ $code -eq 0 ] && [ "$out" = '{"text": ""}' ]; then
+  # text 가 빈 글인가 — duration·speech 같은 다른 값은 보지 않는다. JSON 이 아니면 실패다.
+  if [ $code -eq 0 ] && printf '%s' "$out" | python3 -I -c 'import json, sys; sys.exit(json.load(sys.stdin)["text"] != "")' 2>/dev/null; then
     pass=$((pass + 1))
     echo "통과  $(basename "$f") → 빈 글"
   else

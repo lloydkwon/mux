@@ -275,7 +275,7 @@ freeText,draft,checkbox,checked}], current, hint, multi}}`. `none` 이면 폰은
 
 ## 받아쓰기 — 서버 Whisper
 
-> 코드: serve/transcribe.go(`handleTranscribe`·`commandTranscriber`), serve/dictation.go, serve/static/record.js,
+> 코드: serve/transcribe.go(`handleTranscribe`·`commandTranscriber`), serve/dictation.go, serve/dictlog.go, serve/static/record.js,
 > app.js 의 «받아쓰기 (서버 Whisper)», scripts/whisper/(setup.sh·transcribe.py·check.sh), e2e `TestServeTranscribes`.
 > 2026-11-17 에 설계하고 같은 날 구현했다.
 
@@ -314,7 +314,7 @@ mux serve 인증 → 한 번에 한 건 → 임시 파일(0600) → <--whisper �
 제로값(빈 경로)은 «읽지 않음» 이라 `go test ./serve` 가 개발자의 `~/.config/mux` 에 닿지 않는다.
 
 **받아쓰기 명령 — `mux serve` 는 Python 을 모른다.** 계약은 `<명령> --prompt=<글> <오디오 파일>` → stdout 에 JSON 한 줄
-`{"text": "…"}`, 종료 코드 0. 그 밖은 실패다. 셸을 거치지 않는다(exec). 프롬프트는 `--prompt=` 한 덩어리다 — `--prompt <글>`
+`{"text": "…"}`(있으면 `"duration"`·`"speech"` — 녹음 길이와 VAD 가 말소리로 본 길이, 받아쓰기 기록에만 쓴다), 종료 코드 0. 그 밖은 실패다. 셸을 거치지 않는다(exec). 프롬프트는 `--prompt=` 한 덩어리다 — `--prompt <글>`
 로 나눠 넘기면 `-` 로 시작하는 프롬프트(용어가 `--resume` 하나뿐)를 argparse 가 옵션으로 읽어 매번 실패한다(진짜 명령으로
 확인). 명령은 저장소의 `scripts/whisper/`:
 
@@ -381,8 +381,20 @@ mux serve 인증 → 한 번에 한 건 → 임시 파일(0600) → <--whisper �
   죽이고 임시 녹음을 지운다.
 - 응답은 늘 200 에 `{result, text?, detail?}` 다(인증·형식 오류만 4xx): `ok`, `empty`(말소리를 못 들었다), `busy`,
   `error`(detail 은 명령의 마지막 오류 줄).
-- 로그는 «받아쓰기 로그인 N KB 1.9초: ok (M자)» 한 줄. 녹음과 글은 남기지 않는다. 명령이 계약을 어겨 JSON 이 아닌 것을 내면
-  그 내용도 싣지 않는다(바이트 수만) — 받아쓴 맨 글일 수 있다.
+- 서버 로그(journald)는 «받아쓰기 로그인 N KB 1.9초: ok (M자)» 한 줄이고 글은 싣지 않는다. 명령이 계약을 어겨 JSON 이 아닌
+  것을 내면 그 내용도 싣지 않는다(바이트 수만) — 받아쓴 맨 글일 수 있다.
+- **받아쓴 글은 받아쓰기 기록에 남긴다**(`--dictation-log`, 기본 `~/.config/mux/dictation-log.jsonl`, 0600). 처음 설계는
+  글을 어디에도 남기지 않았는데, 폰에서 «음성처리가 이상할 때가 많다» 고 했을 때 서버 로그의 크기·글자 수만으로는 무엇이
+  잘못됐는지 알 수 없었다 — 사용자가 «녹음 파일까지는 남기지 않아도 되는데 변환된 문자는 로그에 남겨서 나중에라도 확인할
+  수 있게» 로 정했다(2026-11-17). 녹음은 여전히 남기지 않는다. 한 줄이 받아쓰기 한 번이다:
+  `{"at", "login", "type"(녹음 형식), "bytes", "took"(초), "audio"(녹음 길이), "speech"(VAD 가 말소리로 본 길이), "result",
+  "heard"(Whisper 가 낸 그대로), "text"(바꿔 쓰기 뒤 — 폰에 간 글), "error"}`. `audio` 와 `speech` 의 차이가 크면 VAD 가 말을
+  잘라냈을 수 있고, `heard` 와 `text` 를 견주면 용어 파일의 바꿔 쓰기가 무엇을 했는지 보인다. 폰이 끊은 받아쓰기(`error`,
+  context canceled)도 남는다. 4MB 를 넘으면 `.1` 로 하나만 넘긴다. 서버 로그와 따로 둔 이유: journald 는 다른 프로세스가
+  넘치면 줄을 버리고(11-17 tracker 폭주 때 mux-serve 로그가 버려졌다), 글만 골라 지울 수 없다. 제로값(빈 경로)은 «쓰지
+  않음» 이라 `go test ./serve` 는 개발자의 `~/.config/mux` 에 닿지 않는다. 보기: `jq -r '[.at, .result, .audio, .speech,
+  .text] | @tsv' ~/.config/mux/dictation-log.jsonl`. **보낸 글(`/api/prompt`)은 여전히 어디에도 남기지 않는다** — 프롬프트는
+  붙여 넣은 무엇이든 담고, 이 기록은 말한 것만 담는다.
 
 **폰.**
 
@@ -415,7 +427,10 @@ Safari 글을 보이고 끝나면 Whisper 글로 바꾸기(iPhone 이 마이크�
 - `go test ./serve`(transcribe_test.go·dictation_test.go) — 꺼짐(404, `features` 가 browser), Content-Type(받아쓰기는
   audio/webm·audio/mp4 만, 다른 POST 는 JSON 만 — multipart·text/plain·form 은 어디서도 415), 다른 Origin 403, 빈 녹음 400,
   413, `busy`(한 번에 한 건), `empty`, `error`, `ok` 와 바꿔 쓰기, 용어 파일을 요청마다 읽음, 프롬프트의 모양, tmux 없이도
-  받아씀, 0600 임시 파일이 끝나면 사라짐, 폰이 끊으면 명령의 context 가 끝남, 로그에 글이 없음. 명령 쪽은 **테스트 바이너리
+  받아씀, 0600 임시 파일이 끝나면 사라짐, 폰이 끊으면 명령의 context 가 끝남, 서버 로그에 글이 없음. 받아쓰기 기록(dictlog_test.go)
+  — 한 줄에 들은 그대로·바꿔 쓴 글·형식·크기·길이, 빈 결과·오류·폰이 끊은 받아쓰기도, 0600, 기록 폴더에 녹음이 생기지 않음,
+  경로가 비면 아무 데도 안 씀, 4MB 에서 `.1` 로 넘김. 기록 쓰기·0600·넘기기·들은 그대로·길이 읽기를 하나씩 빼면 실패한다.
+  명령 쪽은 **테스트 바이너리
   자신**을 가짜 받아쓰기로 띄워(`TestMain` 의 `MUX_FAKE_WHISPER`) 진짜 exec 를 거친다 — 계약대로의 인자(프롬프트의 `$(…)` 는
   글자 그대로, `-` 로 시작하는 프롬프트도 한 덩어리), stderr 마지막 줄, JSON 아닌 출력(그 내용이 오류에 실리지 않음), 64KB
   넘는 출력, 시간 초과에 **자식 프로세스까지** 죽음.
@@ -426,8 +441,8 @@ Safari 글을 보이고 끝나면 Whisper 글로 바꾸기(iPhone 이 마이크�
 - 검토(새 컨텍스트의 리뷰 에이전트)가 찾은 것을 고쳤다: 프롬프트가 첫 30초에만 걸림(→ 묶음 처리), 녹음기 시작 실패에 마이크를
   놓지 않음, 끝 신호를 기다리는 시간 상한 없음, `-` 로 시작하는 프롬프트, 오류 로그에 명령 출력, 막힌 보내기가 녹음을 버림,
   물러서기 알림이 곧바로 지워짐, 끌 때 받아쓰기가 남음, 숨은 입력줄 뒤의 녹음, 4xx 에 [다시 받아쓰기].
-- e2e `TestServeTranscribes` — 빌드한 mux 를 `--whisper <가짜 셸 스크립트> --dictation <파일>` 로 띄워 features·녹음 올리기·
-  세션 이름이 든 프롬프트·바꿔 쓰기·임시 파일 없음·multipart 415.
+- e2e `TestServeTranscribes` — 빌드한 mux 를 `--whisper <가짜 셸 스크립트> --dictation <파일> --dictation-log <파일>` 로 띄워
+  features·녹음 올리기·세션 이름이 든 프롬프트·바꿔 쓰기·임시 파일 없음·기록 한 줄(들은 그대로와 바꿔 쓴 글)·multipart 415.
 - 브라우저(저장소 밖 시험): 격리 tmux 서버 + 작업 트리의 `mux serve` + 신원 헤더를 붙이는 프록시 + headless Chrome 157 을
   CDP 로 몰았다. 가짜 마이크에 **사용자 녹음**을 넣어(`--use-file-for-fake-audio-capture`, 오디오 서비스 샌드박스를 꺼야 파일을
   읽는다) 녹음(webm, 12초 47KB — 32kbps 로 정하기 전에는 189KB) → 올리기 → 진짜 Whisper 1.4초 → 입력칸까지. 그 밖에 받아쓰기
@@ -527,7 +542,7 @@ e2e
 5. 길게 누르기가 폰의 글자 선택·문맥 메뉴와 부딪치지 않는가(`user-select: none`, `contextmenu` 막기).
 6. 세션 페이지에서 뒤로 가기(Android 뒤로, iOS 왼쪽 가장자리 밀기)가 목록으로 돌아오고, `#s=<세션>` 주소로
    새로 고치면 그 세션에 다시 들어가는가.
-7. 서버 받아쓰기(`--whisper`): iPhone Safari 가 무슨 형식으로 녹음하는가(서버 로그의 크기와 `file`), 마이크 권한을 들어올
+7. 서버 받아쓰기(`--whisper`): iPhone Safari 가 무슨 형식으로 녹음하는가(받아쓰기 기록의 `type`·`bytes`·`audio`), 마이크 권한을 들어올
    때마다 묻는가, 녹음이 끝나면 상태 막대의 마이크 표시가 꺼지는가, 소리 크기 막대가 움직이는가, 화면을 잠갔다 돌아오면
    [다시 받아쓰기] 가 뜨는가, 같은 다섯 문장의 결과.
 
