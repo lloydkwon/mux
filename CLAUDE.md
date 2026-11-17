@@ -190,5 +190,7 @@ Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale a
   (`AnswerDialog`, 낡은 화면의 숫자가 Submit 탭의 Cancel 을 누른 일이 있다; 권한 확인은 어느 것이나 «1. Yes» 라 열쇠 없이는
   다음 권한 확인을 승인한다 — Esc 도 열쇠를 본다). 직접 쓰기 칸은 라벨이 아니라 자리로 알고, 커서가 그 칸이면 숫자 전에
   빼낸다(그 칸에서는 숫자가 글자다). 여러 개 고르기는 숫자키가 체크만 바꾸므로 `AnswerMulti`
-  (체크 맞추기 → 직접 쓰기는 화살표로 → Submit 줄에서 Enter)로만 답한다. 대화 탭은 내용이 바뀔 때만 다시 그린다. (serve.md)
+  (체크 맞추기 → 직접 쓰기는 화살표로 → Submit 줄에서 Enter)로만 답한다. 대화 탭은 내용이 바뀔 때만 다시 그린다.
+  받아쓰기는 계속 듣기로 듣고 저절로 끝나면 이어 들으며, 들은 글을 줄이지 않는다 — iPhone Safari 는 한 번 말하기가 멈추면
+  끊기고, 멈춘 뒤 앞 글을 지우거나 빈 결과를 보내 들은 말을 잃었다(사용자 보고, 2026-11-17). (serve.md)
 - **주석에 «measured»·«verified» 를 쓰면** `scripts/tmux-assumptions.sh` 에 그 단언을 한 줄 더한다.

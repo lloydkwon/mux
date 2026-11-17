@@ -407,91 +407,197 @@
   });
 
   // ── 받아쓰기 (SpeechRecognition, ko-KR). 듣는 동안의 글을 입력줄 위에 크게 보이고, 저절로 보내지 않는다 ──
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  // 사용자의 폰은 iPhone Safari 다. 그 버릇에 맞춘다(docs/design/serve.md «음성»):
+  //   - 한 번 말하기(continuous=false)는 말을 잠깐 멈추면 끝났다(«말하는 도중 끊김») → 계속 듣기로 듣고, 그래도 저절로
+  //     끝나면 들은 글을 지닌 채 새 인식기로 이어 듣는다. «그만» 을 누르거나 상한에 닿을 때만 끝난다.
+  //   - 멈춘 뒤 앞 글을 지우고 새로 적거나, 앞 결과를 겹쳐 보내거나, 끝에 빈 결과를 보낸다(«말해도 글이 안 들어감») →
+  //     결과를 매번 처음부터 다시 엮고(겹친 것은 낱말로 걸러), 앞 글이 사라지면 따로 모아 둔다. 들은 글은 줄지 않는다.
+  //   - «그만» 뒤에 끝 신호(onend)가 안 올 때가 있다 → 잠깐 기다렸다 들은 글로 마친다.
+  const speechCtor = () => window.SpeechRecognition || window.webkitSpeechRecognition;
+  const LISTEN_MAX_MS = 120000; // 한 번 누른 받아쓰기의 상한
+  const LISTEN_IDLE_RESTARTS = 5; // 새 글 없이 이어 듣기를 몇 번까지
+  const STOP_GRACE_MS = 1500; // «그만» 뒤 끝 신호를 기다리는 시간
+  const FATAL_SPEECH = ["not-allowed", "service-not-allowed", "audio-capture", "language-not-supported"];
   const mic = $("mic");
   const listenBox = $("listen");
   const listenText = $("listen-text");
-  let rec = null;
-  let heardFinal = "";
-  let heardInterim = "";
-  if (!SR) mic.hidden = true; // 폰 키보드의 받아쓰기로 입력칸에 바로 말하면 된다
+  // listen 은 한 번 누른 받아쓰기다: kept(앞서 마친 글 조각) + cur(지금 인식기의 글), interim(그중 아직 바뀔 수 있는 끝).
+  let listen = null;
+  if (!speechCtor()) mic.hidden = true; // 폰 키보드의 받아쓰기로 입력칸에 바로 말하면 된다
+
+  // 낱말 비교 — 대소문자·문장부호를 빼고 낱말로 나눈다. 띄어쓰기를 다르게 보낸 같은 말은 같다고 보지 않는다.
+  const speechWords = (t) => t.toLowerCase().replace(/[.,!?…"'“”‘’]/g, " ").split(/\s+/).filter(Boolean);
+  // extendsWords: longer 가 shorter 를 앞에서부터 그대로 이어 쓴 것인가(같아도 참).
+  function extendsWords(longer, shorter) {
+    const a = speechWords(longer);
+    const b = speechWords(shorter);
+    return b.length <= a.length && b.every((w, i) => w === a[i]);
+  }
+  // joinResults: 결과들을 한 글로 엮는다. Safari 가 앞 결과를 겹쳐 보낸 것(«안녕» 다음 «안녕 하세요»)과 같은 결과를
+  // 두 번 보낸 것은 긴 쪽 하나만 남긴다.
+  function joinResults(texts) {
+    const out = [];
+    for (const t of texts.map((x) => x.trim()).filter(Boolean)) {
+      const last = out[out.length - 1];
+      if (last !== undefined && extendsWords(t, last)) out[out.length - 1] = t;
+      else if (last !== undefined && extendsWords(last, t)) continue;
+      else out.push(t);
+    }
+    return out.join(" ");
+  }
+  const speechLen = (t) => t.replace(/\s+/g, "").length;
+  // nextHeard: 지금 인식기의 글 cur 에 새로 엮은 글 next 가 왔을 때 무엇을 남길지. 빈 결과는 버리고, 확정 아닌 결과가
+  // 앞부분만 남기면(되감김) 긴 쪽을 지키고, 첫 낱말부터 다른 훨씬 짧은 글이면 Safari 가 멈춘 뒤 새로 적기 시작한
+  // 것이라 앞 글을 kept 로 넘긴다.
+  function nextHeard(cur, next, final) {
+    if (!next) return { cur, done: "" };
+    if (!cur || extendsWords(next, cur)) return { cur: next, done: "" };
+    if (!final && extendsWords(cur, next)) return { cur, done: "" };
+    const restarted = speechWords(next)[0] !== speechWords(cur)[0] && speechLen(next) * 2 < speechLen(cur);
+    return restarted ? { cur: next, done: cur } : { cur: next, done: "" };
+  }
+  const heardText = (l) => [...l.kept, l.cur].filter(Boolean).join(" ").trim();
 
   function drawHeard() {
-    listenText.replaceChildren(document.createTextNode(heardFinal));
+    if (!listen) return;
+    const all = heardText(listen);
+    const dim = listen.interim && all.endsWith(listen.interim) ? listen.interim : "";
+    listenText.replaceChildren(document.createTextNode(all.slice(0, all.length - dim.length)));
     // 확정 전의 낱말은 흐리게 — 인식기가 아직 고칠 수 있다.
-    if (heardInterim) listenText.append(el("span", "interim", (heardFinal ? " " : "") + heardInterim));
+    if (dim) listenText.append(el("span", "interim", dim));
   }
   function startListening() {
     hideResult();
-    try {
-      rec = new SR();
-    } catch (_) {
-      mic.hidden = true;
-      return;
-    }
-    rec.lang = "ko-KR";
-    rec.interimResults = true;
-    rec.continuous = false;
-    rec.maxAlternatives = 1;
-    heardFinal = "";
-    heardInterim = "";
-    rec.onresult = (e) => {
-      let fin = "";
-      let mid = "";
-      for (let i = 0; i < e.results.length; i++) {
-        const r = e.results[i];
-        if (r.isFinal) fin += r[0].transcript;
-        else mid += r[0].transcript;
-      }
-      heardFinal = fin.trim();
-      heardInterim = mid.trim();
-      drawHeard();
-    };
-    rec.onerror = (e) => { if (rec) rec.lastError = e.error; };
-    rec.onend = () => finishListening(true);
+    listen = { kept: [], cur: "", interim: "", rec: null, started: Date.now(), restarts: 0, idle: 0, stopping: false,
+      lastError: "", trace: [], timers: [] };
     mic.classList.add("on");
     mic.setAttribute("aria-label", "그만 듣기");
     listenBox.hidden = false;
     drawHeard();
-    try {
-      rec.start();
-    } catch (_) {
+    listen.timers.push(setTimeout(() => stopListening(true), LISTEN_MAX_MS));
+    if (!startRecognizer(listen)) {
       finishListening(false);
       notice("받아쓰기를 시작하지 못했습니다.");
     }
   }
+  // startRecognizer 는 새 인식기 하나를 띄운다. 처음 누를 때와, 저절로 끝나 이어 들을 때 부른다.
+  function startRecognizer(l) {
+    const SR = speechCtor();
+    let r;
+    try {
+      r = new SR();
+    } catch (_) {
+      return false;
+    }
+    r.lang = "ko-KR";
+    r.interimResults = true;
+    r.continuous = true;
+    r.maxAlternatives = 1;
+    r.heard = false; // 이 인식기가 새 글을 받았나 — 새 글 없이 이어 듣기를 세는 데 쓴다
+    const mine = () => listen === l && l.rec === r;
+    for (const ev of ["audiostart", "speechstart", "speechend"]) r.addEventListener(ev, () => { if (mine()) l.trace.push(ev); });
+    r.onresult = (e) => {
+      if (!mine()) return;
+      const texts = [];
+      for (let i = 0; i < e.results.length; i++) texts.push(e.results[i][0].transcript);
+      const lastR = e.results[e.results.length - 1];
+      const final = !!lastR && lastR.isFinal;
+      const step = nextHeard(l.cur, joinResults(texts), final);
+      if (step.done) l.kept.push(step.done);
+      if (step.cur !== l.cur) r.heard = true;
+      l.cur = step.cur;
+      l.interim = !final && lastR ? lastR[0].transcript.trim() : "";
+      l.trace.push("result");
+      drawHeard();
+    };
+    r.onerror = (e) => {
+      if (!mine()) return;
+      l.lastError = e.error;
+      l.trace.push("error:" + e.error);
+    };
+    r.onend = () => { if (mine()) recognizerEnded(l); };
+    l.rec = r;
+    l.trace.push(l.restarts ? "restart" : "start");
+    try {
+      r.start();
+    } catch (_) {
+      l.rec = null;
+      return false;
+    }
+    return true;
+  }
+  // recognizerEnded: 인식기가 끝났다. «그만» 이 아니고 고칠 수 없는 오류도 아니면 이어 듣는다.
+  function recognizerEnded(l) {
+    const r = l.rec;
+    l.trace.push("end");
+    if (l.cur) l.kept.push(l.cur);
+    l.cur = "";
+    l.interim = "";
+    l.rec = null;
+    l.idle = r && r.heard ? 0 : l.idle + 1;
+    const keepGoing = !l.stopping && !FATAL_SPEECH.includes(l.lastError) && l.idle <= LISTEN_IDLE_RESTARTS &&
+      Date.now() - l.started < LISTEN_MAX_MS;
+    if (keepGoing) {
+      l.restarts++;
+      l.lastError = "";
+      if (startRecognizer(l)) return;
+    }
+    finishListening(true);
+  }
   function finishListening(commit) {
-    if (!rec) return;
-    const err = rec.lastError;
-    rec = null;
+    const l = listen;
+    if (!l) return;
+    listen = null;
+    for (const t of l.timers) clearTimeout(t);
+    if (l.rec) {
+      try { l.rec.abort(); } catch (_) { /* 이미 끝났다 */ }
+    }
     mic.classList.remove("on");
     mic.setAttribute("aria-label", "말하기");
     listenBox.hidden = true;
     // 멈춘 순간의 중간 결과도 받는다 — iOS 는 그만 누르면 확정 없이 끝날 때가 있다.
-    const text = [heardFinal, heardInterim].filter(Boolean).join(" ").trim();
+    const text = heardText(l);
+    const err = l.lastError;
+    // 실패 안내는 저절로 접지 않고, 받은 사건 순서를 작게 붙인다 — 폰 화면을 찍어 보내면 무엇이 일어났는지 안다.
+    const how = `받은 사건: ${l.trace.slice(-10).join(" → ")}${err ? ` · 오류 ${err}` : ""}`;
     if (commit && text) {
       prompt.value = prompt.value.trim() ? `${prompt.value.trim()} ${text}` : text;
       grow();
       renderTarget();
-    } else if (err === "not-allowed" || err === "service-not-allowed") {
-      notice("마이크를 쓸 수 없습니다. 브라우저 설정에서 이 사이트의 마이크를 허용하세요.");
-    } else if (err === "no-speech") {
-      notice("말소리가 들리지 않았습니다. 다시 눌러 말하세요.");
-    } else if (err && err !== "aborted") {
-      notice(`받아쓰기가 멈췄습니다 (${err}).`);
+    } else if (!commit) {
+      // 보내기·답하기가 받아쓰기를 거뒀다 — 알릴 것이 없다.
+    } else if ((err === "not-allowed" || err === "service-not-allowed") && !l.restarts) {
+      banner("stop", "마이크나 받아쓰기를 쓸 수 없습니다",
+        "iPhone 은 설정 › 일반 › 키보드 › 받아쓰기 켜기와 이 사이트의 마이크 허용이 필요합니다.", how);
+    } else {
+      banner("warn", "말을 받아 적지 못했습니다",
+        "다시 눌러 말하거나, 입력줄을 누른 뒤 키보드의 마이크로 말하세요.", how);
     }
   }
+  // stopListening(true) 는 «그만» — 들은 글을 입력칸에 넣는다. 끝 신호가 안 오면 STOP_GRACE_MS 뒤에 마친다.
+  // stopListening(false) 는 거두기(보내기·답하기 때) — 글을 넣지 않는다.
   function stopListening(commit) {
-    if (!rec) return;
-    const r = rec;
-    if (commit) {
-      r.stop(); // onend 가 finishListening(true) 를 부른다
+    const l = listen;
+    if (!l) return;
+    if (!commit) {
+      finishListening(false);
       return;
     }
-    finishListening(false);
-    try { r.abort(); } catch (_) { /* 이미 끝났다 */ }
+    l.stopping = true;
+    l.trace.push("stop");
+    if (!l.rec) {
+      finishListening(true);
+      return;
+    }
+    try { l.rec.stop(); } catch (_) { /* 이미 끝났다 */ }
+    l.timers.push(setTimeout(() => {
+      if (listen !== l) return;
+      if (l.cur) l.kept.push(l.cur);
+      l.cur = "";
+      finishListening(true);
+    }, STOP_GRACE_MS));
   }
-  mic.addEventListener("click", () => (rec ? stopListening(true) : startListening()));
+  mic.addEventListener("click", () => (listen ? stopListening(true) : startListening()));
 
   // ── 세션 페이지 ──────────────────────────────────────────────────────
   // 주소는 #s=<세션> 이다. 폰의 뒤로 가기(iOS 왼쪽 가장자리 밀기 포함)가 목록으로 돌아오고, Safari 가 탭을
