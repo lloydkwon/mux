@@ -48,6 +48,11 @@
       throw new ApiError("서버의 답을 받지 못했습니다. 폰의 연결과 mux serve·tailscale serve 가 떠 있는지 확인하세요.", 0);
     }
     if (res.status === 403) throw new ApiError("접근이 거절됐습니다. tailscale serve 주소로 열었는지, 허용된 계정인지 확인하세요.", 403);
+    // 패스키 로그인이 30분 쉬어 끝났거나 서버가 다시 떴다 — 로그인 화면으로(login.js 가 Face ID 를 묻는다).
+    if (res.status === 401) {
+      location.replace("/login");
+      throw new ApiError("로그인이 필요합니다. Face ID 로 다시 엽니다.", 401);
+    }
     let body = null;
     try { body = await res.json(); } catch (_) { body = null; }
     if (!res.ok) throw new ApiError((body && body.error) || `서버 오류 ${res.status}`, res.status);

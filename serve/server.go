@@ -39,6 +39,10 @@ type Config struct {
 	// DictationLog 는 받아쓰기 기록(JSON 줄, 받아쓴 글 포함)이다. 비면 쓰지 않는다 — 제로값이 «없음» 인 이유는
 	// DictationFile 과 같다.
 	DictationLog string
+	// Passkeys 는 등록된 패스키 파일(0600)이다. 있으면 Tailscale 신원에 더해 패스키 로그인(Face ID·보안 키)을
+	// 거친 기기만 들어온다. 비면 패스키 확인을 끈다 — 제로값이 «꺼짐» 인 것은 시험이 개발자의 ~/.config/mux 에
+	// 닿지 않게이고, 기본 경로는 cmd/mux 가 채운다.
+	Passkeys string
 }
 
 // normalized 는 설정을 검사하고 빈 값을 채운 사본을 돌려준다.
@@ -77,7 +81,8 @@ func (c Config) normalized() (Config, error) {
 		}
 		whisper = path
 	}
-	return Config{Addr: c.Addr, Allow: allow, HostSuffix: suffix, Whisper: whisper, DictationFile: c.DictationFile, DictationLog: c.DictationLog}, nil
+	return Config{Addr: c.Addr, Allow: allow, HostSuffix: suffix, Whisper: whisper, DictationFile: c.DictationFile,
+		DictationLog: c.DictationLog, Passkeys: strings.TrimSpace(c.Passkeys)}, nil
 }
 
 func isLoopback(host string) bool {
@@ -119,6 +124,7 @@ func Run(ctx context.Context, cfg Config, logOut io.Writer) error {
 	} else {
 		logger.Printf("받아쓰기: 브라우저 (--whisper 없음)")
 	}
+	logPasskeys(logger, cfg.Passkeys)
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
@@ -147,6 +153,24 @@ type server struct {
 	tr transcriber
 	// transcribeMu 는 받아쓰기를 한 번에 한 건으로 줄 세운다 — 겹치면 기다리지 않고 busy 다.
 	transcribeMu sync.Mutex
+	// auth 는 패스키 로그인이다. nil 이면 꺼져 있다(--passkeys 없음).
+	auth *passkeyAuth
+}
+
+// logPasskeys 는 시작할 때 패스키 상태를 한 줄 적는다 — 등록이 없으면 무엇을 할지까지.
+func logPasskeys(logger *log.Logger, passkeys string) {
+	if passkeys == "" {
+		logger.Printf("패스키: 꺼짐 (--passkeys 없음) — Tailscale 신원만 본다")
+		return
+	}
+	switch n := (&passkeyStore{path: passkeys}).count(); {
+	case n < 0:
+		logger.Printf("패스키: %s 를 읽지 못했다 — 로그인이 모두 실패한다. 파일을 고치거나 지우고 다시 등록한다", passkeys)
+	case n == 0:
+		logger.Printf("패스키: 등록 없음 (%s) — `mux serve enroll` 로 코드를 받아 폰에서 등록한다", passkeys)
+	default:
+		logger.Printf("패스키: %d개 (%s), %s 쉬면 다시 묻는다", n, passkeys, sessionIdle)
+	}
 }
 
 func newHandler(cfg Config, b backend, logger *log.Logger) http.Handler {
@@ -158,12 +182,36 @@ func newHandler(cfg Config, b backend, logger *log.Logger) http.Handler {
 }
 
 func newHandlerWith(cfg Config, b backend, tr transcriber, logger *log.Logger) http.Handler {
+	return newServer(cfg, b, tr, logger).routes()
+}
+
+// newServer 는 핸들러를 엮기 전의 server 다 — 시험이 패스키 로그인의 시계를 바꿀 수 있게 나눴다.
+func newServer(cfg Config, b backend, tr transcriber, logger *log.Logger) *server {
 	s := &server{cfg: cfg, b: b, log: logger, tr: tr}
+	if cfg.Passkeys != "" {
+		s.auth = newPasskeyAuth(cfg.Passkeys)
+	}
+	return s
+}
+
+func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", serveStatic("index.html", "text/html; charset=utf-8"))
 	mux.HandleFunc("GET /app.js", serveStatic("app.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("GET /record.js", serveStatic("record.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("GET /app.css", serveStatic("app.css", "text/css; charset=utf-8"))
+	mux.HandleFunc("GET /manifest.webmanifest", serveStatic("manifest.webmanifest", "application/manifest+json"))
+	mux.HandleFunc("GET /icon-180.png", serveStatic("icon-180.png", "image/png"))
+	mux.HandleFunc("GET /icon-512.png", serveStatic("icon-512.png", "image/png"))
+	if s.auth != nil {
+		mux.HandleFunc("GET /login", serveStatic("login.html", "text/html; charset=utf-8"))
+		mux.HandleFunc("GET /login.js", serveStatic("login.js", "text/javascript; charset=utf-8"))
+		mux.HandleFunc("GET /auth/state", s.handleAuthState)
+		mux.HandleFunc("POST /auth/login/begin", s.handleLoginBegin)
+		mux.HandleFunc("POST /auth/login/finish", s.handleLoginFinish)
+		mux.HandleFunc("POST /auth/register/begin", s.handleRegisterBegin)
+		mux.HandleFunc("POST /auth/register/finish", s.handleRegisterFinish)
+	}
 	mux.HandleFunc("GET /api/features", s.handleFeatures)
 	mux.HandleFunc("POST /api/transcribe", s.handleTranscribe)
 	mux.HandleFunc("GET /api/list", s.handleList)

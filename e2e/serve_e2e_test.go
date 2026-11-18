@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -31,7 +32,14 @@ type serveClient struct {
 }
 
 // startServe 는 빈 포트에 mux serve 를 띄우고, 듣기 시작할 때까지 기다린다. args 는 serve 에 더 줄 플래그다.
+// 패스키 로그인은 끈다 — 이 파일의 다른 시험은 로그인 뒤의 일을 본다. 로그인은 TestServePasskeyGateAndEnroll 이 본다.
 func startServe(t *testing.T, args ...string) *serveClient {
+	t.Helper()
+	return launchServe(t, http.StatusOK, append([]string{"--passkeys="}, args...)...)
+}
+
+// launchServe 는 mux serve 를 띄우고 /api/list 가 ready 로 답할 때까지 기다린다.
+func launchServe(t *testing.T, ready int, args ...string) *serveClient {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -64,7 +72,7 @@ func startServe(t *testing.T, args ...string) *serveClient {
 	c := &serveClient{t: t, base: "http://" + addr}
 	eventually(t, "mux serve 가 듣는다", 10*time.Second, func() bool {
 		code, _ := c.get("/api/list", true)
-		return code == 200
+		return code == ready
 	})
 	return c
 }
@@ -153,6 +161,61 @@ func TestServeRefusesWithoutTheTailscaleIdentity(t *testing.T) {
 	}
 	if code, _ := c.get("/", false); code != http.StatusForbidden {
 		t.Errorf("신원 헤더 없는 정적 파일: %d, want 403", code)
+	}
+}
+
+// TestServePasskeyGateAndEnroll 은 기본 플래그(패스키 켬)의 배선을 본다: 로그인 전에는 목록이 닫히고 / 는 로그인
+// 화면으로 가며, `mux serve enroll` 이 기본 자리에 쓴 코드를 돌고 있는 서버가 읽는다. 등록·로그인의 서명 검증은
+// 가상 인증기로 serve 의 단위 시험(login_test.go)이 본다.
+func TestServePasskeyGateAndEnroll(t *testing.T) {
+	c := launchServe(t, http.StatusUnauthorized)
+	if code, _ := c.get("/api/list", true); code != http.StatusUnauthorized {
+		t.Fatalf("로그인 전 /api/list: %d, want 401", code)
+	}
+	code, body := c.get("/", true) // 303 → /login 을 따라간다
+	if code != http.StatusOK || !bytes.Contains(body, []byte("/login.js")) {
+		t.Fatalf("로그인 전 /: %d, 로그인 화면이어야 한다:\n%s", code, body)
+	}
+	if code, _ := c.get("/login", false); code != http.StatusForbidden {
+		t.Errorf("신원 헤더 없는 로그인 화면: %d, want 403", code)
+	}
+
+	out, err := exec.Command(muxBin, "serve", "enroll").CombinedOutput()
+	if err != nil {
+		t.Fatalf("mux serve enroll: %v\n%s", err, out)
+	}
+	m := regexp.MustCompile(`\b\d{4}-\d{4}\b`).FindString(string(out))
+	if m == "" {
+		t.Fatalf("enroll 출력에 코드가 없다:\n%s", out)
+	}
+	enrollFile := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "mux", "passkeys-enroll.json")
+	if fi, err := os.Stat(enrollFile); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("등록 코드 파일: %v %v", fi, err)
+	}
+	if data, _ := os.ReadFile(enrollFile); bytes.Contains(data, []byte(strings.ReplaceAll(m, "-", ""))) {
+		t.Errorf("등록 코드 파일에 코드가 그대로 있다(해시만 두어야 한다): %s", data)
+	}
+
+	var begun struct {
+		Result  string `json:"result"`
+		Options struct {
+			PublicKey struct {
+				RP struct {
+					ID   string `json:"id"`
+					Name string `json:"name"`
+				} `json:"rp"`
+			} `json:"publicKey"`
+		} `json:"options"`
+	}
+	code, body = c.do(http.MethodPost, "/auth/register/begin", `{"code":"`+m+`"}`, true)
+	if code != http.StatusOK || json.Unmarshal(body, &begun) != nil || begun.Result != "ok" {
+		t.Fatalf("enroll 코드로 등록 시작: %d %s", code, body)
+	}
+	if host, _, _ := net.SplitHostPort(serveHost); begun.Options.PublicKey.RP.ID != host || begun.Options.PublicKey.RP.Name != "Muxtap" {
+		t.Errorf("패스키가 묶일 곳: %+v, want %s · Muxtap", begun.Options.PublicKey.RP, host)
+	}
+	if _, body := c.do(http.MethodPost, "/auth/register/begin", `{"code":"0000-0000"}`, true); !bytes.Contains(body, []byte(`"badcode"`)) && m != "0000-0000" {
+		t.Errorf("틀린 코드: %s", body)
 	}
 }
 

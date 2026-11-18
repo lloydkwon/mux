@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<meta name="apple-mobile-web-app-title" content="Muxtap">
+<title>Muxtap</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-180.png">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="stylesheet" href="/app.css">
+<script src="/login.js" defer></script>
+</head>
+<body>
+<main class="login">
+  <img class="login-icon" src="/icon-180.png" alt="" width="72" height="72">
+  <h1>Muxtap</h1>
+  <p class="login-sub">mux 세션을 폰에서</p>
+  <p class="login-msg" id="msg" role="status" aria-live="polite"></p>
+
+  <section class="login-box" id="unlock-box" hidden>
+    <button class="login-btn" id="unlock" type="button">Face ID 로 열기</button>
+    <p class="login-hint">보안 키로도 열 수 있습니다.</p>
+  </section>
+
+  <section class="login-box" id="enroll-box" hidden>
+    <label class="login-label" for="code">등록 코드</label>
+    <input class="login-code" id="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="9" placeholder="1234-5678">
+    <button class="login-btn" id="register" type="button">이 기기 등록</button>
+    <p class="login-hint">데스크톱에서 <code>mux serve enroll</code> 을 실행하면 코드가 나옵니다. 코드는 10분 동안, 한 번만 씁니다.</p>
+  </section>
+
+  <button class="login-link" id="show-enroll" type="button" hidden>새 기기 등록</button>
+</main>
+</body>
+</html>

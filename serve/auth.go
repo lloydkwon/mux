@@ -37,6 +37,16 @@ func (s *server) guard(next http.Handler) http.Handler {
 			http.Error(w, "tailscale serve 를 거친 허용된 사용자만 열 수 있습니다.", status)
 			return
 		}
+		// 둘째 겹: 패스키 로그인(login.go). 로그인 전에는 로그인 화면과 그 재료만 열린다. 로그에는 적지 않는다 —
+		// 쉬다 돌아온 폰이 한 번씩 받는 평범한 답이다.
+		if s.auth != nil && !isPublic(r.URL.Path) && !s.auth.loggedIn(r) {
+			if r.Method == http.MethodGet && r.URL.Path == "/" {
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
+			writeError(w, http.StatusUnauthorized, "login")
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }

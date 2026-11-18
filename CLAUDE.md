@@ -34,7 +34,8 @@ make herdr-check                # herdr 의 응답 모양이 그대로인지 (he
 ./mux --herdr                   # herdr 를 데이터 출처로 목록을 연다 (읽기 전용)
 ./mux --claude                  # 돌고 있는 클로드 «대화» 목록; enter 로 가거나 여기서 이어간다
 ./mux agent ls                  # 이 서버의 Claude pane 목록 — prompt/wait/read 의 대상 (docs/design/agent-api.md)
-./mux serve --allow you@example.com   # 폰 브라우저 화면, 127.0.0.1:7690 — 폰에서는 `tailscale serve --bg --https=8443 127.0.0.1:7690` 뒤에서 (docs/design/serve.md)
+./mux serve --allow you@example.com   # 폰 브라우저 화면(Muxtap), 127.0.0.1:7690 — 폰에서는 `tailscale serve --bg --https=8443 127.0.0.1:7690` 뒤에서 (docs/design/serve.md)
+./mux serve enroll                    # 폰 하나를 패스키(Face ID·보안 키)로 등록할 일회용 코드 — 10분, 한 번
 go test -tags e2e -run TestAgent ./e2e/   # agent API 만 가짜 Claude 로 (~20초)
 ```
 
@@ -192,5 +193,9 @@ Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale a
   빼낸다(그 칸에서는 숫자가 글자다). 여러 개 고르기는 숫자키가 체크만 바꾸므로 `AnswerMulti`
   (체크 맞추기 → 직접 쓰기는 화살표로 → Submit 줄에서 Enter)로만 답한다. 대화 탭은 내용이 바뀔 때만 다시 그린다.
   받아쓰기는 계속 듣기로 듣고 저절로 끝나면 이어 들으며, 들은 글을 줄이지 않는다 — iPhone Safari 는 한 번 말하기가 멈추면
-  끊기고, 멈춘 뒤 앞 글을 지우거나 빈 결과를 보내 들은 말을 잃었다(사용자 보고, 2026-11-17). (serve.md)
+  끊기고, 멈춘 뒤 앞 글을 지우거나 빈 결과를 보내 들은 말을 잃었다(사용자 보고, 2026-11-17).
+  그 검사들 뒤에 **패스키 로그인**(폰 이름 Muxtap)이 둘째 겹으로 선다: 사람 확인(UV) required, 등록은 `mux serve enroll` 코드로만
+  (첫 기기도, 코드 하나에 패스키 하나 — 끝낼 때 시작 때 맞힌 그 코드가 살아 있어야 지우고 더한다), 깨진 패스키 파일을 빈 것으로
+  보지 않는다, 쿠키는 메모리에만·30분 쉬면 끝·그 Tailscale 로그인에만, 로그인 없이 열리는 경로는 이름이 꼭 같은 것만(앞머리 금지).
+  검증은 go-webauthn 에 맡긴다(직접 짜지 않는다, 사용자 결정). `--passkeys=` 가 꺼짐이고 e2e 의 `startServe` 가 그렇게 끈다. (serve.md)
 - **주석에 «measured»·«verified» 를 쓰면** `scripts/tmux-assumptions.sh` 에 그 단언을 한 줄 더한다.
