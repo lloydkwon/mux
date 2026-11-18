@@ -278,7 +278,9 @@ TUI 의 `p` 로 보관한 세션([park.md](park.md))을 폰에서 보고 되살�
 항목에 남김, `=name:` 지목, `-c` 의 `#` 이스케이프 — 전부 park.md «복원» 그대로다. 다른 점은 attach 가 없다는 것뿐이다:
 폰은 세션에 붙지 않고, 되살린 세션이 목록에 카드로 나타난다. `RestoreParked` 는 `tmux new-session … claude --resume <id>`
 로 띄운다 — TUI·`--claude` 입양과 같은 길이고, 사용자 서버에서 그렇게 뜬 kream-matching·works 가 `claude` 를 돌리고 있다
-(2026-11-17 `pane_start_command` 로 확인). mux-serve 의 PATH 에도 `~/.local/bin` 이 있다. 새 세션은 만든 클라이언트(여기서는
+(2026-11-17 `pane_start_command` 로 확인). mux-serve 의 PATH 에도 `~/.local/bin` 이 있다 — 그 PATH 가 쓰인다: 새 세션·창의
+명령은 tmux 서버가 아니라 만든 클라이언트의 PATH 로 찾는다(`scripts/tmux-assumptions.sh` 20절, 2026-11-18 3.8 실측. 사용자
+tmux 서버의 PATH 에는 `~/.local/bin` 이 없다). 서비스의 PATH 를 줄이면 되살리기가 `claude` 를 못 찾는다. 새 세션은 만든 클라이언트(여기서는
 mux-serve)의 `update-environment` 변수를 받는다 — mux-serve 의 `SSH_AUTH_SOCK` 은 gnome-keyring(`/run/user/1000/keyring/ssh`)이고,
 kream-matching·works 도 같은 값이며, 키(ED25519 둘)를 가진 것도 그쪽이다(gpg-agent 쪽은 «no identities», 2026-11-17 확인).
 되살린 Claude 의 `git push` 는 다른 mux 세션과 같은 에이전트를 쓴다.

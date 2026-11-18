@@ -612,6 +612,25 @@ ok "맨 이름은 그때 접두사로 name-2 를 잡는다 (그래서 = 와 : �
 	"$(t capture-pane -p -t "scr" 2>/dev/null | grep -o 'in-scr[-0-9]*' | head -1)"
 t kill-session -t "=scr-2"
 
+# ── 20. 보관함 복원의 명령은 부른 쪽의 PATH 로 찾는다 ─────────────────────────────
+# docs/design/serve.md «보관함 되살리기», tmux/park.go 의 launchUnpark. 복원은 `claude --resume <id>` 를
+# new-session·new-window 의 여러 낱말 명령으로 넘긴다. 붙지 않은 명령 클라이언트가 만든 pane 은 서버가 아니라 그
+# 클라이언트의 PATH 로 실행 파일을 찾는다 — 그래서 폰의 되살리기는 mux serve(systemd 서비스)의 PATH 에 claude 가
+# 있으면 되고, 사용자 tmux 서버의 PATH(~/.local/bin 이 없다)에는 없어도 된다(2026-11-18, 3.8 실측).
+echo
+echo "보관함 복원의 명령은 부른 쪽의 PATH 로 찾는다 (docs/design/serve.md «보관함 되살리기»)"
+PD=$(mktemp -d)
+printf '#!/bin/sh\necho "$1" > "%s/out-$1"\n' "$PD" >"$PD/muxpathprobe"
+chmod +x "$PD/muxpathprobe"
+t new-session -d -s pathbase "sleep 300"
+env PATH="$PD:$PATH" "$TMUX_BIN" -L "$SOCKET" -f /dev/null new-session -d -s pathnew muxpathprobe session
+env PATH="$PD:$PATH" "$TMUX_BIN" -L "$SOCKET" -f /dev/null new-window -d -t "=pathbase:" muxpathprobe window
+sleep 0.5
+ok "new-session 의 여러 낱말 명령은 클라이언트 PATH 에만 있는 실행 파일을 찾는다" "session" "$(cat "$PD/out-session" 2>/dev/null)"
+ok "new-window 도 그렇다" "window" "$(cat "$PD/out-window" 2>/dev/null)"
+t kill-session -t "=pathbase" 2>/dev/null
+rm -rf "$PD"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
 	echo "$CHECKED 개 전부 통과 — $VERSION 에서 mux 의 가정이 유지됩니다."

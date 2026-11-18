@@ -78,8 +78,9 @@ func run(m *testing.M) int {
 		return 1
 	}
 
-	// 보관함 복원은 서버 환경에서 `claude --resume <id>` 를 띄운다. pane 은 서버를 띄운 때의 PATH 를
-	// 쓰므로, 테스트 중에 PATH 를 바꿔서는 닿지 않는다 — 서버보다 먼저 가짜 Claude 를 `claude` 로 둔다.
+	// 보관함 복원은 `claude --resume <id>` 를 띄운다. 그 pane 은 복원을 부른 mux(붙지 않은 tmux 명령 클라이언트)의
+	// PATH 로 claude 를 찾는다(scripts/tmux-assumptions.sh 20절, 3.8 실측 — 서버의 PATH 가 아니다). 서버·TUI·
+	// mux serve 가 모두 이 PATH 를 물려받도록 무엇을 띄우기 전에 가짜 Claude 를 `claude` 로 둔다.
 	// 가짜는 쓰는 테스트가 처음 부를 때 빌드되고(fakeClaude), 그 경로는 여기서 미리 정해져 있다.
 	binDir := filepath.Join(tmp, "bin")
 	os.MkdirAll(binDir, 0o755)
