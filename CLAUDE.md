@@ -49,6 +49,21 @@ CI (`.github/workflows/ci.yml`) runs test + build + arm64 cross-build + `scripts
 
 Note the private server has no user config, so `base-index` is tmux's default 0 — target windows by `#{window_id}`, never `sess:1`. Releases are tag-driven via goreleaser. Commits follow Conventional Commits.
 
+### 커밋 전 검토 · push 전 검증
+
+- **커밋 전에 `mux-reviewer` 에이전트**(`.claude/agents/mux-reviewer.md`)에 이번 변경의 목적과 검토할 경로(또는 커밋 범위)를
+  준다. 작업 트리에 다른 작업이 섞여 있을 수 있으니 범위를 꼭 준다. «정확성·요구사항 빈틈» 만 반영하고, 반영 뒤 다시 보는 것은
+  두 번까지다 — 세 번째에도 남으면 사용자에게 그대로 보인다. «선택 사항» 은 반영하지 않고 보고에 옮긴다.
+- **위험한 변경은 다른 계열 모델로 한 번 더 본다** — 같은 모델의 재검토는 독립 검증이 아니다. 위험한 변경: `mux serve` 의 인증,
+  세션·pane 을 죽이는 길(보관·유령 패널·resurrect·revive), 남의 pane 에 글을 치는 길(`PromptAgent`·`AnswerDialog`), tmux 설정
+  쓰기, `listFormat`. `ocx-gpt-6-*` 에이전트에 «`.claude/agents/mux-reviewer.md` 를 읽고 그 검토자로서 검토하라, 파일은 고치지
+  마라» 고 목적·범위와 함께 준다. 반영 기준은 같다.
+- **push 전에 `make verify`**. HEAD 커밋을 임시 worktree 에 풀어 CI 와 같은 단계(+ gofmt·`go vet`·커밋 메시지 형식)를 첫 실패까지
+  돌리고, 통과하면 그 sha 의 기록 `.git/mux-verify/<sha>.ok` 를 남긴다. 커밋 안 된 변경은 들어가지 않는다. 테스트 단계는 돈
+  테스트 수를 세고 0개면 실패다(e2e 는 tmux·`script` 가 없으면 아무것도 안 돌리고 exit 0 한다). `make hooks` 로 건 pre-push 훅은
+  push 하는 ref 끝 커밋에 그 기록이 없으면 막는다. 한 번 우회는 `git push --no-verify`. golangci-lint 는 이 기계에 없어
+  «건너뜀» 으로 기록에 남는다.
+
 ## Architecture
 
 Three layers, strictly one-directional:
