@@ -11,7 +11,7 @@ import (
 	"github.com/lloydkwon/mux/tmux"
 )
 
-// 보관(p)과 보관함(P). 지금은 필요 없는 Claude 세션을 닫았다가, 나중에 같은 대화로 되살린다.
+// 보관(p)과 보관함(P). 지금은 필요 없는 Claude·opencode 세션을 닫았다가, 나중에 같은 대화로 되살린다.
 // 저장과 tmux 쪽 일은 tmux/park.go, 설계 이유는 docs/design/park.md.
 
 // tmux 쪽 시임이다. ui 에는 목 러너가 없어서, 테스트는 이것을 바꿔 끼워 «Update 안에서는 부르지
@@ -74,18 +74,27 @@ func loadParkedCmd() tea.Msg {
 // parkNotice 는 보관 실패를 한 줄로 말한다. 세션이 닫히지 않았다는 것까지 — 그게 사용자가 알아야 할 것이다.
 func parkNotice(err error) string {
 	if errors.Is(err, tmux.ErrNothingToPark) {
-		return "no Claude conversation with a transcript to park — nothing was closed"
+		return "no conversation to resume in this session — nothing was closed"
 	}
 	return "park failed: " + err.Error()
 }
 
-// claudeSessionRow 는 p 가 받는 행인지 — Claude 가 도는 세션 행이다. 다른 도구는 대화 id 를 모른다.
-func claudeSessionRow(it *listItem) bool {
+// parkableSessionRow 는 p 가 받는 행인지 — Claude 나 opencode 가 도는 세션 행이다. 다른 도구는 대화 id 를
+// 알아낼 길이 없다.
+func parkableSessionRow(it *listItem) bool {
 	if it == nil || it.kind != itemSession || it.session == nil {
 		return false
 	}
 	tool, ok := tmux.SessionAITool(*it.session)
-	return ok && tool.Name == "claude"
+	return ok && tmux.ParkableTool(tool.Name)
+}
+
+// parkToolLabel 은 확인 줄에 쓰는 도구 이름이다.
+func parkToolLabel(s tmux.Session) string {
+	if tool, ok := tmux.SessionAITool(s); ok && tool.Name == "opencode" {
+		return "opencode"
+	}
+	return "Claude"
 }
 
 // neighbourSession 은 name 바로 아래 세션, 없으면 바로 위 세션이다. 보관한 세션이 목록에서 빠진 뒤
@@ -130,11 +139,17 @@ func (m confirmParkModel) Update(msg tea.Msg) (confirmParkModel, tea.Cmd) {
 }
 
 func (m confirmParkModel) View() string {
-	text := fmt.Sprintf("Park %q? closes the session — its Claude conversation comes back from P (y/N)", m.session.Name)
+	label := parkToolLabel(m.session)
+	text := fmt.Sprintf("Park %q? closes the session — its %s conversation comes back from P (y/N)", m.session.Name, label)
 	switch m.session.AIState {
 	case tmux.AIStateWorking, tmux.AIStateApproval, tmux.AIStateShell:
 		// 닫으면 진행 중인 턴(또는 승인 대기, 배경 명령)이 끊긴다. 대화는 돌아와도 그 턴은 돌아오지 않는다.
-		text += " · Claude is busy, this turn will be cut"
+		// opencode 의 TUI 는 서비스의 클라이언트라 턴이 서비스에서 이어질 수도 있다(재지 않았다) — «may».
+		cut := "will"
+		if label == "opencode" {
+			cut = "may"
+		}
+		text += " · " + label + " is busy, this turn " + cut + " be cut"
 	}
 	return helpKeyStyle.Render(text)
 }
@@ -273,7 +288,7 @@ func renderParkedPreview(parked []tmux.ParkedSession, innerWidth, innerHeight in
 		lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(padOrTruncate("[ Parked sessions ]", innerWidth)),
 		lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", innerWidth)),
 		"",
-		padOrTruncate("Claude sessions closed with p, kept to resume later.", innerWidth),
+		padOrTruncate("Claude/opencode sessions closed with p, to resume later.", innerWidth),
 		helpStyle.Render(padOrTruncate("Enter opens the list to restore or forget one.", innerWidth)),
 		"",
 	}
@@ -386,7 +401,7 @@ func (m Model) openParkedList(msg parkedLoadedMsg) Model {
 	}
 	m.setParked(msg.parked)
 	if len(msg.parked) == 0 {
-		m.notice = "nothing parked — p on a Claude session parks it"
+		m.notice = "nothing parked — p on a Claude or opencode session parks it"
 		return m
 	}
 	m.mode = modeParked

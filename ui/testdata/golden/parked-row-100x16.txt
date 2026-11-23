@@ -3,7 +3,7 @@
 │○ New shell     leave tmux            │[ Parked sessions ]                                        │|
 │+ New tmux ...  create and attach     │───────────────────────────────────────────────────────────│|
 │≡ Parked se...  2 to restore          │                                                           │|
-│▶ a-session...        ✅              │Claude sessions closed with p, kept to resume later.       │|
+│▶ a-session...        ✅              │Claude/opencode sessions closed with p, to resume later.   │|
 │▶ api-server          ❗ ⌥ feat/lon...│Enter opens the list to restore or forget one.             │|
 │▶ mux                 ⏳        ⌥ main│                                                           │|
 │▶ notes                   ✎ 회의록... │  wai-plan            /home/u/dev/wai  ✎ 다음 회차 대기    │|

@@ -3,6 +3,7 @@ package tmux
 import (
 	"errors"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -276,4 +277,19 @@ func TestSessionForTargetReportsAMissingPane(t *testing.T) {
 			t.Error("a missing pane resolved to a session")
 		}
 	})
+}
+
+// 진짜 러너의 제한 시간은 멎은 명령을 기다리지 않는다 — 보관 Cmd 가 opencode 서비스에 묶이지 않게.
+func TestOutputWithinGivesUp(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("no sleep")
+	}
+	start := time.Now()
+	_, err := execRunner{}.OutputWithin(100*time.Millisecond, "sleep", "5")
+	if err == nil || !strings.Contains(err.Error(), "did not answer") {
+		t.Errorf("err = %v, want a timeout", err)
+	}
+	if took := time.Since(start); took > 3*time.Second {
+		t.Errorf("took %v, want it to give up near the limit", took)
+	}
 }

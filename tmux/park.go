@@ -13,26 +13,39 @@ import (
 	"time"
 )
 
-// 보관 — 지금은 필요 없는 Claude 세션을 닫되, 나중에 같은 대화로 되살릴 수 있게 기억해 둔다.
+// 보관 — 지금은 필요 없는 Claude·opencode 세션을 닫되, 나중에 같은 대화로 되살릴 수 있게 기억해 둔다.
 //
 // 닫는 순간 ~/.claude/sessions 의 상태 파일이 사라지므로 --claude 목록에도 다시 나오지 않는다.
 // 대화로 가는 길은 대화 id 와 그것을 연 디렉터리뿐이고, 이 파일이 그 둘을 적어 둔다. 되살리기는
 // 같은 id 로 --resume 한다 — 포크하지 않는 이유는 docs/design/claude-mode.md, 나머지 결정은
-// docs/design/park.md.
+// docs/design/park.md. opencode 쪽(대화 id 를 알아내는 법, -s 로 되살리기)은 park_opencode.go.
 
-// ErrNothingToPark 는 세션에 되살릴 수 있는 Claude 대화가 없다는 뜻이다. 그때는 세션을 닫지 않는다.
-var ErrNothingToPark = errors.New("no Claude conversation with a transcript in this session")
+// ErrNothingToPark 는 세션에 되살릴 수 있는 대화가 없다는 뜻이다. 그때는 세션을 닫지 않는다.
+var ErrNothingToPark = errors.New("no Claude or opencode conversation to resume in this session")
+
+const (
+	toolClaude   = "claude"
+	toolOpencode = "opencode"
+)
+
+// ParkableTool 은 보관할 수 있는 도구인지 — 대화 id 를 알아내 같은 대화로 되살릴 수 있는 도구다.
+func ParkableTool(name string) bool { return name == toolClaude || name == toolOpencode }
 
 // ParkedConversation 은 보관한 세션 안의 대화 하나다.
 type ParkedConversation struct {
 	SessionID string `json:"session_id"`
 	// CWD 는 대화를 연 곳이다. --resume 은 거기서 해야 기록을 다시 찾는다.
 	CWD string `json:"cwd"`
-	// Task 는 Claude 가 붙인 작업 이름이다. 보관함에 보여 주는 용도뿐이다.
+	// Task 는 도구가 붙인 대화 이름이다(Claude 의 작업 이름, opencode 의 제목). 보관함에 보여 주는 용도뿐이다.
 	Task string `json:"task,omitempty"`
 	// PID 는 보관할 때 대화를 들고 있던 프로세스다. 복원 때 «아직 살아 있는 사본» 판정에서 뺀다 —
 	// SIGHUP 을 받고 끝나는 중인 그 프로세스를 사본으로 보면 포크하거나 죽은 세션으로 간다.
 	PID int `json:"pid,omitempty"`
+	// Tool 은 대화를 연 도구다. 빈 값은 claude 다 — 이 필드가 생기기 전의 보관함이 그대로 읽힌다.
+	Tool string `json:"tool,omitempty"`
+	// Command 는 되살릴 때 띄울 opencode 실행 파일이다. tmux 서버의 PATH 에 없을 수 있어 보관할 때 돌던
+	// 경로를 적는다. claude 는 비운다.
+	Command string `json:"command,omitempty"`
 }
 
 // ParkedSession 은 보관함의 항목 하나 — 닫은 tmux 세션 하나다.
@@ -95,9 +108,15 @@ func normalizeParked(in []ParkedSession) []ParkedSession {
 	for _, p := range in {
 		var convs []ParkedConversation
 		for _, c := range p.Conversations {
-			if c.SessionID != "" {
-				convs = append(convs, c)
+			if c.SessionID == "" {
+				continue
 			}
+			// tool 을 모르는 옛 mux 가 보관함을 다시 쓰면 그 필드가 지워지고, 그 대화는 claude --resume 으로 가
+			// 영영 돌아오지 않는다. opencode 의 대화 id 는 «ses_» 로 시작하고 Claude 의 것은 UUID 라 겹치지 않는다.
+			if c.Tool == "" && strings.HasPrefix(c.SessionID, "ses_") {
+				c.Tool = toolOpencode
+			}
+			convs = append(convs, c)
 		}
 		if strings.TrimSpace(p.Name) == "" || len(convs) == 0 {
 			continue
@@ -166,7 +185,7 @@ func saveParked(list []ParkedSession) error {
 	return nil
 }
 
-// ParkSession 은 세션의 Claude 대화를 보관함에 적고 세션을 닫는다. 갱신된 보관함을 돌려준다.
+// ParkSession 은 세션의 Claude·opencode 대화를 보관함에 적고 세션을 닫는다. 갱신된 보관함을 돌려준다.
 //
 // **순서가 load-bearing 이다.** 적고, 적힌 것을 다시 읽어 확인하고, 그다음에 닫는다. 거꾸로면 닫기는
 // 됐는데 쓰기가 실패한 경우 대화로 가는 길이 없다. 사람이 누르는 속도라 파일 잠금은 두지 않았고,
@@ -181,7 +200,10 @@ func ParkSession(s Session) ([]ParkedSession, error) {
 	}
 
 	resetClaudeRunCache()
-	convs := sessionConversations(ClaudeRuns(), s.Name)
+	convs, err := sessionConversations(ClaudeRuns(), s.Name, parkedIDs(list))
+	if err != nil {
+		return list, err
+	}
 	if len(convs) == 0 {
 		return list, ErrNothingToPark
 	}
@@ -232,13 +254,44 @@ func closeParkedSession(name string, before []ParkedSession) error {
 	return fmt.Errorf("park %q: %w", name, err)
 }
 
+// placedConversation 은 대화와 그것이 도는 pane 의 "<session>:@<window>.%<pane>" 이다 — 순서를 세우는 데만 쓴다.
+type placedConversation struct {
+	ref  string
+	conv ParkedConversation
+}
+
 // sessionConversations 는 tmux 세션 하나에 든 대화 중 되살릴 수 있는 것을 창·pane 순서로 고른다.
+// Claude 와 opencode 가 섞여 있으면 둘 다, 한 순서로 세운다. opencode 의 대화를 정할 수 없으면 오류다
+// (park_opencode.go) — 그때는 아무것도 적지 않고 닫지도 않는다. parked 는 이미 보관함에 든 대화 id 로,
+// opencode 쪽만 쓴다(Claude 는 같은 대화를 다시 보관하면 새 항목으로 옮긴다 — stripConversations).
+func sessionConversations(runs []ClaudeRun, session string, parked map[string]bool) ([]ParkedConversation, error) {
+	opencode, err := opencodeConversations(session, parked)
+	if err != nil {
+		return nil, err
+	}
+	placed := append(claudeConversations(runs, session), opencode...)
+	sort.SliceStable(placed, func(i, j int) bool {
+		wi, pi := refOrder(placed[i].ref)
+		wj, pj := refOrder(placed[j].ref)
+		if wi != wj {
+			return wi < wj
+		}
+		return pi < pj
+	})
+	convs := make([]ParkedConversation, 0, len(placed))
+	for _, p := range placed {
+		convs = append(convs, p.conv)
+	}
+	return convs, nil
+}
+
+// claudeConversations 는 세션에 든 Claude 대화 중 되살릴 수 있는 것이다.
 //
 // TmuxSession 은 pane id 로 푼 이름이라, Claude 가 적어 둔 이름과 달리 세션 이름을 바꾼 뒤에도 맞다.
 // 기록 파일이 없는 대화는 뺀다 — 갓 띄우고 아직 아무것도 안 시킨 Claude 는 --resume 할 것이 없어,
 // 되살리면 pane 이 곧바로 끝나고 세션째 사라진다.
-func sessionConversations(runs []ClaudeRun, session string) []ParkedConversation {
-	var picked []ClaudeRun
+func claudeConversations(runs []ClaudeRun, session string) []placedConversation {
+	var placed []placedConversation
 	for _, r := range runs {
 		if r.TmuxSession != session || r.SessionID == "" || r.CWD == "" {
 			continue
@@ -246,26 +299,14 @@ func sessionConversations(runs []ClaudeRun, session string) []ParkedConversation
 		if _, err := transcriptPath(r.SessionID, r.CWD); err != nil {
 			continue
 		}
-		picked = append(picked, r)
-	}
-	sort.SliceStable(picked, func(i, j int) bool {
-		wi, pi := refOrder(picked[i].TmuxRef)
-		wj, pj := refOrder(picked[j].TmuxRef)
-		if wi != wj {
-			return wi < wj
-		}
-		return pi < pj
-	})
-	convs := make([]ParkedConversation, 0, len(picked))
-	for _, r := range picked {
-		convs = append(convs, ParkedConversation{
+		placed = append(placed, placedConversation{ref: r.TmuxRef, conv: ParkedConversation{
 			SessionID: r.SessionID,
 			CWD:       r.CWD,
 			Task:      r.Session.AITask,
 			PID:       r.Session.AIPID,
-		})
+		}})
 	}
-	return convs
+	return placed
 }
 
 // refOrder 는 "<session>:@<window>.%<pane>" 의 창·pane id 다. id 는 만든 순서라 보관할 때마다 같은
@@ -296,6 +337,17 @@ func stripConversations(list []ParkedSession, convs []ParkedConversation) []Park
 		out = append(out, p)
 	}
 	return out
+}
+
+// parkedIDs 는 보관함에 든 대화 id 들이다.
+func parkedIDs(list []ParkedSession) map[string]bool {
+	ids := make(map[string]bool)
+	for _, p := range list {
+		for _, c := range p.Conversations {
+			ids[c.SessionID] = true
+		}
+	}
+	return ids
 }
 
 func containsParked(list []ParkedSession, id string) bool {
@@ -358,10 +410,15 @@ type unparkPlan struct {
 	live      string
 }
 
-// planUnpark 는 대화마다 무엇을 할지 정한다. tmux 는 부르지 않는다.
+// planUnpark 는 대화마다 무엇을 할지 정한다. tmux 는 부르지 않는다 — opencode 대화는 opencode 에 아직
+// 있는지만 묻는다(planOpencode).
 func planUnpark(p ParkedSession, runs []ClaudeRun) unparkPlan {
 	var plan unparkPlan
 	for _, c := range p.Conversations {
+		if c.Tool == toolOpencode {
+			plan.planOpencode(c)
+			continue
+		}
 		run, alive := liveCopy(runs, c)
 		switch {
 		case alive && run.TmuxSession != "":

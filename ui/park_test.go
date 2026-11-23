@@ -140,20 +140,35 @@ func TestFirstLoadLandsOnTheFirstSessionUnderTheParkedRow(t *testing.T) {
 	}
 }
 
-func TestParkKeyTakesOnlyAClaudeSession(t *testing.T) {
+func TestParkKeyTakesOnlyAClaudeOrOpencodeSession(t *testing.T) {
 	m := parkTestModel(0)
-	m.focusItemSession("shell")
-	next, _ := m.updateList(runeKey('p'))
-	got := next.(Model)
-	if got.mode != modeList || !strings.Contains(got.notice, "only Claude") {
-		t.Errorf("p on a shell: mode=%v notice=%q, want a notice and no prompt", got.mode, got.notice)
+	m.sessions = append(m.sessions,
+		tmux.Session{Name: "oc", Created: time.Now(), ActiveCommand: "opencode", AITool: "opencode", AIState: tmux.AIStateWorking},
+		tmux.Session{Name: "other-ai", Created: time.Now(), ActiveCommand: "aider"})
+	m.applyFilter()
+	for _, name := range []string{"shell", "other-ai"} {
+		m.focusItemSession(name)
+		next, _ := m.updateList(runeKey('p'))
+		got := next.(Model)
+		if got.mode != modeList || !strings.Contains(got.notice, "only Claude and opencode") {
+			t.Errorf("p on %s: mode=%v notice=%q, want a notice and no prompt", name, got.mode, got.notice)
+		}
 	}
 
 	m.focusItemSession("alpha")
+	next, _ := m.updateList(runeKey('p'))
+	got := next.(Model)
+	if bar := ansi.Strip(got.extraBar()); got.mode != modeConfirmPark || !strings.Contains(bar, `Park "alpha"?`) ||
+		!strings.Contains(bar, "its Claude conversation") {
+		t.Errorf("p on a Claude session: mode=%v bar=%q", got.mode, bar)
+	}
+
+	m.focusItemSession("oc")
 	next, _ = m.updateList(runeKey('p'))
 	got = next.(Model)
-	if got.mode != modeConfirmPark || !strings.Contains(ansi.Strip(got.extraBar()), `Park "alpha"?`) {
-		t.Errorf("p on a Claude session: mode=%v bar=%q", got.mode, ansi.Strip(got.extraBar()))
+	if bar := ansi.Strip(got.extraBar()); got.mode != modeConfirmPark || !strings.Contains(bar, "its opencode conversation") ||
+		!strings.Contains(bar, "opencode is busy, this turn may be cut") {
+		t.Errorf("p on an opencode session: mode=%v bar=%q", got.mode, bar)
 	}
 }
 

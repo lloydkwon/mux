@@ -549,8 +549,8 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if it == nil || it.kind != itemSession {
 				break
 			}
-			if !claudeSessionRow(it) {
-				m.notice = "only Claude sessions can be parked — other tools have no conversation id to resume"
+			if !parkableSessionRow(it) {
+				m.notice = "only Claude and opencode sessions can be parked — other tools have no conversation id to resume"
 				break
 			}
 			if m.parking != "" {

@@ -1,14 +1,18 @@
 //go:build e2e
 
-// 보관(p)과 보관함(P)을 격리 tmux 위의 가짜 Claude 로 끝까지 돌린다. TUI 에서 보관하면 세션이 닫히고
+// 보관(p)과 보관함(P)을 격리 tmux 위의 가짜 Claude·가짜 opencode 로 끝까지 돌린다. TUI 에서 보관하면 세션이 닫히고
 // parked.json 에 대화가 남는다. 보관함에서 고르면 같은 이름의 세션에서 같은 id 로 이어진다.
 // 가짜 Claude 는 TestMain 이 서버보다 먼저 PATH 에 둔 `claude` 래퍼로 다시 뜬다.
 package e2e
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -96,6 +100,93 @@ func TestParkAndRestore(t *testing.T) {
 		}
 		return false
 	})
+	if strings.Contains(parkedJSON(), sid) {
+		t.Errorf("복원한 대화가 보관함에 남았다:\n%s", parkedJSON())
+	}
+}
+
+var (
+	fakeOpencodeOnce sync.Once
+	fakeOpencodeBin  string
+	fakeOpencodeErr  error
+)
+
+// fakeOpencode 는 가짜 opencode 를 한 번만 빌드한다. 이름이 opencode 여야 mux 가 /proc 에서 알아본다.
+func fakeOpencode(t *testing.T) string {
+	t.Helper()
+	fakeOpencodeOnce.Do(func() {
+		fakeOpencodeBin = filepath.Join(filepath.Dir(muxBin), "fakeopencode", "opencode")
+		build := exec.Command("go", "build", "-tags", "e2e", "-o", fakeOpencodeBin, "./e2e/fakeopencode")
+		build.Dir = repoRoot()
+		if out, err := build.CombinedOutput(); err != nil {
+			fakeOpencodeErr = errors.New(err.Error() + "\n" + string(out))
+		}
+	})
+	if fakeOpencodeErr != nil {
+		t.Fatalf("fakeopencode 빌드 실패: %v", fakeOpencodeErr)
+	}
+	return fakeOpencodeBin
+}
+
+var opencodeSessionLine = regexp.MustCompile(`session: (ses_\w+)`)
+
+// TestParkAndRestoreOpencode 는 opencode 대화를 보관했다가 같은 대화로 되살린다. 진짜 opencode 처럼 가짜도
+// 어느 대화를 열었는지 어디에도 적지 않는다 — mux 는 /proc 의 프로세스와 API 의 대화 목록으로 알아낸다.
+func TestParkAndRestoreOpencode(t *testing.T) {
+	const session = "e2e-park-oc"
+	bin := fakeOpencode(t)
+	dir := filepath.Join(home, "proj-"+session)
+	os.MkdirAll(dir, 0o755)
+	pane := tm(t, "new-session", "-d", "-P", "-F", "#{pane_id}", "-s", session, "-x", "160", "-y", "40", "-c", dir, bin)
+	t.Cleanup(func() { tmq("kill-session", "-t", "="+session) })
+	eventually(t, "가짜 opencode 가 뜬다", 10*time.Second, func() bool {
+		return strings.Contains(screen(t, pane), "session: none")
+	})
+	// 첫 화면의 opencode 는 되살릴 것이 없다. 한 줄 쳐서 대화를 만든다.
+	tm(t, "send-keys", "-t", pane, "-l", "hello")
+	tm(t, "send-keys", "-t", pane, "Enter")
+	var sid string
+	eventually(t, "대화가 생긴다", 10*time.Second, func() bool {
+		if m := opencodeSessionLine.FindStringSubmatch(screen(t, pane)); m != nil {
+			sid = m[1]
+		}
+		return sid != ""
+	})
+
+	tui := startTUI(t, "tui-park-oc")
+	eventually(t, "TUI 가 뜬다", 10*time.Second, func() bool { return strings.Contains(screen(t, tui), session) })
+	tm(t, "send-keys", "-t", tui, "/")
+	tm(t, "send-keys", "-t", tui, "-l", session)
+	tm(t, "send-keys", "-t", tui, "Enter")
+	tm(t, "send-keys", "-t", tui, "g")
+	tm(t, "send-keys", "-t", tui, "p")
+	eventually(t, "보관 확인 줄", 5*time.Second, func() bool {
+		s := screen(t, tui)
+		return strings.Contains(s, `Park "`+session+`"?`) && strings.Contains(s, "opencode conversation")
+	})
+	tm(t, "send-keys", "-t", tui, "y")
+	eventually(t, "세션이 닫히고 opencode 대화가 보관함에 남는다", 10*time.Second, func() bool {
+		_, err, _ := runTmux("has-session", "-t", "="+session)
+		js := parkedJSON()
+		return err != nil && strings.Contains(js, sid) && strings.Contains(js, `"tool": "opencode"`)
+	})
+
+	tm(t, "send-keys", "-t", tui, "Escape")
+	tm(t, "send-keys", "-t", tui, "P")
+	eventually(t, "보관함 팝업", 5*time.Second, func() bool {
+		s := screen(t, tui)
+		return strings.Contains(s, "Parked sessions · ") && strings.Contains(s, "▶ "+session)
+	})
+	tm(t, "send-keys", "-t", tui, "Enter")
+
+	// cmd/mux 가 같은 이름의 세션을 만들고, 보관할 때 돌던 그 실행 파일로 `opencode -s <id>` 를 띄운다.
+	eventually(t, "같은 이름의 세션에서 같은 opencode 대화가 열린다", 15*time.Second, func() bool {
+		panes := tmq("list-panes", "-t", "="+session, "-F", "#{pane_id}")
+		return panes != "" && strings.Contains(screen(t, strings.Fields(panes)[0]), "session: "+sid)
+	})
+	if start := tmq("list-panes", "-t", "="+session, "-F", "#{pane_start_command}"); !strings.Contains(start, bin) || !strings.Contains(start, "-s "+sid) {
+		t.Errorf("복원한 pane 의 명령 = %q, want %s -s %s", start, bin, sid)
+	}
 	if strings.Contains(parkedJSON(), sid) {
 		t.Errorf("복원한 대화가 보관함에 남았다:\n%s", parkedJSON())
 	}

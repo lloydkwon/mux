@@ -203,7 +203,12 @@ Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale a
   종료 코드 6(되돌렸으니 다시 보내도 됨)과 7(기록에 안 보임 — 다시 보내지 마라)을 합치지 않는다. (agent-api.md)
 - **보관(`p`)은 같은 id 로 `--resume` 한다(포크 금지).** 적고 → 다시 읽어 확인하고 → `kill-session -t =name`
   (= 없으면 그 이름이 없을 때 `name-2` 를 죽인다) 순서다. 깨진 `parked.json` 이면 닫기 전에 멈춘다. 보관함은 Cmd 안에서
-  읽고-고치고-쓰기이고 prefs 에 넣지 않는다. 목록은 `NewModel` 에서 읽는다(늦게 읽으면 첫 커서가 Parked 행에 앉는다). (park.md)
+  읽고-고치고-쓰기이고 prefs 에 넣지 않는다. 목록은 `NewModel` 에서 읽는다(늦게 읽으면 첫 커서가 Parked 행에 앉는다).
+  opencode 는 어느 대화를 열었는지 적지 않아 «TUI 가 뜬 뒤 그 폴더에서 갱신된 최상위 대화» 를 하나가 아니라 **전부** 적고
+  (하나를 고르면 닫힌 다른 클라이언트의 대화와 바뀐다), 이미 보관함에 든 대화는 어느 단계에서도 고르지 않는다(남의 항목을
+  지운다). 그 «갱신된 대화» 를 고를 때 같은 폴더에 opencode 가 또 살아 있으면 고르지 않고 닫지도 않는다 — `-s`·`-c` 로 연
+  대화는 그 pane 의 명령줄이 정하므로 따지지 않는다(거부하면 되살린 뒤 아직 안 친 opencode 를 다시 못 보관한다). 되살리기는 적어 둔 실행 파일로 `-s <id>`, 띄우기 전에
+  `session.get` 으로 있는지 묻는다(없는 id 의 `-s` 는 새 대화가 된다, 404 는 종료 코드 1 이라 본문으로 가린다). (park.md)
 - **`-c` 에 넘기는 디렉터리는 `tmuxDirArg` 를 거친다** — tmux 는 `-c` 를 포맷으로 펼쳐서 디렉터리 이름의 `#(…)` 가
   셸 명령으로 돈다(실측). `set-option -t` 는 pane 대상이라 정확히 지목하려면 `=name:`(콜론까지)이다. (park.md, 17절)
 - **`mux serve` 는 127.0.0.1 에만 바인드하고, `Tailscale-User-Login` 이 `--allow` 목록일 때만 응답한다.** Host(`.ts.net`

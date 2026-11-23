@@ -12,6 +12,7 @@ import (
 
 // withPark 는 보관 테스트의 판이다. withClaudeSessions 의 임시 HOME(상태 파일)에, 주어진 pane 목록을
 // 답하는 목 러너와 임시 parked.json 을 얹는다. PID 대기는 0 이라 테스트가 실제 초를 쓰지 않는다.
+// opencode 프로세스 스캔은 비워 둔다 — 개발자 기계에서 실제로 도는 opencode 가 끼어들지 않게.
 func withPark(t *testing.T, files map[string]string, panes string, fn func(m *mockRunner, home string)) {
 	t.Helper()
 	withClaudeSessions(t, files, nil, func() {
@@ -21,14 +22,20 @@ func withPark(t *testing.T, files map[string]string, panes string, fn func(m *mo
 		}
 		m := newMockRunner()
 		m.OnOutput([]byte(panes), nil, "tmux", "list-panes", "-a", "-F", "#{pane_id} #{pane_pid} #{session_name}")
-		oldRunner, oldFile, oldWait := runner, parkedFile, parkExitTimeout
+		oldRunner, oldFile, oldWait, oldScan := runner, parkedFile, parkExitTimeout, scanOpencodeProcs
+		oldUsable, oldLook := opencodeBinUsable, opencodeLookPath
 		SetRunner(m)
 		path := filepath.Join(t.TempDir(), "parked.json")
 		parkedFile = func() (string, error) { return path, nil }
 		parkExitTimeout = 0
+		scanOpencodeProcs = func() []opencodeProc { return nil }
+		// 적어 둔 opencode 경로(테스트의 가짜 경로)는 있는 것으로 본다. PATH 의 진짜 opencode 는 찾지 않는다.
+		opencodeBinUsable = func(string) bool { return true }
+		opencodeLookPath = func(string) (string, error) { return "", errors.New("not on PATH in tests") }
 		resetClaudeRunCache()
 		defer func() {
-			runner, parkedFile, parkExitTimeout = oldRunner, oldFile, oldWait
+			runner, parkedFile, parkExitTimeout, scanOpencodeProcs = oldRunner, oldFile, oldWait, oldScan
+			opencodeBinUsable, opencodeLookPath = oldUsable, oldLook
 			resetClaudeRunCache()
 		}()
 		fn(m, home)
