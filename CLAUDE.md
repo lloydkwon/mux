@@ -20,7 +20,7 @@ make test                        # go test ./...
 make e2e                         # 격리된 진짜 tmux 위의 사용자 가시 동작 (~2분). 패널 폭·창 맞춤·클라이언트 판별·훅을 건드렸으면 커밋 전에 반드시
 make install PREFIX=~/.local     # installs to $PREFIX/bin
 make verify                      # push 전에: HEAD 커밋을 임시 worktree 에서 CI 단계 + gofmt·vet·커밋 메시지로 검증, 통과하면 .git/mux-verify/<sha>.ok (~3분)
-make hooks                       # pre-push 훅을 건다 — 통과 기록 없는 커밋의 push 를 막는다 (끄기: rm .git/hooks/pre-push)
+make hooks                       # pre-push 훅을 건다 — main·태그로 가는 push 중 통과 기록 없는 것을 막는다 (끄기: rm .git/hooks/pre-push)
 
 go test ./ui -run TestFlattenMenu -v    # single test
 go test ./herdr                        # herdr 매핑 — 캡처한 픽스처로 hermetic
@@ -61,7 +61,8 @@ Note the private server has no user config, so `base-index` is tmux's default 0 
 - **push 전에 `make verify`**. HEAD 커밋을 임시 worktree 에 풀어 CI 와 같은 단계(+ gofmt·`go vet`·커밋 메시지 형식)를 첫 실패까지
   돌리고, 통과하면 그 sha 의 기록 `.git/mux-verify/<sha>.ok` 를 남긴다. 커밋 안 된 변경은 들어가지 않는다. 테스트 단계는 돈
   테스트 수를 세고 0개면 실패다(e2e 는 tmux·`script` 가 없으면 아무것도 안 돌리고 exit 0 한다). `make hooks` 로 건 pre-push 훅은
-  push 하는 ref 끝 커밋에 그 기록이 없으면 막는다. 한 번 우회는 `git push --no-verify`. golangci-lint 는 이 기계에 없어
+  원격 main·태그로 가는 push 의 끝 커밋에 그 기록이 없으면 막는다. 다른 브랜치는 보지 않는다 — 훅은 linked worktree 끼리 같이
+  써서, LADO 워커(`~/.ao/data/worktrees/mux/`)의 `ao/…` 브랜치 push 까지 막게 된다. 한 번 우회는 `git push --no-verify`. golangci-lint 는 이 기계에 없어
   «건너뜀» 으로 기록에 남는다.
 
 ## Architecture

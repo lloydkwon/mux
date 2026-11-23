@@ -32,7 +32,7 @@ herdr-check:
 verify:
 	./scripts/verify.sh
 
-# pre-push 훅을 건다 — 통과 기록이 없는 커밋의 push 를 막는다. 끄려면 rm .git/hooks/pre-push.
+# pre-push 훅을 건다 — main·태그로 가는 push 중 통과 기록이 없는 것을 막는다. 끄려면 rm .git/hooks/pre-push.
 # 이미 다른 pre-push 가 있으면 덮어쓰지 않는다.
 hooks:
 	@hook="$$(git rev-parse --git-path hooks)/pre-push"; \

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# push 하려는 ref 마다 그 끝 커밋에 scripts/verify.sh 의 통과 기록이 있는지 본다. 없으면 막는다.
+# 원격의 main 과 태그로 가는 push 마다 그 끝 커밋에 scripts/verify.sh 의 통과 기록이 있는지 본다. 없으면 막는다.
 # `make hooks` 가 .git/hooks/pre-push 로 이 파일을 심링크한다. 끄려면 그 심링크를 지운다.
+#
+# main·태그만 본다. 다른 브랜치는 PR 로 main 에 들어가고 거기서 GitHub CI 가 돈다. 훅은 linked worktree 끼리
+# 같이 쓰므로, 막으면 LADO(Agent Orchestrator) 워커가 ~/.ao/data/worktrees/mux/ 에서 PR 을 열려고 하는
+# `ao/…` 브랜치 push 까지 막는다(2026-11-23 사용자 결정). 태그는 goreleaser 의 릴리스라 본다.
 #
 # 끝 커밋 하나만 본다 — 검증은 그 커밋의 트리 전체를 돌리므로 중간 커밋은 따로 재지 않는다.
 # 판정할 수 없을 때(기록 디렉터리를 못 찾음, ref 를 커밋으로 못 풂)도 막는다. 통과로 두지 않는다.
@@ -15,6 +19,10 @@ blocked=0
 while read -r local_ref local_sha remote_ref _remote_sha; do
 	[ -z "${local_sha:-}" ] && continue
 	[ "$local_sha" = "$zero" ] && continue   # 원격 ref 를 지우는 push — 보낼 커밋이 없다
+	case "$remote_ref" in
+		refs/heads/main | refs/tags/*) ;;
+		*) continue ;;                        # 다른 브랜치는 PR 의 CI 가 본다
+	esac
 	if ! commit=$(git rev-parse --verify --quiet "$local_sha^{commit}"); then
 		echo "mux pre-push: $local_ref 를 커밋으로 풀지 못해 막는다" >&2
 		blocked=1
