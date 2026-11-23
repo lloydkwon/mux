@@ -57,7 +57,16 @@ func run(m *testing.M) int {
 	if err != nil {
 		panic(err)
 	}
-	defer os.RemoveAll(tmp)
+	defer func() {
+		// 못 지우면 알린다 — 조용히 넘어가서 /tmp/mux-e2e-* 가 60개·2.6GB 쌓인 적이 있다(2026-11-17~23).
+		if err := os.RemoveAll(tmp); err != nil {
+			fmt.Printf("e2e: 임시 폴더를 다 지우지 못했다 (%s): %v\n", tmp, err)
+		}
+	}()
+
+	// HOME 을 바꾸기 전에 Go 의 캐시 위치를 고정한다. 바꾼 뒤에 빌드하면 모듈 캐시가 임시 HOME 안에 읽기 전용으로
+	// 생겨 위의 RemoveAll 이 실패했고, 실행마다 모듈을 다시 받고 처음부터 다시 빌드했다.
+	pinGoCaches()
 
 	home = filepath.Join(tmp, "home")
 	os.MkdirAll(filepath.Join(home, ".config", "mux"), 0o755)
@@ -136,6 +145,22 @@ func repoRoot() string {
 	return filepath.Dir(wd)
 }
 
+// pinGoCaches 는 지금(HOME 을 바꾸기 전)의 GOMODCACHE·GOCACHE 를 환경에 못 박는다. 그 뒤의 `go build` 는 HOME 이
+// 임시 폴더여도 진짜 캐시를 쓴다. 캐시는 내용 주소라 시험끼리 섞여도 결과가 바뀌지 않는다 — 격리해야 하는 것은
+// mux 의 설정·캐시(XDG_*)뿐이다. go env 를 못 읽으면 -modcacherw 로 임시 HOME 의 모듈 캐시를 지울 수 있게 한다.
+func pinGoCaches() {
+	out, err := exec.Command("go", "env", "GOMODCACHE", "GOCACHE").Output()
+	if err == nil {
+		if v := strings.Split(strings.TrimSpace(string(out)), "\n"); len(v) == 2 && v[0] != "" && v[1] != "" {
+			os.Setenv("GOMODCACHE", v[0])
+			os.Setenv("GOCACHE", v[1])
+			return
+		}
+	}
+	fmt.Printf("e2e: go env 로 캐시 위치를 못 읽었다(%v) — 임시 HOME 의 모듈 캐시를 지울 수 있게 -modcacherw 로 빌드한다\n", err)
+	os.Setenv("GOFLAGS", strings.TrimSpace(os.Getenv("GOFLAGS")+" -modcacherw"))
+}
+
 // tmuxTimeout 은 서버가 이 시간 안에 답하지 않으면 멈춘 것으로 보는 기준이다. 정상 명령은
 // 수 ms 에 돌아온다. 서버가 CPU 를 다 쓰며 도는 경우 — 3.7c 는 패널처럼 작은 클라이언트의
 // 오른쪽 가장자리에 걸친 pane 의 border-status 폭이 언더플로해 그렇게 된다(tmux #5664) —
@@ -207,6 +232,9 @@ func stopServer() {
 	defer cancel()
 	err := exec.CommandContext(ctx, "tmux", "-S", sock, "kill-server").Run()
 	if err == nil && ctx.Err() == nil {
+		// kill-server 는 서버만 내리고 소켓 파일을 남긴다(scripts/tmux-assumptions.sh 의 cleanup 과 같은 이유). 소켓은
+		// 임시 폴더가 아니라 TMUX_TMPDIR 아래라, 지우지 않으면 정상 실행마다 하나씩 쌓였다(2026-11-23 에 137개).
+		_ = os.Remove(sock)
 		return
 	}
 	if serverPID > 0 && syscall.Kill(serverPID, 0) == nil {
