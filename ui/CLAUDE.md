@@ -9,7 +9,7 @@ tmux·파일·프로세스를 만지는 일은 `tea.Cmd` 로, 기능 스위치�
 | `tree.go`, `filter.go`, `preview.go`, `target.go`, `help.go`, `preferences.go`, `create.go`, `rename.go`, `confirm.go`, `order.go` | tui.md |
 | `list.go` | rendering.md, ai-state.md, note.md, tui.md |
 | `layout.go`, `styles.go` | rendering.md |
-| `status.go` | ai-state.md |
+| `status.go` | ai-state.md, panel.md (패널 넓은 글의 색 — `aiTextColor`·`aiLogColor`) |
 | `note.go` | note.md |
 | `source.go`, `source_herdr.go` | herdr.md |
 | `source_claude.go` | claude-mode.md |

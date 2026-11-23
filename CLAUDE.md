@@ -125,6 +125,9 @@ Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale a
   `TestGlyphWidthsAreStable`. 색은 ANSI 인덱스만(hex·`AdaptiveColor` 금지), 선택 행은 reverse
   video 에 세그먼트 색을 버린다(`TestSelectedRowDropsSegmentColors`). (rendering.md)
 - **상태 글리프는 도구 아이콘을 대체한다, 옆에 붙지 않는다** — 판단은 `aiGlyph` 한 곳. (ai-state.md)
+- **패널의 넓은 글에 `aiStateColor` 를 쓰지 않는다** — 가장 흔한 완료가 초록 덩어리가 된다. 세션 아래 줄은
+  `aiTextColor`(승인 빨강·작업 중과 셸 청록·완료 흐리게), 최근 이벤트는 `aiLogColor`(승인만 빨강). 사용자 요청 «눈의 피로는
+  덜하게», «작업 중·셸은 약간 눈에 띄게»(2026-11-09). (panel.md, `TestWorkLineIsToldApartByBrightness`)
 - **패널의 세션 블록 사이에는 빈 줄도 선도 없다** — 세션이 늘어 사용자가 정했다(2026-11-09). 밑줄·이미지는 행을
   밀지 못해 간격을 만들지 못하고, 바탕색 선은 긋지 않은 것과 같다. 다음 후보는 «여유 있을 때만 빈 줄».
   (panel.md, `TestSessionBlocksSitFlush`)

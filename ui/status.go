@@ -76,6 +76,34 @@ func aiStateColor(st tmux.AIState) lipgloss.TerminalColor {
 	}
 }
 
+// aiTextColor 는 상태를 따르는 «넓은 글» — 패널의 세션 아래 줄 — 의 색이다. nil 은 터미널의 글자색이다.
+//
+// aiStateColor 를 그대로 쓰지 않는다(2026-11-09, 사용자 요청 «구분은 편하게, 눈의 피로는 덜하게»). 가장
+// 흔한 상태인 완료가 가장 넓게 초록으로 칠해져 패널이 초록 글자 덩어리였다. 그래서 완료는 흐리게 물러나고,
+// 색은 드문 상태에만 남는다 — 막힌 것은 빨강, 일하는 것(작업 중·셸)은 나이와 같은 청록. 일하는 줄은 한때
+// 터미널 글자색이었는데 이름과 섞여 «약간 눈에 띄게» 해 달라고 해서 청록이 됐다(같은 날).
+func aiTextColor(st tmux.AIState) lipgloss.TerminalColor {
+	switch st {
+	case tmux.AIStateApproval:
+		return colorStateApproval
+	case tmux.AIStateWorking, tmux.AIStateShell:
+		return colorStateWorking
+	case tmux.AIStateReady:
+		return colorMuted
+	default:
+		return nil
+	}
+}
+
+// aiLogColor 는 최근 이벤트 글의 색이다. 지나간 일이라 모두 흐리고, 사람을 기다린 일만 빨강으로 남긴다 —
+// 상태는 글 머리의 글리프(⏳❗✅)가 이미 말한다.
+func aiLogColor(st tmux.AIState) lipgloss.TerminalColor {
+	if st == tmux.AIStateApproval {
+		return colorStateApproval
+	}
+	return colorMuted
+}
+
 // aiBadgeColor colors the badge by state when there is one, falling back to the
 // tool's own colour so ✦/◈/⬡/✧ stay told apart.
 func aiBadgeColor(s tmux.Session) lipgloss.TerminalColor {

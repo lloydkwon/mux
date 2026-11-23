@@ -486,7 +486,8 @@ func fitRight(left, right rowSeg, width int) []rowSeg {
 // (sessionBlocks). The blanks around headings carry nothing.
 //
 // Glyphs and colors come from aiGlyph/aiStateColor, the same deciders the list
-// uses — a second mapping here would drift from the rows it sits next to.
+// uses — a second mapping here would drift from the rows it sits next to. 넓은 글(세션
+// 아래 줄, 최근 이벤트)만 aiTextColor/aiLogColor 를 쓴다 — 색은 표식에, 글은 밝기로(status.go).
 func notifySessionLines(sessions []tmux.Session, events []aiEvent, width, perSession int, selected, own string) []notifyLine {
 	if width <= 0 {
 		return nil
@@ -583,7 +584,7 @@ func sessionEventLine(e aiEvent, width int) string {
 	}
 	return renderRow([]rowSeg{
 		{text: head, color: colorMuted},
-		{text: fitCells(e.text, avail), color: aiStateColor(e.state)},
+		{text: fitCells(e.text, avail), color: aiTextColor(e.state)},
 	}, width, false)
 }
 
@@ -610,7 +611,7 @@ func sessionWorkLine(s tmux.Session, width int) string {
 	}
 	return renderRow([]rowSeg{
 		{text: indent},
-		{text: fitCells(s.AIWork, avail), color: aiStateColor(s.AIState)},
+		{text: fitCells(s.AIWork, avail), color: aiTextColor(s.AIState)},
 	}, width, false)
 }
 
@@ -676,7 +677,7 @@ func notifyEventLine(e aiEvent, width int) string {
 	segs := []rowSeg{
 		{text: head},
 		{text: name},
-		{text: " " + fitCells(e.text, textWidth), color: aiStateColor(e.state)},
+		{text: " " + fitCells(e.text, textWidth), color: aiLogColor(e.state)},
 	}
 	return renderRow(segs, width, false)
 }

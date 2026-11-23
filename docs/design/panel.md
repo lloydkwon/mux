@@ -353,6 +353,31 @@ The per-session line is **all-or-nothing**: bought only when every session can h
 
 사용자가 «써 보다가 갈 수도 있다» 고 둔 후보는 «여유 있을 때만 빈 줄» 이다 — 높이가 넉넉하면 빈 줄, 세션이 많아 최근 이벤트가 모자라면 붙인다. 넣는다면 `perSession` 처럼 `notifyLines` 가 블록을 한 번 더 그려 높이를 재고 정하는 자리다.
 
+**넓은 글은 밝기로 상태를 가르고, 색은 짧은 표식에만 둔다 — 2026-11-09, 사용자 요청 «구분은 편하게, 눈의 피로는 덜하게».**
+그 전에는 배지·나이·세션 아래 줄·최근 이벤트 글이 모두 `aiStateColor`(청록·빨강·초록)였다. 실제 패널에서 AI 세션 8개 중
+6개가 완료였고, 그래서 작업 줄 6줄과 이벤트 25줄이 초록·청록 글자 덩어리였다 — 가장 흔한 상태가 가장 넓게 칠해져, 색이
+아무것도 가르지 못하면서 눈만 피로하게 했다. 지금은 이렇다(`ui/status.go`):
+
+| 자리 | 색 | 결정하는 곳 |
+|---|---|---|
+| 세션 행의 배지·나이 | 상태색 그대로 (작업 중 청록, 승인 빨강, 완료 초록) | `aiStateColor`, `aiBadgeColor` |
+| 세션 아래 줄 (작업 줄, 그 자리의 이벤트 줄) | 승인 빨강, 작업 중·셸 청록(나이와 같은 `colorStateWorking`), 완료 흐리게(`colorMuted`) | `aiTextColor` |
+| 최근 이벤트 글 | 모두 흐리게, 승인만 빨강 — 상태는 글 머리의 글리프가 말한다 | `aiLogColor` |
+
+이유: 넓은 면적의 채도 있는 글이 피로의 원인인데, 그 면적을 만든 것은 가장 흔한 상태다. 그래서 흔한 것(완료)은 회색으로
+물러나고 드문 것만 색을 지닌다 — 막힌 것(빨강)이 가장 먼저, 일하는 것(청록)이 그다음. 방금 끝난 세션은 정렬이 맨 위로
+올리고 초록 나이가 말하므로, 완료를 흐리게 해도 놓치지 않는다. 확인은 사용자 kitty 설정(Dark+ Tomorrow) 그대로 Xvfb 에서
+전·후를 찍어서 했다.
+
+일하는 줄은 처음에 터미널 글자색이었다(셋을 밝기만으로 가르던 판). 써 보니 세션 이름과 같은 색이라 묻혀서, 같은 날
+사용자가 «작업 중·셸일 때 약간 눈에 띄게» 를 요청했다. 굵게는 줄마다 무거워지고, 밝은 흰색(ANSI 15, `#E0E0E0`)은
+기본(`#CCCCCC`)과 대비가 1.2:1 이라 거의 구별되지 않아, 나이와 같은 청록을 골랐다. 셸(`💻`)의 나이는 상태색이 없지만(`aiStateColor` 가
+nil — TUI 목록과 함께 쓰는 값이라 그대로 둔다) 줄은 작업 중과 같이 칠한다. 둘 다 «아직 무언가 돌고 있다» 이다.
+
+알려진 한계: 흰 바탕(GitHub Light)의 `colorMuted`(#959DA5)는 바탕 대비 약 2.8:1 로 연하다. 그 전의 초록(#28A745)도 약
+3:1 이라 나빠진 것은 아니지만, 흰 바탕으로 돌아가 «완료 줄이 안 읽힌다» 면 고칠 곳은 이 두 함수다. 넓은 글에 `aiStateColor` 를
+다시 쓰지 않는다(`TestWorkLineIsToldApartByBrightness`, `TestEventLogRecedes`).
+
 The log takes what the sessions left and is **the thing that yields**: it is last, so `fixedBox` clipping it costs least, and below two rows it draws nothing rather than a heading over an empty section.
 
 **A logged transition names the work, and falls back to timing it.** The glyph already carries the state, so `transitionText` (`ui/notify.go`) spends the words on what it cannot: Claude's own name for the turn (`⏳ panel-session-last-notification`). That name comes from the state file's `name`, but only when `nameSource` says the tool chose it — `auto` or `derived`, or missing, which 12 of 67 files here are. A name the *user* set is dropped by `claudeTaskName` (`tmux/claude_status.go`), because it does not move: two hand-renamed sessions carried the same label for a day while Claude renamed one of its own three times in an afternoon, and a label repeated on every transition is exactly what this field exists to stop.
