@@ -58,6 +58,10 @@ Note the private server has no user config, so `base-index` is tmux's default 0 
   세션·pane 을 죽이는 길(보관·유령 패널·resurrect·revive), 남의 pane 에 글을 치는 길(`PromptAgent`·`AnswerDialog`), tmux 설정
   쓰기, `listFormat`. `ocx-gpt-6-*` 에이전트에 «`.claude/agents/mux-reviewer.md` 를 읽고 그 검토자로서 검토하라, 파일은 고치지
   마라» 고 목적·범위와 함께 준다. 반영 기준은 같다.
+- **위 둘을 한 번에 돌리려면 `mux-review` 워크플로**(`.claude/workflows/mux-review.js`) — «mux-review 워크플로 돌려줘» 로
+  부르고 args 에 `purpose`(목적·수용 기준)·`scope`(범위)·`docs`(꼭 읽을 문서 — 디렉터리 `CLAUDE.md` 표에서 고른다)를 준다.
+  두 검토자가 동시에 보고, 빈틈 지적마다 코드 관점·규칙 관점의 반박자가 확인해 둘 다 «진짜» 인 것만 남긴다. 결과가
+  `incomplete`(검토자가 빠졌거나 꼭 읽을 문서를 안 읽음)면 «빈틈 없음» 으로 읽지 않는다. 반영은 부른 세션이 한다.
 - **push 전에 `make verify`**. HEAD 커밋을 임시 worktree 에 풀어 CI 와 같은 단계(+ gofmt·`go vet`·커밋 메시지 형식)를 첫 실패까지
   돌리고, 통과하면 그 sha 의 기록 `.git/mux-verify/<sha>.ok` 를 남긴다. 커밋 안 된 변경은 들어가지 않는다. 테스트 단계는 돈
   테스트 수를 세고 0개면 실패다(e2e 는 tmux·`script` 가 없으면 아무것도 안 돌리고 exit 0 한다). `make hooks` 로 건 pre-push 훅은
