@@ -19,6 +19,8 @@ make build                       # → ./mux, injects version via -ldflags
 make test                        # go test ./...
 make e2e                         # 격리된 진짜 tmux 위의 사용자 가시 동작 (~2분). 패널 폭·창 맞춤·클라이언트 판별·훅을 건드렸으면 커밋 전에 반드시
 make install PREFIX=~/.local     # installs to $PREFIX/bin
+make verify                      # push 전에: HEAD 커밋을 임시 worktree 에서 CI 단계 + gofmt·vet·커밋 메시지로 검증, 통과하면 .git/mux-verify/<sha>.ok (~3분)
+make hooks                       # pre-push 훅을 건다 — 통과 기록 없는 커밋의 push 를 막는다 (끄기: rm .git/hooks/pre-push)
 
 go test ./ui -run TestFlattenMenu -v    # single test
 go test ./herdr                        # herdr 매핑 — 캡처한 픽스처로 hermetic

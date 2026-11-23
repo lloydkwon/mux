@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# push 하려는 ref 마다 그 끝 커밋에 scripts/verify.sh 의 통과 기록이 있는지 본다. 없으면 막는다.
+# `make hooks` 가 .git/hooks/pre-push 로 이 파일을 심링크한다. 끄려면 그 심링크를 지운다.
+#
+# 끝 커밋 하나만 본다 — 검증은 그 커밋의 트리 전체를 돌리므로 중간 커밋은 따로 재지 않는다.
+# 판정할 수 없을 때(기록 디렉터리를 못 찾음, ref 를 커밋으로 못 풂)도 막는다. 통과로 두지 않는다.
+# 한 번만 우회: git push --no-verify
+set -uo pipefail
+
+common=$(git rev-parse --git-common-dir 2>/dev/null) || { echo "mux pre-push: git 디렉터리를 못 찾아 막는다" >&2; exit 1; }
+stamps="$common/mux-verify"
+zero=0000000000000000000000000000000000000000
+blocked=0
+
+while read -r local_ref local_sha remote_ref _remote_sha; do
+	[ -z "${local_sha:-}" ] && continue
+	[ "$local_sha" = "$zero" ] && continue   # 원격 ref 를 지우는 push — 보낼 커밋이 없다
+	if ! commit=$(git rev-parse --verify --quiet "$local_sha^{commit}"); then
+		echo "mux pre-push: $local_ref 를 커밋으로 풀지 못해 막는다" >&2
+		blocked=1
+		continue
+	fi
+	if [ -f "$stamps/$commit.ok" ]; then
+		echo "mux pre-push: ${commit:0:12} → $remote_ref — $(head -n 1 "$stamps/$commit.ok")" >&2
+	else
+		echo "mux pre-push: ${commit:0:12} ($local_ref → $remote_ref) 에 검증 통과 기록이 없다" >&2
+		blocked=1
+	fi
+done
+
+if [ "$blocked" -ne 0 ]; then
+	echo "  그 커밋에서 make verify 를 돌려 통과시킨 뒤 다시 push 한다 (커밋을 고르려면 scripts/verify.sh <커밋>)." >&2
+	echo "  한 번만 우회하려면 git push --no-verify." >&2
+	exit 1
+fi
+exit 0
