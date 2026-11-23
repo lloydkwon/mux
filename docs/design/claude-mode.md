@@ -84,6 +84,52 @@ mock runner 가 없어 Update 에서 tmux 를 만지면 `go test ./ui` 가 개�
 하나씩 생기는 것은 mux 의 평소 동작이므로 결함은 아니지만, **7개를 입양하면 `mux watch`
 프로세스도 7개 늘어난다**는 것은 알고 있어야 한다.
 
+### AO 가 관리하는 대화는 입양도 Enter resume 도 하지 않는다
+
+**위 절의 전제가 깨지는 곳이다.** 같은 id 로 `--resume` 해도 괜찮은 근거는 «버려진 쪽이
+아무것도 쓰지 않는다» 하나뿐인데, Agent Orchestrator(AO, LADO 포크 포함)가 띄운 워커·
+오케스트레이터 대화는 턴 사이에 `idle` 로 보여도 AO 가 원래 프로세스에 다음 메시지를
+계속 보낸다. 입양하거나 Enter 로 resume 하면 같은 대화 id 를 두 프로세스가 잡는다.
+이슈 #1 에서 본 것(2026-11-23): 워커는 cwd `~/.ao/data/worktrees/<프로젝트>/<브랜치>`,
+오케스트레이터는 `~/.ao/data/worktrees/<프로젝트>/orchestrator/<이름>` 이었고 둘 다 tmux
+밖·`idle` 이라 `AdoptableRuns` 의 조건에 맞았다.
+
+**판정은 cwd 다** — AO 데이터 폴더 아래인가(`ClaudeRun.AOManaged`). 상태 파일의
+`entrypoint` 로는 못 가른다: 워커가 `cli` 였다(오케스트레이터는 `sdk-ts`). `/proc/<pid>/environ`
+의 AO 변수나 부모 프로세스 이름으로 가르는 안은 버렸다 — Linux 전용이고, 대화마다 파일을
+하나 더 읽으며, 권한에 따라 못 읽는다.
+
+**뿌리는 합집합이다.** 기본값 `~/.ao/data`(`homeDir()` 로 구해 테스트의 임시 home 을
+따른다)와 절대 경로일 때의 `AO_DATA_DIR`. `AO_DATA_DIR` 가 기본값을 대체하지 않는 것은
+놓치는 쪽이 비싸서다 — 같은 id 를 두 프로세스가 잡는다. 잘못 막는 쪽의 값은 `~/.ao/data`
+아래에서 사람이 직접 연 대화를 mux 가 열어 주지 않는 정도이고, 그 대화는 손으로
+`claude --resume` 하면 된다. mux 와 AO 가 같은 환경을 본다는 보장도 없다. 뿌리마다
+`filepath.EvalSymlinks` 로 푼 경로도 넣는다 — Claude 가 적는 cwd 는 물리 경로라 home 이나
+데이터 폴더가 심링크인 기계에서는 논리 경로만으로 놓친다. cwd 쪽은 풀지 않는다(폴더가
+이미 없을 수 있고 대화마다 stat 이 든다). 비교는 경계가 있다(`cwd == root` 이거나
+`root + 구분자` 로 시작) — `~/.ao/data-backup` 은 걸리지 않는다. 빈 값·상대 경로·`/` 인
+`AO_DATA_DIR` 는 버린다(`/` 를 받으면 모든 대화가 막힌다).
+
+**판정은 `tmux` 스캔에, 표시는 `ui` 에.** `scanClaudeRuns` 가 스캔당 한 번 뿌리를 구하고
+(1초 TTL 뒤라 대화마다 더 읽는 파일이 없다) 대화마다 `AOManaged` 를 싣는다. 환경과 파일을
+읽는 일은 층 규칙상 `tmux` 의 몫이고, `ui` 에는 목 러너가 없어 `ui` 가 환경을 읽기 시작하면
+`go test ./ui` 의 답이 기계마다 달라진다. 그래서 `ui` 는 필드만 읽고, 제로값 false 가
+예전 동작이다. 필드를 읽는 곳은 `AdoptableRuns`·`claudeSource.Activate`·`elsewhereNotice`
+셋뿐이다 — 보관함·폰 화면·`mux agent` 는 이 판정과 무관하다.
+
+**목록에서 숨기지 않는다.** 돌고 있는 대화를 보여 주는 유일한 목록이다. 대신 미리보기가
+«AO 가 관리하는 대화라서 여기서 열지 않는다» 고 말하고, `claude --resume …` 명령은 싣지 않는다
+— 그 칸은 Enter 가 하는 일을 적는 자리라 명령을 보이면 손으로 치라는 권유가 된다. Enter 는
+상태 줄(`notice`)에 이유를 남기고 mux 를 닫지 않는다. 작업 중인 AO 대화도 포크하지 않는다 —
+포크는 id 가 달라 원래 프로세스와 충돌하지 않지만 AO 가 쓰는 worktree 에서 둘째 Claude 가 돈다.
+`cmd/mux` 는 건너뛴 수를 찍지 않는다(«만들 게 없으면 한 마디도 하지 않는다»). 이미 잘못
+입양되어 tmux 에 떠 있는 AO 대화는 그대로 그 세션으로 간다 — 닫는 일은 사용자 몫이다.
+
+지키는 테스트: `TestAdoptableRunsSkipsAOManagedConversations`(하위 일곱 개 — 기본 폴더,
+`AO_DATA_DIR`, 둘의 합집합, 형제 접두어, 평범한 폴더, 심링크 뿌리, 상대 경로·`/` 무시),
+`TestAdoptClaudeSessionsLeavesAOManagedAlone`, `TestClaudeEnterRefusesAnAOManagedConversation`,
+`TestClaudePreviewSaysAOManagedAndOffersNoResume`, `TestClaudeEnterStillGoesToAnAOManagedConversationInTmux`.
+
 ### enter 의 뜻이 소스마다 다르다 — `sourceActivator`
 
 `sessionSource` 에 얹지 않고 선택 구현 인터페이스로 뺐다. 세 소스의 답이 서로 무관하기
@@ -98,6 +144,9 @@ mock runner 가 없어 Update 에서 tmux 를 만지면 `go test ./ui` 가 개�
   예외는 `ClaudeBusyElsewhere` — 다른 데서 «지금 작업 중»인 대화뿐이고, 거기서만
   포크한다. 살아 있다는 것만으로는 부족하다: 위험한 것은 살아 있는 사본이 아니라
   «쓰고 있는» 사본이다.
+- 단, AO 가 관리하는 대화(`AOManaged`)는 → **열지 않는다.** resume 도 포크도 하지 않고,
+  `Activate` 가 돌려준 거절 사유를 `activateCurrent` 가 상태 줄에 싣는다(위 절 참조).
+  포크 판단보다 앞이고, tmux attach 보다 뒤다.
 
 세션을 만드는 것과 붙는 것은 둘 다 **Bubble Tea 루프 밖**에서 일어난다. `Update` 는
 `resumeTarget` 을 세우고 `tea.Quit` 할 뿐이고, `cmd/mux` 가 그것을 본다 — `attachTarget`

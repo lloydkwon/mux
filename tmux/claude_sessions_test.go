@@ -2,6 +2,8 @@ package tmux
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -362,6 +364,171 @@ func TestAdoptClaudeSessionsDoesNothingWhenEverythingHasAHome(t *testing.T) {
 	withClaudePanes(t, files, "%0 3 sess\n", func() {
 		if adopted := AdoptClaudeSessions(nil); adopted != nil {
 			t.Errorf("adopted = %v, want nothing on a settled machine", adopted)
+		}
+	})
+}
+
+// adoptsConversationAt 는 cwdFor 가 정한 폴더의 idle 대화 하나를 상태 파일로 두고,
+// 스캔(ClaudeSessions)을 거쳐 AdoptableRuns 가 그 대화를 고르는지 답한다.
+//
+// 상태 파일은 fn 안에서 쓴다. 기본 AO 폴더는 임시 home 아래에 있어야 하는데,
+// withClaudeSessions 가 home 을 안에서 만들기 때문이다. AO_DATA_DIR 은 부르는 쪽이
+// t.Setenv 로 정한다 — AO 세션 안에서 돌면 환경에 이미 서 있을 수 있다.
+func adoptsConversationAt(t *testing.T, cwdFor func(home string) string) bool {
+	t.Helper()
+	var adopted bool
+	withClaudeSessions(t, nil, nil, func() {
+		home, err := homeDir()
+		if err != nil {
+			t.Fatalf("homeDir: %v", err)
+		}
+		cwd := cwdFor(home)
+		file := filepath.Join(home, claudeDir, sessionsDir, "ao.json")
+		content := runFile(1, "sid-ao", cwd, "idle", "conv", "", 1000, 2000)
+		if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+			t.Fatalf("write state file: %v", err)
+		}
+		resetClaudeRunCache()
+
+		runs := ClaudeSessions()
+		// AO 가 관리하는 대화도 목록에서는 숨기지 않는다 — 입양만 하지 않는다.
+		if len(runs) != 1 {
+			t.Fatalf("runs = %d, want the conversation at %s listed", len(runs), cwd)
+		}
+		adopted = len(AdoptableRuns(runs)) == 1
+	})
+	return adopted
+}
+
+// Agent Orchestrator(AO)가 띄운 대화는 턴 사이에 idle 로 보이지만 AO 가 원래
+// 프로세스에 다음 메시지를 계속 보낸다. 입양하면 같은 대화 id 를 두 프로세스가
+// 잡는다(이슈 #1). 판정은 cwd 가 AO 데이터 폴더 아래인지다.
+func TestAdoptableRunsSkipsAOManagedConversations(t *testing.T) {
+	t.Run("default AO data dir is skipped", func(t *testing.T) {
+		t.Setenv("AO_DATA_DIR", "")
+		if adoptsConversationAt(t, func(home string) string {
+			return filepath.Join(home, ".ao", "data", "worktrees", "mux", "feat-x")
+		}) {
+			t.Error("a conversation under ~/.ao/data was adopted")
+		}
+	})
+
+	t.Run("AO_DATA_DIR is skipped", func(t *testing.T) {
+		custom := filepath.Join(t.TempDir(), "custom-ao") // 없어도 된다
+		t.Setenv("AO_DATA_DIR", custom)
+		if adoptsConversationAt(t, func(string) string {
+			return filepath.Join(custom, "worktrees", "mux", "feat-x")
+		}) {
+			t.Error("a conversation under AO_DATA_DIR was adopted")
+		}
+	})
+
+	t.Run("default stays skipped when AO_DATA_DIR is set", func(t *testing.T) {
+		t.Setenv("AO_DATA_DIR", filepath.Join(t.TempDir(), "custom-ao"))
+		if adoptsConversationAt(t, func(home string) string {
+			return filepath.Join(home, ".ao", "data", "worktrees", "mux", "orchestrator", "o1")
+		}) {
+			t.Error("AO_DATA_DIR replaced the default root instead of adding to it")
+		}
+	})
+
+	t.Run("sibling prefix is adopted", func(t *testing.T) {
+		t.Setenv("AO_DATA_DIR", "")
+		if !adoptsConversationAt(t, func(home string) string {
+			return filepath.Join(home, ".ao", "data-backup", "x")
+		}) {
+			t.Error("~/.ao/data-backup was taken for ~/.ao/data — the prefix needs a boundary")
+		}
+	})
+
+	t.Run("plain directory is adopted", func(t *testing.T) {
+		t.Setenv("AO_DATA_DIR", "")
+		if !adoptsConversationAt(t, func(string) string { return "/w/plain" }) {
+			t.Error("an ordinary conversation was not adopted")
+		}
+	})
+
+	t.Run("real path under a symlinked root is skipped", func(t *testing.T) {
+		base := t.TempDir()
+		real := filepath.Join(base, "real-ao")
+		if err := os.MkdirAll(filepath.Join(real, "worktrees", "mux", "feat-x"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(base, "link-ao")
+		if err := os.Symlink(real, link); err != nil {
+			t.Fatal(err)
+		}
+		// Claude 는 물리 경로를 적는다. t.TempDir() 자체가 심링크 아래일 수 있으니
+		// 실제 경로는 풀어서 구한다.
+		physical, err := filepath.EvalSymlinks(real)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("AO_DATA_DIR", link)
+		if adoptsConversationAt(t, func(string) string {
+			return filepath.Join(physical, "worktrees", "mux", "feat-x")
+		}) {
+			t.Error("the physical path under a symlinked AO_DATA_DIR was adopted")
+		}
+	})
+
+	t.Run("relative or root AO_DATA_DIR is ignored", func(t *testing.T) {
+		wd, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cases := []struct{ env, cwd string }{
+			// 상대 경로를 이 프로세스의 폴더 기준으로 풀면 이 cwd 가 걸린다.
+			{env: "rel-ao", cwd: filepath.Join(wd, "rel-ao", "x")},
+			// "/" 를 받아들이면 모든 대화가 막힌다.
+			{env: "/", cwd: "/w/plain"},
+		}
+		for _, c := range cases {
+			t.Setenv("AO_DATA_DIR", c.env)
+			if !adoptsConversationAt(t, func(string) string { return c.cwd }) {
+				t.Errorf("AO_DATA_DIR=%q blocked %s; it should be ignored", c.env, c.cwd)
+			}
+		}
+	})
+}
+
+// 시작할 때의 입양 전체로 본다: AO 대화와 평범한 대화가 함께 있으면 평범한 것만
+// 세션이 생긴다.
+func TestAdoptClaudeSessionsLeavesAOManagedAlone(t *testing.T) {
+	withoutSecondWait(t)
+	t.Setenv("AO_DATA_DIR", "")
+	files := map[string]string{
+		"plain.json": runFile(2, "sid-plain", "/w/plain", "idle", "plain", "", 1000, 2000),
+	}
+	withClaudeSessions(t, files, nil, func() {
+		m, ok := runner.(*mockRunner)
+		if !ok {
+			t.Fatalf("runner = %T, want the helper's mock", runner)
+		}
+		home, err := homeDir()
+		if err != nil {
+			t.Fatalf("homeDir: %v", err)
+		}
+		aoCWD := filepath.Join(home, ".ao", "data", "worktrees", "mux", "feat-x")
+		content := runFile(1, "sid-ao", aoCWD, "idle", "ao-worker", "", 1000, 3000)
+		if err := os.WriteFile(filepath.Join(home, claudeDir, sessionsDir, "ao.json"), []byte(content), 0o600); err != nil {
+			t.Fatalf("write state file: %v", err)
+		}
+		resetClaudeRunCache()
+
+		AdoptClaudeSessions(nil)
+
+		var created []string
+		for _, r := range m.runs {
+			if strings.Contains(r, "new-session") {
+				created = append(created, r)
+			}
+		}
+		if len(created) != 1 {
+			t.Fatalf("new-session calls = %v, want exactly the ordinary conversation", created)
+		}
+		if !strings.Contains(created[0], "--resume sid-plain") {
+			t.Errorf("created %q, want the ordinary conversation resumed", created[0])
 		}
 	})
 }

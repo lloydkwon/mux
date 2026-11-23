@@ -80,17 +80,14 @@ func (c *claudeSource) Capture(key previewKey) (string, error) {
 // lets the two copies collapse back into one row afterwards, while one that is
 // actively working is forked so the two never interleave.
 func elsewhereNotice(r tmux.ClaudeRun) string {
+	if r.AOManaged {
+		return aoManagedNotice(r)
+	}
 	fork := tmux.ClaudeBusyElsewhere(r)
 
 	var b strings.Builder
 	b.WriteString("This conversation is not running in tmux.\n\n")
-	if r.CWD != "" {
-		b.WriteString("  directory  " + r.CWD + "\n")
-	}
-	b.WriteString("  session    " + r.SessionID + "\n")
-	if r.Session.AIPID > 0 {
-		b.WriteString("  process    pid " + strconv.Itoa(r.Session.AIPID) + ", still running\n")
-	}
+	writeRunFacts(&b, r)
 	b.WriteString("\nEnter starts it here with:\n\n")
 	b.WriteString("  claude " + strings.Join(tmux.ClaudeResumeArgs(r.SessionID, fork), " ") + "\n")
 	if fork {
@@ -102,6 +99,34 @@ func elsewhereNotice(r tmux.ClaudeRun) string {
 		b.WriteString("\nSame id, not a fork — so once this is running the two copies show\n")
 		b.WriteString("as one row again, and mux stops offering to bring it over.\n")
 	}
+	return b.String()
+}
+
+// writeRunFacts 는 미리보기의 폴더·세션 id·프로세스 줄을 쓴다.
+func writeRunFacts(b *strings.Builder, r tmux.ClaudeRun) {
+	if r.CWD != "" {
+		b.WriteString("  directory  " + r.CWD + "\n")
+	}
+	b.WriteString("  session    " + r.SessionID + "\n")
+	if r.Session.AIPID > 0 {
+		b.WriteString("  process    pid " + strconv.Itoa(r.Session.AIPID) + ", still running\n")
+	}
+}
+
+// aoManagedRefusal 은 AO 가 관리하는 대화에서 Enter 를 눌렀을 때 상태 줄에 뜬다.
+const aoManagedRefusal = "managed by Agent Orchestrator — not opened here, AO still drives it"
+
+// aoManagedNotice 는 Agent Orchestrator(AO)가 관리하는 tmux 밖 대화의 미리보기다.
+//
+// claude --resume 명령을 싣지 않는다. 이 칸은 Enter 가 하는 일을 적는 자리이고,
+// 여기서 Enter 는 아무것도 시작하지 않는다 — 명령을 보이면 손으로 치라는 권유가 된다.
+func aoManagedNotice(r tmux.ClaudeRun) string {
+	var b strings.Builder
+	b.WriteString("This conversation is managed by Agent Orchestrator (AO).\n\n")
+	writeRunFacts(&b, r)
+	b.WriteString("\nEnter does not open it here. AO keeps sending its next message\n")
+	b.WriteString("to the process already holding it, so a copy started here would\n")
+	b.WriteString("hold the same conversation id as the one AO is driving.\n")
 	return b.String()
 }
 
@@ -118,10 +143,14 @@ func elsewhereNotice(r tmux.ClaudeRun) string {
 //
 // The exception is a conversation something else is *actively working in*.
 // There the two would genuinely interleave, so that one forks instead.
-func (c *claudeSource) Activate(session string) (previewKey, *resumeRequest, bool) {
+//
+// AO 가 관리하는 대화는 tmux 밖이면 거절한다 — resume 도 포크도 하지 않는다. 그래서
+// 이 검사는 포크 판단보다 앞에 있다. tmux 안에 있으면 위의 첫 분기로 그 세션에 간다:
+// 이미 열린 것을 보러 가는 일은 아무것도 시작하지 않는다.
+func (c *claudeSource) Activate(session string) (previewKey, *resumeRequest, string, bool) {
 	r, ok := c.find(session)
 	if !ok {
-		return previewKey{}, nil, false
+		return previewKey{}, nil, "", false
 	}
 	if r.TmuxSession != "" {
 		// The session, not the pane. AttachToSession addresses windows and
@@ -129,11 +158,14 @@ func (c *claudeSource) Activate(session string) (previewKey, *resumeRequest, boo
 		// pane holding the conversation is the active one in all but the
 		// contrived case — landing in the session is the answer that needs no
 		// translation.
-		return previewKey{session: r.TmuxSession, window: -1, pane: -1}, nil, true
+		return previewKey{session: r.TmuxSession, window: -1, pane: -1}, nil, "", true
+	}
+	if r.AOManaged {
+		return previewKey{}, nil, aoManagedRefusal, false
 	}
 	name := tmux.SafeSessionName(r.Session.Name)
 	if name == "" || r.CWD == "" || r.SessionID == "" {
-		return previewKey{}, nil, false
+		return previewKey{}, nil, "", false
 	}
 	fork := tmux.ClaudeBusyElsewhere(r)
 	return previewKey{}, &resumeRequest{
@@ -141,7 +173,7 @@ func (c *claudeSource) Activate(session string) (previewKey, *resumeRequest, boo
 		Dir:    r.CWD,
 		Args:   append([]string{"claude"}, tmux.ClaudeResumeArgs(r.SessionID, fork)...),
 		Forked: fork,
-	}, true
+	}, "", true
 }
 
 func (*claudeSource) Title(rows int) string {

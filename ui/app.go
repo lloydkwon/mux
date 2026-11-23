@@ -643,8 +643,13 @@ func (m Model) activateCurrent() (tea.Model, tea.Cmd) {
 		if it.session == nil {
 			return m, nil
 		}
-		attach, resume, ok := a.Activate(it.session.Name)
+		attach, resume, refusal, ok := a.Activate(it.session.Name)
 		if !ok {
+			// 이유가 있는 거절은 상태 줄에 남긴다. 아무 말 없이 돌아오면 Enter 가
+			// 고장 난 것으로 읽힌다. mux 는 닫지 않는다.
+			if refusal != "" {
+				m.notice = refusal
+			}
 			return m, nil
 		}
 		m.attachTarget, m.resumeTarget = attach, resume

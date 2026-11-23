@@ -56,7 +56,10 @@ Running Claude in one session, Codex in another, and a dev server in a third? Sw
   `claude --resume`. And it does that for **every** conversation with no tmux
   session the moment it starts, so the list — and the ordinary `mux` list too —
   is complete without pressing anything. It is how work started somewhere else
-  gets picked up in mux.
+  gets picked up in mux. The exception is a conversation whose directory is
+  under the Agent Orchestrator (AO) data folder (`~/.ao/data` and
+  `AO_DATA_DIR`): AO keeps driving it, so it is neither adopted nor resumed by
+  enter, and the preview and the status line say why.
 - **`mux --herdr` lists [herdr](https://herdr.dev) workspaces instead** — if
   your sessions have moved to herdr, the same screen still works: workspaces
   become rows, the agents inside them become the rows underneath, and the

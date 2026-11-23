@@ -73,7 +73,10 @@ type resumeRequest struct {
 type sourceActivator interface {
 	// Activate reports what to do with the named row: attach to a tmux target,
 	// or start one. ok is false when the row cannot be committed at all.
-	Activate(session string) (attach previewKey, resume *resumeRequest, ok bool)
+	//
+	// refusal 은 ok 가 거짓일 때 상태 줄에 띄울 이유다. 빈 값이면 말할 것이 없다는
+	// 뜻이고, 그때는 지금처럼 아무 말 없이 돌아온다.
+	Activate(session string) (attach previewKey, resume *resumeRequest, refusal string, ok bool)
 }
 
 // sourceChrome lets a source name itself on screen.
