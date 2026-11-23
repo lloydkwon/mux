@@ -51,6 +51,76 @@ type ClaudeRun struct {
 	// is not reachable through tmux. Resuming it makes a second process on one
 	// transcript, so it is the row that has to say so.
 	Elsewhere bool
+	// AOManaged 는 Agent Orchestrator(AO)가 이 대화를 몰고 있다는 뜻이다 — CWD 가
+	// AO 데이터 폴더 아래다. AO 대화는 턴 사이에 idle 로 보여도 AO 가 원래
+	// 프로세스에 다음 메시지를 계속 보내므로, 입양도 Enter 의 resume 도 같은 id 를
+	// 두 프로세스가 잡게 만든다(이슈 #1). 판정은 scanClaudeRuns 가 한다.
+	AOManaged bool
+}
+
+// aoDataDirEnv 는 AO 가 데이터 폴더를 기본값(~/.ao/data) 대신 쓰게 하는 환경 변수다.
+const aoDataDirEnv = "AO_DATA_DIR"
+
+// aoDataRoots 는 AO 데이터 폴더의 뿌리를 모두 돌려준다.
+//
+// 기본값(~/.ao/data)과 절대 경로인 AO_DATA_DIR 의 **합집합**이다. AO_DATA_DIR 가
+// 기본값을 대체하지 않는 것은 놓치는 쪽이 비싸서다 — 같은 대화 id 를 두 프로세스가
+// 잡는다. mux 와 AO 가 같은 환경을 본다는 보장도 없다.
+//
+// 뿌리마다 심링크를 푼 경로도 넣는다. Claude 가 적는 cwd 는 물리 경로라서, home 이나
+// 데이터 폴더가 심링크인 기계에서는 논리 경로만으로 놓친다. 빈 값·상대 경로·"/" 는
+// 버린다 — "/" 를 받으면 모든 대화가 막힌다.
+func aoDataRoots() []string {
+	var candidates []string
+	if home, err := homeDir(); err == nil && home != "" {
+		candidates = append(candidates, filepath.Join(home, ".ao", "data"))
+	}
+	if env := os.Getenv(aoDataDirEnv); env != "" {
+		candidates = append(candidates, env)
+	}
+
+	var roots []string
+	seen := make(map[string]bool)
+	add := func(p string) {
+		if !filepath.IsAbs(p) {
+			return
+		}
+		p = filepath.Clean(p)
+		if p == string(filepath.Separator) || seen[p] {
+			return
+		}
+		seen[p] = true
+		roots = append(roots, p)
+	}
+	for _, c := range candidates {
+		if !filepath.IsAbs(c) {
+			continue // 상대 경로는 어느 폴더 기준인지 모른다
+		}
+		add(c)
+		// 폴더가 없으면 실패한다 — 그때는 정리한 경로만 쓴다.
+		if real, err := filepath.EvalSymlinks(c); err == nil {
+			add(real)
+		}
+	}
+	return roots
+}
+
+// underAnyRoot 는 cwd 가 roots 중 하나이거나 그 아래인지 본다.
+//
+// 경계가 있는 비교다: ~/.ao/data-backup 이나 ~/.ao/database 는 ~/.ao/data 에 걸리지
+// 않는다. cwd 쪽은 심링크를 풀지 않는다 — 폴더가 이미 없을 수 있고, 대화마다 stat 이
+// 든다.
+func underAnyRoot(cwd string, roots []string) bool {
+	if cwd == "" {
+		return false
+	}
+	cwd = filepath.Clean(cwd)
+	for _, root := range roots {
+		if cwd == root || strings.HasPrefix(cwd, root+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 type cachedClaudeRuns struct {
@@ -103,6 +173,8 @@ func scanClaudeRuns() []ClaudeRun {
 
 	// One list-panes for the whole scan, the same hoist ClaudeStatuses does.
 	panes := paneSessions()
+	// AO 뿌리도 스캔당 한 번 구한다. 대화마다 더 읽는 파일은 없다.
+	aoRoots := aoDataRoots()
 
 	// Keyed by session id: one conversation is one row however many processes
 	// hold it. Measured, two did — the same id alive in a herdr pane and in a
@@ -120,6 +192,7 @@ func scanClaudeRuns() []ClaudeRun {
 		if !ok {
 			continue
 		}
+		run.AOManaged = underAnyRoot(run.CWD, aoRoots)
 		if prev, dup := best[run.SessionID]; dup && !preferRun(run, prev) {
 			continue
 		}
@@ -363,7 +436,7 @@ type AdoptedRun struct {
 
 // AdoptableRuns picks the conversations that should be given a tmux session.
 //
-// Two rules, and both are safety rather than taste.
+// Three rules, and all of them are safety rather than taste.
 //
 // **Already in tmux → nothing to do.** That is also what makes adoption
 // self-limiting: a conversation resumed under its own id shows up here with a
@@ -377,10 +450,18 @@ type AdoptedRun struct {
 // is that the copy left behind writes nothing, and only a finished turn
 // guarantees that — so this is the premise the rest of the design rests on, not
 // a preference.
+//
+// **AO 가 관리하는 대화는 빼낸다.** 위 전제가 깨지는 곳이다: AO 대화는 턴 사이에
+// idle 로 보이지만 AO 가 원래 프로세스에 다음 메시지를 계속 보내므로, 남겨진 쪽이
+// 아무것도 쓰지 않는다는 보장이 없다. 이슈 #1 에서 본 것(2026-11-23): 워커와
+// 오케스트레이터 대화가 둘 다 tmux 밖·idle 이라 이 조건에 맞았다.
 func AdoptableRuns(runs []ClaudeRun) []ClaudeRun {
 	var out []ClaudeRun
 	for _, r := range runs {
 		if r.TmuxSession != "" {
+			continue
+		}
+		if r.AOManaged {
 			continue
 		}
 		if r.Session.AIState != AIStateReady {

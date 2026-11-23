@@ -371,3 +371,82 @@ func TestClaudeListStillRefusesTheTmuxWriteKeys(t *testing.T) {
 		}
 	}
 }
+
+// AO 가 관리하는 tmux 밖 대화는 Enter 로 여기서 이어가지 않는다 — AO 가 원래
+// 프로세스에 계속 메시지를 보내므로 resume 하면 같은 id 를 두 프로세스가 잡는다
+// (이슈 #1). 작업 중이어도 포크하지 않는다. 대신 상태 줄이 이유를 말한다.
+func TestClaudeEnterRefusesAnAOManagedConversation(t *testing.T) {
+	for _, state := range []tmux.AIState{tmux.AIStateReady, tmux.AIStateWorking} {
+		m, _ := claudeModelWith([]tmux.ClaudeRun{{
+			Session:   tmux.Session{Name: "ao-worker", AIState: state},
+			SessionID: "sid-ao",
+			CWD:       "/home/u/.ao/data/worktrees/mux/feat-x",
+			Elsewhere: true,
+			AOManaged: true,
+		}})
+		updated, cmd := m.updateList(tea.KeyMsg{Type: tea.KeyEnter})
+		got := updated.(Model)
+
+		if r := got.ResumeRequest(); r != nil {
+			t.Errorf("state %v: resume = %v, want none for an AO-managed conversation", state, r.Args)
+		}
+		if got.AttachName() != "" {
+			t.Errorf("state %v: attach = %q, want none", state, got.AttachName())
+		}
+		if cmd != nil {
+			t.Errorf("state %v: enter returned a command; refusing must not quit mux", state)
+		}
+		if !strings.Contains(got.notice, "Agent Orchestrator") {
+			t.Errorf("state %v: notice = %q, want it to name Agent Orchestrator", state, got.notice)
+		}
+		if bar := ansi.Strip(got.extraBar()); !strings.Contains(bar, "Agent Orchestrator") {
+			t.Errorf("state %v: extra bar = %q, want the refusal on screen", state, bar)
+		}
+	}
+}
+
+// 미리보기 칸은 Enter 가 하는 일을 적는 자리다. AO 대화에서는 Enter 가 아무것도
+// 시작하지 않으므로 resume 명령을 싣지 않는다 — 보이면 손으로 치라는 권유가 된다.
+func TestClaudePreviewSaysAOManagedAndOffersNoResume(t *testing.T) {
+	for _, state := range []tmux.AIState{tmux.AIStateReady, tmux.AIStateWorking} {
+		notice := elsewhereNotice(tmux.ClaudeRun{
+			Session:   tmux.Session{Name: "ao-worker", AIState: state, AIPID: 42},
+			SessionID: "sid-ao",
+			CWD:       "/home/u/.ao/data/worktrees/mux/feat-x",
+			Elsewhere: true,
+			AOManaged: true,
+		})
+		if !strings.Contains(notice, "Agent Orchestrator") {
+			t.Errorf("state %v: preview does not say who manages it:\n%s", state, notice)
+		}
+		for _, banned := range []string{"--resume", "--fork-session", "Enter starts it here"} {
+			if strings.Contains(notice, banned) {
+				t.Errorf("state %v: preview offers %q for an AO-managed conversation:\n%s", state, banned, notice)
+			}
+		}
+	}
+}
+
+// tmux 안에 이미 있는 AO 대화는 그 세션으로 간다 — 이미 열린 것을 보러 가는 일은
+// 아무것도 시작하지 않는다. AO 거절이 tmux attach 보다 앞으로 오면 이것이 깨진다.
+func TestClaudeEnterStillGoesToAnAOManagedConversationInTmux(t *testing.T) {
+	m, _ := claudeModelWith([]tmux.ClaudeRun{{
+		Session:     tmux.Session{Name: "ao-worker", Attached: true},
+		SessionID:   "sid-ao",
+		CWD:         "/home/u/.ao/data/worktrees/mux/feat-x",
+		TmuxSession: "ao-worker",
+		AOManaged:   true,
+	}})
+	updated, cmd := m.updateList(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("enter did nothing")
+	}
+	if got.AttachName() != "ao-worker" {
+		t.Errorf("attach = %q, want the tmux session already holding it", got.AttachName())
+	}
+	if got.ResumeRequest() != nil {
+		t.Error("a conversation already in tmux asked to be started again")
+	}
+}
