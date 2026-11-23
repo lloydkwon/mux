@@ -68,6 +68,26 @@ okc() {
 	esac
 }
 
+# settled_cwd <pane 대상> — 방금 만든 pane 의 #{pane_current_path} 를, 자식이 chdir 을 마친 뒤의 값으로 읽는다.
+# tmux 는 fdforkpty 로 자식을 만들고 그 자식 안에서 chdir 한 뒤 exec 한다(spawn.c, 3.6a 기준 370·403행). 그 사이에
+# 읽으면 빈 값(자식이 아직 pty 의 앞쪽 프로세스가 아니다)이나 서버 프로세스의 폴더가 나온다. 2026-11-23 ubuntu-26.04
+# 러너(3.6)에서 17절이 서버 폴더를 읽어 한 번 깨졌다. 3.6 컨테이너(CPU 1개, 빈 반복 8개)에서 바로 읽으면 1,200번 중
+# 12번 빈 값이었고, 이 규칙으로 읽으면 0번이었다. # 가 없는 폴더에서도 같다. 빈 값이나 서버 폴더면 0.1초씩
+# 최대 2초 기다린다. 판정은 바꾸지 않는다 — 2초 뒤에도 그 값이면 그대로 내고, 단언이 실패로 보인다.
+SERVER_CWD=""
+settled_cwd() {
+	if [ -z "$SERVER_CWD" ]; then
+		SERVER_CWD=$(readlink "/proc/$(t display-message -p '#{pid}')/cwd" 2>/dev/null || pwd -P)
+	fi
+	local v _
+	for _ in $(seq 20); do
+		v=$(t display-message -p -t "$1" '#{pane_current_path}')
+		[ -n "$v" ] && [ "$v" != "$SERVER_CWD" ] && break
+		sleep 0.1
+	done
+	printf '%s' "$v"
+}
+
 if ! command -v "$TMUX_BIN" >/dev/null 2>&1 && [ ! -x "$TMUX_BIN" ]; then
 	echo "tmux 를 찾을 수 없습니다: $TMUX_BIN" >&2
 	exit 2
@@ -500,11 +520,11 @@ echo "보관함의 정확한 지목 (docs/design/park.md)"
 PKDIR=$(mktemp -d)
 t new-session -d -s pk -x 80 -y 10
 t new-session -d -s pk-2 -x 80 -y 10
-t new-window -d -t "=pk:" -c "$PKDIR" sleep 300 1
+PKPANE=$(t new-window -d -P -F '#{pane_id}' -t "=pk:" -c "$PKDIR" sleep 300 1)
 ok "new-window -t =name: 은 그 세션에만 창을 더한다" "2 1" \
 	"$(t list-windows -t "=pk" | wc -l | tr -d ' ') $(t list-windows -t "=pk-2" | wc -l | tr -d ' ')"
-okc "new-window 의 -c 와 인자가 pane 에 남는다" "$PKDIR|sleep 300 1" \
-	"$(t list-panes -s -t "=pk" -F '#{pane_current_path}|#{pane_start_command}' | tr '\n' ' ')"
+ok "new-window 의 -c 와 인자가 pane 에 남는다" "$PKDIR|sleep 300 1" \
+	"$(settled_cwd "$PKPANE")|$(t display-message -p -t "$PKPANE" '#{pane_start_command}')"
 # set-option 의 -t 는 pane 대상이라 «=name» 만으로는 «no such session» 이고 «=name:» 이어야 한다. 콜론 없는
 # 맨 이름은 그 세션이 없을 때 접두사로 «name-2» 에 쓴다 — 복원이 메모·@project_dir 를 «=name:» 으로 쓰는 이유.
 t set-option -t "=pk:" @mux_park_probe on
@@ -524,11 +544,11 @@ rmdir "$PKDIR"
 HASHDIR=$(mktemp -d)/'a#{session_name}b'
 mkdir -p "$HASHDIR"
 t new-session -d -s hash -x 80 -y 10 -c "${HASHDIR//#/##}"
-ok "-c 의 ## 는 글자 그대로의 # 다" "$HASHDIR" "$(t display-message -p -t "=hash:" '#{pane_current_path}')"
+ok "-c 의 ## 는 글자 그대로의 # 다" "$HASHDIR" "$(settled_cwd "=hash:")"
 t kill-session -t "=hash"
 t new-session -d -s hash -x 80 -y 10 -c "$HASHDIR"
 ok "-c 의 # 는 포맷으로 펼쳐진다 (그래서 막는다)" "different" \
-	"$([ "$(t display-message -p -t "=hash:" '#{pane_current_path}')" = "$HASHDIR" ] && echo same || echo different)"
+	"$([ "$(settled_cwd "=hash:")" = "$HASHDIR" ] && echo same || echo different)"
 t kill-session -t "=hash"
 rm -rf "$(dirname "$HASHDIR")"
 
