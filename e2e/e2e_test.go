@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -257,6 +258,35 @@ func eventually(t *testing.T, what string, timeout time.Duration, cond func() bo
 		time.Sleep(150 * time.Millisecond)
 	}
 	t.Fatalf("%s: %v 안에 되지 않았다%s", what, timeout, hangNote())
+}
+
+// waitHooksIdle 은 훅이 띄운 `mux panel --auto` 가 하나도 돌지 않는 채로 0.5초가 지날 때까지 기다린다.
+//
+// 시험이 창을 손으로 바꾸기(드래그 흉내, 고정 지우기) 직전에 부른다. 창이 «정착» 해 보여도 앞서 클라이언트를 붙일 때
+// 쏜 훅(client-attached·client-active·client-resized·after-resize-window)이 아직 돌 수 있고, 그 맞춤이 시험의 손질을
+// 저장 폭으로 되돌린다. 실측(2026-11-24, CPU 두 개에 묶고 빈 반복 둘을 돌린 부하, tmux -vv 서버 로그): 시험의
+// `resize-pane -x 80` 45ms 뒤 늦게 돈 panel --auto 가 `resize-pane -x 60` 을 보냈고, tmux 가 둘을 pty 에 적용하기
+// 전에 합쳐 패널은 80 을 보지 못했다 — 드래그는 저장되지 않았다. CI 에서 TestDragInFittedWindowReachesEveryPanel·
+// TestFitRepinsDriftedPanel·TestTerminalVisitFitsAnUnfittedSession 이 번갈아 흔들린 것이 이것이었다.
+//
+// 기다리는 것은 «도는 것이 없음» 이 잠시 이어지는 것이다. 줄 선 훅은 pgrep 에 보이지 않지만 앞의 것이 끝나면 곧
+// 뜨므로, 0.5초 조용하면 줄 선 것도 없다고 본다.
+func waitHooksIdle(t *testing.T) {
+	t.Helper()
+	pattern := regexp.QuoteMeta(muxBin) + " panel --auto"
+	var quietSince time.Time
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if exec.Command("pgrep", "-f", pattern).Run() == nil {
+			quietSince = time.Time{}
+		} else if quietSince.IsZero() {
+			quietSince = time.Now()
+		} else if time.Since(quietSince) >= 500*time.Millisecond {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("훅(panel --auto)이 15s 안에 멎지 않았다%s", hangNote())
 }
 
 // eventuallyWindow 는 세션 첫 창이 cond 를 만족할 때까지 기다리고, 못 하면 마지막으로 본
@@ -611,6 +641,7 @@ func TestFitRepinsDriftedPanel(t *testing.T) {
 	if panelID == "" {
 		t.Fatalf("패널 pane 을 못 찾았다:\n%s", pane)
 	}
+	waitHooksIdle(t)
 	tm(t, "resize-pane", "-t", panelID, "-x", "164")
 	if d := readWindow(t, "e2e-pin"); d.panel != 164 {
 		t.Fatalf("틀어짐 재현 실패: 패널 %d", d.panel)
@@ -663,6 +694,7 @@ func TestTerminalVisitFitsAnUnfittedSession(t *testing.T) {
 		return w.fit == "1" && w.panel == 45
 	})
 	// 예전 바이너리가 남긴 상태를 만든다: 고정 표시와 수동 크기를 지운다.
+	waitHooksIdle(t)
 	tm(t, "set-option", "-wu", "-t", w.id, "@mux_vsfit")
 	tm(t, "set-option", "-wu", "-t", w.id, "window-size")
 	eventually(t, "고정 해제 재현", 5*time.Second, func() bool {
@@ -755,6 +787,7 @@ func TestDragInFittedWindowReachesEveryPanel(t *testing.T) {
 		return w.fit == "1" && w.width == 220 && w.panel == 60
 	})
 
+	waitHooksIdle(t)
 	tm(t, "resize-pane", "-t", panelPane(t, a.id), "-x", "80") // 창 폭은 그대로 — 테두리 드래그와 같다
 
 	eventually(t, "드래그가 저장됨", 6*time.Second, func() bool { return savedPanelWidth(t) == 80 })
@@ -794,6 +827,7 @@ func TestDragInPlainWindowReachesFittedPanel(t *testing.T) {
 		return w.fit == "1" && w.panel == 60 && w.work == 120
 	})
 
+	waitHooksIdle(t)
 	tm(t, "resize-pane", "-t", panelPane(t, p.id), "-x", "80")
 	eventually(t, "드래그가 저장됨", 6*time.Second, func() bool { return savedPanelWidth(t) == 80 })
 
@@ -821,6 +855,7 @@ func TestStepwiseDragInVSCodeOnlyWindow(t *testing.T) {
 		return w.fit == "1" && w.panel == 60 && w.work == 130
 	})
 	panel := panelPane(t, w.id)
+	waitHooksIdle(t)
 	for width := 62; width <= 76; width += 2 {
 		tm(t, "resize-pane", "-t", panel, "-x", strconv.Itoa(width))
 		time.Sleep(120 * time.Millisecond)
