@@ -104,9 +104,13 @@ func renderActionPreview(kind itemKind, innerWidth, innerHeight int) string {
 	if os.Getenv("TMUX") != "" {
 		description = "Detach this tmux client and continue in the outer login shell."
 	}
-	if kind == itemNewSession {
+	switch kind {
+	case itemNewSession:
 		title = "New tmux session"
 		description = "Create a named tmux session, optionally choose its directory, and attach."
+	case itemNewWorktree:
+		title = "New worktree"
+		description = "Make a git worktree beside the repo and open a shell in it."
 	}
 
 	lines := make([]string, innerHeight)

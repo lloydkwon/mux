@@ -7,6 +7,7 @@
 | `runRoot`, `runTUI` (attach·팝업 bootstrap·detach) | bootstrap.md, tui.md |
 | `adoptClaudeSessions` | claude-mode.md |
 | `runTUI` 의 `UnparkRequest` 분기 (보관함 복원) | park.md |
+| `runTUI` 의 `NewSessionRequest` 분기 (New worktree) | worktree.md |
 | `reviveAndRemember` | revive.md |
 | `runPanelAuto` | tmux-config.md |
 | `runBorder` | border.md |

@@ -14,6 +14,8 @@ const (
 	itemPane
 	// itemParked 는 보관함 행이다. 맨 끝에 둔 것은 앞의 값들을 그대로 두기 위해서다.
 	itemParked
+	// itemNewWorktree 는 «New worktree» 행이다(ui/worktree.go). 같은 이유로 맨 끝이다.
+	itemNewWorktree
 )
 
 // listItem is one renderable row in the flattened tree view.
@@ -180,6 +182,7 @@ func flattenMenu(sessions []tmux.Session, t *treeState, orders map[string]int, i
 		items = append(items,
 			listItem{kind: itemNewShell},
 			listItem{kind: itemNewSession},
+			listItem{kind: itemNewWorktree},
 		)
 		if parked > 0 {
 			items = append(items, listItem{kind: itemParked, count: parked})

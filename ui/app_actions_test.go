@@ -94,7 +94,7 @@ func TestNewSessionModelOpensOnTheCreatePrompt(t *testing.T) {
 
 func TestDigitStartsOrderInputForSession(t *testing.T) {
 	m := menuTestModel()
-	m.cursor = 2
+	m.cursor = 3 // 액션 행 셋 아래의 세션 "news"
 	updated, _ := m.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
 	got := updated.(Model)
 	if got.mode != modeOrder {

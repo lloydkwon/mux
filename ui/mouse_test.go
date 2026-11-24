@@ -10,7 +10,7 @@ import (
 )
 
 // mouseTestModel is a model sized like a real terminal, holding count sessions
-// under the two action rows.
+// under the three action rows.
 func mouseTestModel(count int) Model {
 	// 같은 시각을 준다. 반복문 안에서 time.Now() 를 부르면 세션마다 나노초씩
 	// 어긋나고, recent 정렬이 그 나이를 보므로 행 순서가 뒤집힌다 — 이 테스트가
@@ -69,7 +69,7 @@ func TestClickRefreshesThePreview(t *testing.T) {
 // the preview the first one asked for.
 func TestDoubleClickAttaches(t *testing.T) {
 	m := mouseTestModel(5)
-	y := m.rowY(3) // items[3] is the second session (two action rows first)
+	y := m.rowY(4) // items[4] is the second session (three action rows first)
 
 	first, _ := m.updateList(leftClick(4, y))
 	second, cmd := first.(Model).updateList(leftClick(4, y))

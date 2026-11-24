@@ -36,14 +36,14 @@ func TestFlattenMenuIncludesActionsAndOrders(t *testing.T) {
 		panesCache:      map[paneCacheKey][]tmux.Pane{},
 	}, map[string]int{"news": 12}, true, 0)
 
-	if len(items) != 3 {
-		t.Fatalf("items = %d, want 3", len(items))
+	if len(items) != 4 {
+		t.Fatalf("items = %d, want 4", len(items))
 	}
-	if items[0].kind != itemNewShell || items[1].kind != itemNewSession {
-		t.Fatalf("first rows are not shell/session actions: %#v", items[:2])
+	if items[0].kind != itemNewShell || items[1].kind != itemNewSession || items[2].kind != itemNewWorktree {
+		t.Fatalf("first rows are not shell/session/worktree actions: %#v", items[:3])
 	}
-	if items[2].kind != itemSession || items[2].order != 12 {
-		t.Fatalf("session row = %#v", items[2])
+	if items[3].kind != itemSession || items[3].order != 12 {
+		t.Fatalf("session row = %#v", items[3])
 	}
 }
 

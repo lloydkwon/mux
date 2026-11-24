@@ -717,6 +717,18 @@ func runTUI(model ui.Model) error {
 		if err := ui.AttachToSession(name, -1, -1); err != nil {
 			return fmt.Errorf("failed to attach: %w", err)
 		}
+	case m.NewSessionRequest() != nil:
+		// New worktree 행. worktree 는 TUI 안의 Cmd 가 이미 만들었고, 그 폴더의 셸 세션을 여기서 만든다 —
+		// ResumeRequest 와 같은 이유다. 명령이 없으면 tmux 의 기본 셸이고, 이름이 겹치면 -2 가 붙는다.
+		// @project_dir 는 달지 않는다: 태그가 있으면 패널 자동 삽입이 물러난다(docs/design/worktree.md).
+		r := m.NewSessionRequest()
+		name, err := tmux.CreateSessionWithCommand(r.Name, r.Dir, nil)
+		if err != nil {
+			return fmt.Errorf("worktree %s is ready, but the session failed: %w", r.Dir, err)
+		}
+		if err := ui.AttachToSession(name, -1, -1); err != nil {
+			return fmt.Errorf("failed to attach: %w", err)
+		}
 	case m.UnparkRequest() != nil:
 		// 보관함에서 고른 세션. 세션 생성과 attach 가 TUI 밖이어야 하는 이유는 ResumeRequest 와 같다.
 		// 이름이 있으면 오류가 있어도 그리로 간다 — 띄우지 못한 대화는 보관함에 남아 다음에 Parked

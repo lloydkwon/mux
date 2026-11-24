@@ -2,12 +2,12 @@
 ╭──────────────────────────────────────┬───────────────────────────────────────────────────────────╮|
 │○ New shell     leave tmux            │[ Parked sessions ]                                        │|
 │+ New tmux ...  create and attach     │───────────────────────────────────────────────────────────│|
-│≡ Parked se...  2 to restore          │                                                           │|
-│▶ a-session...        ✅              │Claude/opencode sessions closed with p, to resume later.   │|
-│▶ api-server          ❗ ⌥ feat/lon...│Enter opens the list to restore or forget one.             │|
-│▶ mux                 ⏳        ⌥ main│                                                           │|
-│▶ notes                   ✎ 회의록... │  wai-plan            /home/u/dev/wai  ✎ 다음 회차 대기    │|
-│                                      │  kmatch-exec         /home/u/dev/kream  2 conv            │|
+│⌥ New worktree  git worktree + shell  │                                                           │|
+│≡ Parked se...  2 to restore          │Claude/opencode sessions closed with p, to resume later.   │|
+│▶ a-session...        ✅              │Enter opens the list to restore or forget one.             │|
+│▶ api-server          ❗ ⌥ feat/lon...│                                                           │|
+│▶ mux                 ⏳        ⌥ main│  wai-plan            /home/u/dev/wai  ✎ 다음 회차 대기    │|
+│▶ notes                   ✎ 회의록... │  kmatch-exec         /home/u/dev/kream  2 conv            │|
 │                                      │                                                           │|
 │                                      │                                                           │|
 │                                      │                                                           │|

@@ -13,6 +13,7 @@
 | `claude_sessions.go` | claude-mode.md |
 | `pair.go` | pair.md |
 | `park.go`, `park_opencode.go` | park.md |
+| `worktree.go` (`session.go` 의 `CurrentSessionName` 도) | worktree.md |
 | `panel.go` | panel.md, tmux-config.md (폭·VS Code 게이트) |
 | `panelwidth.go`, `client.go` | panel-width.md |
 | `eventlog.go`, `eventarchive.go` | panel-events.md |

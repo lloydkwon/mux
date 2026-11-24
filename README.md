@@ -37,6 +37,13 @@ Running Claude in one session, Codex in another, and a dev server in a third? Sw
 
 ### Added in this fork
 
+- **New worktree** — the third action row. Type a branch name and mux makes a
+  git worktree for it beside the repository (`<repo>-<branch>`), then opens a
+  shell session there and attaches. The repository defaults to the session you
+  opened mux from. A branch that already has a worktree is reused; the branch
+  the main checkout is on, or a folder already in the way, is refused on the
+  prompt. Removing a worktree is left to `git worktree remove`.
+
 - **The AI badge shows live state** — the badge that already told you *which*
   AI CLI a session runs now also tells you *what it is doing*: working (`⏳`),
   blocked waiting on you (`❗`), or done and ready for input (`✅`), with how
@@ -192,7 +199,7 @@ Run `mux` to open the session manager. Use `j`/`k` to navigate, `Enter` to attac
 
 The left panel shows your sessions with AI badges and git branches. The right panel shows a **live preview** of the selected session's terminal output, updated every 500ms.
 
-The first two rows are login-friendly actions: **New shell** closes mux and continues in the current shell; when selected from inside tmux or a mux popup, it detaches the current client and returns to the outer login shell without killing the session. **New tmux session** creates a named session and attaches immediately.
+The rows at the top are actions: **New shell** closes mux and continues in the current shell; when selected from inside tmux or a mux popup, it detaches the current client and returns to the outer login shell without killing the session. **New tmux session** creates a named session and attaches immediately. **New worktree** makes a git worktree for a branch beside its repository and opens a shell session in it.
 
 Press a digit while a session row is selected to set its persistent order. Continue typing for multi-digit values and press `Enter`; enter `0` to clear the order. Press `o` to rotate sorting between recent activity, session name, and explicit order. Preferences are stored in `~/.config/mux/preferences.json` (or the platform's user config directory).
 
@@ -394,7 +401,7 @@ Pair with [skimd](https://github.com/lunemis/skimd) to review AI-generated markd
 
 **A session can carry a note you wrote** (`m`), shown after the badge as `✎ …`. It is for what nothing can work out by looking — "blocked until the labelling run finishes" — so that a list of seven sessions still says what each is waiting on. The note lives on the tmux session itself (the `@mux_note` option), so renaming the session keeps it and `mux watch` sees the same text without a second store; it does not survive the tmux server dying. When the row runs out of room the **branch** goes first and the note second: the branch is repeated by the preview header and by the border above your pane, while the note appears nowhere else. In the panel the note is its own line under the session, because at 36 columns that row has no cells to spare.
 
-**Parking** (`p`) is for a Claude session you do not need now but will want back. It closes the tmux session and remembers each Claude conversation in it — id, directory, the session's name, note and `@project_dir` — in `~/.config/mux/parked.json`. While anything is parked, a `≡ Parked sessions` row sits under the two action rows; `Enter` on it (or `P` anywhere) opens the list, and `Enter` there brings the session back under the same name with `claude --resume <id>`, one window per conversation, and attaches. Only the Claude conversations come back: a shell or server pane that sat beside them does not. Other AI CLIs cannot be parked, because mux does not know their conversation ids. Forgetting an entry (`d`) leaves the transcript on disk, so `claude --resume` can still find it.
+**Parking** (`p`) is for a Claude session you do not need now but will want back. It closes the tmux session and remembers each Claude conversation in it — id, directory, the session's name, note and `@project_dir` — in `~/.config/mux/parked.json`. While anything is parked, a `≡ Parked sessions` row sits under the action rows; `Enter` on it (or `P` anywhere) opens the list, and `Enter` there brings the session back under the same name with `claude --resume <id>`, one window per conversation, and attaches. Only the Claude conversations come back: a shell or server pane that sat beside them does not. Other AI CLIs cannot be parked, because mux does not know their conversation ids. Forgetting an entry (`d`) leaves the transcript on disk, so `claude --resume` can still find it.
 
 `v` gives the mouse back to the terminal so you can select and copy what is on screen, and **stops the refresh while it does** — with the list still redrawing twice a second the selection is wiped before you finish making it. `v` or `Esc` resumes both.
 

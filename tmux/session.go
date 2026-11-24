@@ -67,6 +67,27 @@ func ProjectScope() (dir string, vscode bool) {
 	return dir, clientIsEditor(pid)
 }
 
+// CurrentSessionName 은 mux 를 띄운 클라이언트가 보고 있는 세션이다 — mux popup 이면 그 아래의 세션.
+// 클라이언트가 없으면(tmux 밖, 훅 경로) 빈 값이다.
+//
+// ProjectScope 와 같은 이유로 client_pid 를 함께 읽어 확인한다. 클라이언트 없이 부르면 tmux 가 다른 세션을
+// 골라 답할 수 있다. 이름은 마지막에 두어 나머지를 다 갖는다 — 세션 이름에는 | 가 들어갈 수 있다.
+// ProjectScope 에 붙이지 않은 것은 그 때문이고, New worktree 를 열 때만 부르므로 시작 비용도 늘지 않는다.
+func CurrentSessionName() string {
+	out, err := runner.Output("tmux", "display-message", "-p", "#{client_pid}|#{session_name}")
+	if err != nil {
+		return ""
+	}
+	pidStr, name, found := strings.Cut(strings.TrimRight(string(out), "\n"), "|")
+	if !found {
+		return ""
+	}
+	if pid, err := strconv.Atoi(strings.TrimSpace(pidStr)); err != nil || pid <= 0 {
+		return ""
+	}
+	return name
+}
+
 // SessionProjectDir reports projectDirOption for a named session. Empty when
 // the session carries no tag, or does not exist.
 func SessionProjectDir(session string) string {

@@ -2,10 +2,10 @@
 ╭──────────────────────┬───────────────────────────────────╮|
 │○ New shell           │[ api-serv  ❗ claude  ⌥ feat/long-│|
 │+ New tmux ...        │  ❗ approval · Bash: git push     │|
-│▶ a-session...        │───────────────────────────────────│|
-│▶ api-server          │$ git push                         │|
-│▶ mux                 │? Allow Bash: git push  (y/n)      │|
+│⌥ New worktree        │───────────────────────────────────│|
+│▶ a-session...        │$ git push                         │|
+│▶ api-server          │? Allow Bash: git push  (y/n)      │|
+│▶ mux                 │                                   │|
 │▶ notes               │                                   │|
-│                      │                                   │|
 ╰──────────────────────┴───────────────────────────────────╯|
 ↑↓/jk navigate • tab expand • ⇧tab collapse • enter/2click a|

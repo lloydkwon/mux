@@ -45,7 +45,7 @@ tmux 서버를 상대로 그 값을 두 번 치른다. `@project_dir`은 `tmux-p
 `scripts/tmux-assumptions.sh`의 필드 수 단언을 같이 고쳐야 한다. 하한은 11로 남아
 있는데, 그 이유는 [note.md](note.md) 의 "세션 메모는 tmux 옵션에 산다"에 있다.
 
-시딩된 필터에서는 액션 행("새 셸"/"새 세션")을 계속 보여준다(`m.filterText == m.projectDir`).
+시딩된 필터에서는 액션 행("새 셸"/"새 세션"/"New worktree")을 계속 보여준다(`m.filterText == m.projectDir`).
 사용자가 친 필터가 아니라 기본 시야이므로, 여기서 액션이 사라지면 VS Code에서 연
 mux는 새 세션을 만들 길이 없다.
 
@@ -59,7 +59,7 @@ Never attach from inside the Bubble Tea loop. `Update` records `attachTarget` / 
 
 ## Modal sub-models
 
-`mode` selects which `updateX` handles input. Sub-models (`create`, `rename`, `filter`, `confirmKill`, `order`, `confirmPark`, `parked`) are plain structs with their own `Update`/`View`; they report completion by emitting a message (`sessionCreatedMsg`, `sessionRenamedMsg`, `sessionOrderMsg`, …) that the *top-level* `Update` handles before mode dispatch — that is where mode is reset to `modeList` and side effects like preference writes happen.
+`mode` selects which `updateX` handles input. Sub-models (`create`, `rename`, `filter`, `confirmKill`, `order`, `confirmPark`, `parked`, `worktree`) are plain structs with their own `Update`/`View`; they report completion by emitting a message (`sessionCreatedMsg`, `sessionRenamedMsg`, `sessionOrderMsg`, …) that the *top-level* `Update` handles before mode dispatch — that is where mode is reset to `modeList` and side effects like preference writes happen.
 
 `modeHelp` is the deliberate exception: it carries no state, so it has no sub-model struct, no `Model` field, and no completion message — just an enum value, a `case` in the mode dispatch that resets to `modeList` on any `tea.KeyMsg`, and `viewHelp` in `View`. Don't add a `helpModel` to make it match the others. It also renders through `fixedBox` instead of `viewWithOverlay`, because a centered box has no size bound and the page is taller than a `mux popup` gets on an 80x24 terminal (68x19) — that budget is pinned by `TestHelpBodyFitsPopup`, and adding a line to `renderHelpBody` will fail it.
 

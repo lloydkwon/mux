@@ -15,6 +15,7 @@ load-bearing 인지. 2026-10-14 까지는 전부 루트 `CLAUDE.md` 한 파일(1
 | [claude-mode.md](claude-mode.md) | `mux --claude` — 대화 단위 행, 입양, `sourceActivator` |
 | [pair.md](pair.md) | `-exec`/`-plan` 짝을 한 창에 합치기 |
 | [park.md](park.md) | 보관(`p`)·보관함(`P`) — Claude 세션을 닫았다가 같은 id 로 되살리기, 저장 순서, `=name` 지목 |
+| [worktree.md](worktree.md) | New worktree 행 — 원본 저장소 옆 자리, 브랜치를 고르는 순서, 다시 쓰기·거절, mux 를 띄운 세션으로 Repo 채우기, git 은 Cmd·세션은 cmd/mux, 태그를 달지 않는 이유 |
 | [bootstrap.md](bootstrap.md) | tmux 밖에서 친 `mux` 가 attach 후 팝업을 띄우는 것 |
 | [panel.md](panel.md) | 패널(`mux watch`) — 위치, 커서·`ownSession`, 두 버튼(전환/에디터), 두 키보드, 세 부분, 자가 재시작, 유령 pane |
 | [panel-events.md](panel-events.md) | 공유 이벤트 로그 `@mux_events`, `trimLog`, `events.json` 아카이브 |

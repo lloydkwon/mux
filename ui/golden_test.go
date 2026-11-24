@@ -128,7 +128,7 @@ func TestGoldenParked(t *testing.T) {
 	m := goldenModel(100, 16)
 	m.parked = goldenParked()
 	m.applyFilter()
-	m.cursor = 2 // Parked 행
+	m.cursor = 3 // Parked 행 (액션 행 셋 아래)
 	checkGolden(t, "parked-row-100x16", 100, m.View())
 
 	m.mode = modeParked

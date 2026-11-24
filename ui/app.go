@@ -52,6 +52,7 @@ const (
 	modeSetupOffer
 	modeConfirmPark
 	modeParked
+	modeWorktree
 )
 
 // clickMark remembers the last left press, so the next one can be told apart
@@ -121,6 +122,13 @@ type Model struct {
 	unparkTarget *tmux.ParkedSession
 	// parking 은 보관이 진행 중인 세션이다. 끝나기 전 p 를 다시 받지 않는다.
 	parking string
+	// worktreeMod 는 New worktree 행의 입력 화면이다(ui/worktree.go). worktreeOpened 는 그 화면을 연 횟수 —
+	// 늦게 온 git 결과가 어느 화면의 것인지 가른다.
+	worktreeMod    worktreeModel
+	worktreeOpened int
+	// newSessionTarget 은 TUI 가 끝난 뒤 cmd/mux 가 만들고 붙을 셸 세션이다. resumeTarget 과 같은 이유로
+	// 세션 생성은 루프 밖이다.
+	newSessionTarget *newSessionRequest
 	// notice 는 다음 키를 누를 때까지 extraBar 에 남는 한 줄이다. m.err 는 다음 틱의 sessionsLoadedMsg 가
 	// 덮어써 500ms 만에 사라지므로 «보관 못 함» 같은 답을 실을 수 없다.
 	notice string
@@ -366,6 +374,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.attachTarget = previewKey{session: msg.Name, window: -1, pane: -1}
 		return m, tea.Quit
 
+	case worktreeOriginMsg:
+		return m.fillWorktreeRepo(msg), nil
+
+	case worktreeReadyMsg:
+		return m.finishWorktree(msg)
+
 	case sessionCreatedMsg:
 		m.mode = modeList
 		if msg.attach {
@@ -475,6 +489,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateConfirmPark(msg)
 	case modeParked:
 		return m.updateParked(msg)
+	case modeWorktree:
+		return m.updateWorktree(msg)
 	default:
 		return m.updateList(msg)
 	}
@@ -618,7 +634,7 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // activateCurrent commits the row under the cursor: attach for a session,
-// window or pane, and the two action rows do what they say.
+// window or pane, and the action rows do what they say.
 //
 // Shared by `enter` and the double click so the two cannot drift — a click that
 // attached to a different target than the key would be a bug nobody would think
@@ -636,7 +652,7 @@ func (m Model) activateCurrent() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	// A source that knows what committing a row means answers for its own rows.
-	// The two action rows are not its rows — they belong to the tmux list and
+	// The action rows are not its rows — they belong to the tmux list and
 	// are not drawn when a source is set — so this sits above the switch rather
 	// than inside its default branch.
 	if a, ok := m.src.(sourceActivator); ok {
@@ -663,6 +679,9 @@ func (m Model) activateCurrent() (tea.Model, tea.Cmd) {
 		m.mode = modeCreate
 		m.createModel = newCreateModel(true)
 		return m, m.createModel.nameInput.Focus()
+	case itemNewWorktree:
+		// 이것도 빠지면 아래 default 의 빈 attach 로 빠진다.
+		return m.openWorktree()
 	case itemParked:
 		// 이것이 빠지면 더블클릭이 아래 default 의 빈 attach 로 빠져 mux 가 그냥 닫힌다.
 		return m.openParked()
@@ -982,6 +1001,8 @@ func (m Model) View() string {
 		return m.viewSetupOffer()
 	case modeParked:
 		return m.viewParked()
+	case modeWorktree:
+		return m.viewWithOverlay(m.worktreeMod.View())
 	default:
 		return m.viewMain()
 	}

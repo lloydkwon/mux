@@ -20,7 +20,7 @@ func fakeParked(name string) tmux.ParkedSession {
 		Conversations: []tmux.ParkedConversation{{SessionID: sid, CWD: "/w/" + name}}}
 }
 
-// parkTestModel 은 액션 행 둘 아래 세션 셋(claude 둘, 셸 하나)을, 이름순으로 둔다.
+// parkTestModel 은 액션 행 셋 아래 세션 셋(claude 둘, 셸 하나)을, 이름순으로 둔다.
 func parkTestModel(parked int) Model {
 	created := time.Now()
 	m := Model{
@@ -112,10 +112,10 @@ func TestParkedRowAppearsOnlyWhenSomethingIsParked(t *testing.T) {
 		}
 	}
 	m := parkTestModel(2)
-	if got := kinds(m.items[:4]); got[2] != itemParked || got[3] != itemSession {
-		t.Fatalf("rows = %v, want the Parked row right under the two action rows", got)
+	if got := kinds(m.items[:5]); got[3] != itemParked || got[4] != itemSession {
+		t.Fatalf("rows = %v, want the Parked row right under the three action rows", got)
 	}
-	if row := ansi.Strip(formatItemRow(m.items[2], false, false, 16, 80, &m.tree)); !strings.Contains(row, "Parked sessions") || !strings.Contains(row, "2 to restore") {
+	if row := ansi.Strip(formatItemRow(m.items[3], false, false, 16, 80, &m.tree)); !strings.Contains(row, "Parked sessions") || !strings.Contains(row, "2 to restore") {
 		t.Errorf("parked row = %q", row)
 	}
 	m.filterText = "alp"
@@ -264,7 +264,7 @@ func TestParkedRowOpensThePopup(t *testing.T) {
 	seams := stubParkSeams(t)
 	seams.list = []tmux.ParkedSession{fakeParked("old-0")}
 	m := parkTestModel(1)
-	m.cursor = 2
+	m.cursor = parkedRowIndex(t, m)
 	got, msg := updateThrough(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	if _, ok := msg.(parkedLoadedMsg); !ok || got.mode != modeParked {
 		t.Fatalf("enter on Parked: msg=%T mode=%v, want the popup", msg, got.mode)
@@ -279,7 +279,8 @@ func TestDoubleClickOnTheParkedRowOpensThePopup(t *testing.T) {
 	seams := stubParkSeams(t)
 	seams.list = []tmux.ParkedSession{fakeParked("old-0")}
 	m := parkTestModel(1)
-	y := m.rowY(2)
+	// 자리를 숫자로 박지 않는다 — 위에 행이 늘었을 때 다른 액션 행을 누르고도 «닫히지 않았다» 로 통과했다.
+	y := m.rowY(parkedRowIndex(t, m))
 	first, _ := m.updateList(leftClick(4, y))
 	second, cmd := first.(Model).updateList(leftClick(4, y))
 	if cmd == nil {
@@ -288,6 +289,21 @@ func TestDoubleClickOnTheParkedRowOpensThePopup(t *testing.T) {
 	if _, quit := cmd().(tea.QuitMsg); quit || second.(Model).AttachName() != "" {
 		t.Fatal("double click on the Parked row quit mux")
 	}
+	if _, ok := cmd().(parkedLoadedMsg); !ok {
+		t.Fatal("double click on the Parked row did not open the popup")
+	}
+}
+
+// parkedRowIndex 는 Parked 행의 자리다. 없으면 시험이 멈춘다.
+func parkedRowIndex(t *testing.T, m Model) int {
+	t.Helper()
+	for i, it := range m.items {
+		if it.kind == itemParked {
+			return i
+		}
+	}
+	t.Fatalf("no Parked row in %v", kinds(m.items))
+	return -1
 }
 
 func TestPWithNothingParkedSaysSo(t *testing.T) {
@@ -434,7 +450,7 @@ func TestParkedRowAppearingKeepsTheCursorOnItsSession(t *testing.T) {
 	if it := got.currentItem(); it == nil || it.session == nil || it.session.Name != "shell" {
 		t.Errorf("cursor on %+v, want it still on shell", it)
 	}
-	if got.items[2].kind != itemParked {
+	if got.items[3].kind != itemParked {
 		t.Errorf("rows = %v, want the Parked row to have appeared", kinds(got.items))
 	}
 }

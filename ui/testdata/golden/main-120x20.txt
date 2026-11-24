@@ -2,11 +2,11 @@
 ╭──────────────────────────────────────────────┬───────────────────────────────────────────────────────────────────────╮|
 │○ New shell           leave tmux              │[ api-server ]  /ho  ❗ claude  ⌥ feat/long-branch-name-that-must-yield│|
 │+ New tmux session    create and attach       │  ❗ approval · Bash: git push                                         │|
-│▶ a-session-with-...        ✅                │───────────────────────────────────────────────────────────────────────│|
-│▶ api-server                ❗ ⌥ feat/long-...│$ git push                                                             │|
-│▶ mux                       ⏳          ⌥ main│? Allow Bash: git push  (y/n)                                          │|
+│⌥ New worktree        git worktree + shell    │───────────────────────────────────────────────────────────────────────│|
+│▶ a-session-with-...        ✅                │$ git push                                                             │|
+│▶ api-server                ❗ ⌥ feat/long-...│? Allow Bash: git push  (y/n)                                          │|
+│▶ mux                       ⏳          ⌥ main│                                                                       │|
 │▶ notes                         ✎ 회의록 ...  │                                                                       │|
-│                                              │                                                                       │|
 │                                              │                                                                       │|
 │                                              │                                                                       │|
 │                                              │                                                                       │|

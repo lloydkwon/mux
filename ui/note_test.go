@@ -42,7 +42,7 @@ func TestNoteKeyOpensPrefilled(t *testing.T) {
 	}
 }
 
-// The key is a no-op on the two action rows and on window/pane rows, the same
+// The key is a no-op on the action rows and on window/pane rows, the same
 // way r and x are: there is no session there to attach a note to.
 func TestNoteKeyIgnoresNonSessionRows(t *testing.T) {
 	m := noteTestModel("")

@@ -55,6 +55,8 @@ const (
 const (
 	actionNewShellLabel   = "New shell"
 	actionNewSessionLabel = "New tmux session"
+	// actionNewWorktreeLabel 은 New tmux session 보다 길면 안 된다. 이름 칸이 넓어져 모든 세션 행이 밀린다.
+	actionNewWorktreeLabel = "New worktree"
 )
 
 // listOffset is the index of the first item row drawn: the list scrolls only as
@@ -141,6 +143,8 @@ func sessionNameWidth(items []listItem, innerWidth int, showOrder, showNote bool
 			label = actionNewShellLabel
 		case itemNewSession:
 			label = actionNewSessionLabel
+		case itemNewWorktree:
+			label = actionNewWorktreeLabel
 		case itemParked:
 			label = actionParkedLabel
 		default:
@@ -192,6 +196,9 @@ func formatItemRow(it listItem, selected, showOrder bool, nameWidth, width int, 
 		return formatActionRow("○", actionNewShellLabel, "leave tmux", selected, nameWidth, width)
 	case itemNewSession:
 		return formatActionRow("+", actionNewSessionLabel, "create and attach", selected, nameWidth, width)
+	case itemNewWorktree:
+		// ⌥ 는 세션 행의 브랜치 표식과 같은 글리프다(1칸 — TestGlyphWidthsAreStable).
+		return formatActionRow(branchGlyph(tmux.Session{}), actionNewWorktreeLabel, "git worktree + shell", selected, nameWidth, width)
 	case itemParked:
 		return formatActionRow(parkedGlyph, actionParkedLabel, fmt.Sprintf("%d to restore", it.count), selected, nameWidth, width)
 	case itemWindow:
@@ -205,7 +212,7 @@ func formatItemRow(it listItem, selected, showOrder bool, nameWidth, width int, 
 	}
 }
 
-// formatActionRow renders the two rows above the sessions. The icon sits in the
+// formatActionRow renders the action rows above the sessions. The icon sits in the
 // chevron's column and the name starts where every session name starts, so the
 // top of the list reads as one column rather than two layouts stacked.
 func formatActionRow(icon, name, description string, selected bool, nameWidth, width int) string {

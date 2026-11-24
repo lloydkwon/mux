@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `mux` is a TUI tmux session manager (Go + Bubble Tea) that shows a live preview of every session, detects AI CLIs (`claude`, `codex`, `aider`, `gemini`), and displays git branch / worktree status and Claude token cost.
 
-This repo is a **personal fork**, third in a chain: `lunemis/mux` → `xguru/mux` → this repo. The module path is `github.com/lloydkwon/mux`. Fork-specific features: the "New shell" / "New tmux session" action rows at the top of the list, persistent per-session ordering (`0`–`9`, `o` to rotate sort), and the Claude progress state badges.
+This repo is a **personal fork**, third in a chain: `lunemis/mux` → `xguru/mux` → this repo. The module path is `github.com/lloydkwon/mux`. Fork-specific features: the "New shell" / "New tmux session" / "New worktree" action rows at the top of the list, persistent per-session ordering (`0`–`9`, `o` to rotate sort), and the Claude progress state badges.
 
 원격은 둘이다. `origin` 은 이 포크(`lloydkwon/mux`, SSH)이고, `upstream` 은 이 포크가 갈라져 나온 `xguru/mux` 다. `upstream` 은 원래 저장소의 새 변경을 받아 보는 용도라 HTTPS 로 fetch 만 하고, push 주소는 `DISABLED` 로 막아 두었다(`git remote set-url --push upstream DISABLED`) — 남의 저장소로 가는 push 가 실수로라도 나가지 않게. 새 변경은 `git fetch upstream && git log --oneline HEAD..upstream/main` 으로 본다. 원본 `lunemis/mux` 는 원격으로 두지 않는다. 2026-10-14 에 확인했을 때 두 저장소 모두 이 포크에 없는 커밋이 0개였다(`xguru` 는 07-18, `lunemis` 는 07-07 이후 변경 없음). 이 클론에는 한때 `upstream` 이 빠져 있었으므로, 없으면 `git remote add upstream https://github.com/xguru/mux.git` 로 다시 단다.
 
@@ -213,6 +213,10 @@ Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale a
   지운다). 그 «갱신된 대화» 를 고를 때 같은 폴더에 opencode 가 또 살아 있으면 고르지 않고 닫지도 않는다 — `-s`·`-c` 로 연
   대화는 그 pane 의 명령줄이 정하므로 따지지 않는다(거부하면 되살린 뒤 아직 안 친 opencode 를 다시 못 보관한다). 되살리기는 적어 둔 실행 파일로 `-s <id>`, 띄우기 전에
   `session.get` 으로 있는지 묻는다(없는 id 의 `-s` 는 새 대화가 된다, 404 는 종료 코드 1 이라 본문으로 가린다). (park.md)
+- **New worktree 는 git 을 `tea.Cmd`(시임 `prepareWorktree`)에서, 세션 생성·attach 를 `cmd/mux` 에서 한다.** 거절을 입력 화면에
+  보이려면 git 은 TUI 안이어야 하고, 세션은 루프 밖이어야 한다. 그 세션에 `@project_dir` 를 달지 않는다 — 달면 패널 자동 삽입이
+  물러난다. 원본 작업 트리의 브랜치·이미 있는 폴더는 거절하고, 그 브랜치의 linked worktree 가 있으면 다시 쓴다. Repo 칸은
+  커서가 아니라 mux 를 띄운 세션(`CurrentSessionName`, client_pid 확인)에서 온다. (worktree.md)
 - **`-c` 에 넘기는 디렉터리는 `tmuxDirArg` 를 거친다** — tmux 는 `-c` 를 포맷으로 펼쳐서 디렉터리 이름의 `#(…)` 가
   셸 명령으로 돈다(실측). `set-option -t` 는 pane 대상이라 정확히 지목하려면 `=name:`(콜론까지)이다. (park.md, 17절)
 - **`mux serve` 는 127.0.0.1 에만 바인드하고, `Tailscale-User-Login` 이 `--allow` 목록일 때만 응답한다.** Host(`.ts.net`
