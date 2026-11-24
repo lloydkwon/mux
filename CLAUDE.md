@@ -161,7 +161,10 @@ Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale a
 - **`--claude` 입양은 `--fork-session` 을 쓰지 않고, 순차로, 초 경계를 기다리며** 돈다. 끝나면
   `ResetClaudeRunCache()`. cwd 가 AO 데이터 폴더(`~/.ao/data` ∪ 절대 경로 `AO_DATA_DIR`, 경계 있는 비교) 아래인 대화는
   `AOManaged` 라 입양하지도 Enter 로 resume·포크하지도 않는다(tmux 안이면 그 세션으로는 간다). 판정은 `tmux` 스캔 한 곳이고
-  `ui` 는 필드만 읽는다(`TestAdoptableRunsSkipsAOManagedConversations`, `TestClaudeEnterRefusesAnAOManagedConversation`). (claude-mode.md)
+  `ui` 는 필드만 읽는다(`TestAdoptableRunsSkipsAOManagedConversations`, `TestClaudeEnterRefusesAnAOManagedConversation`).
+  herdr 가 쥔 대화(`HeldBy`)도 같다 — `tmux` 는 herdr 를 모르므로 이름 없는 훅 `SetExternalHolds` 만 두고, `cmd/mux` 의
+  `--claude` 갈래가 `herdr.ClaudeHolds` 를 잇는다. herdr 서버가 없으면 쥔 것이 없고(stderr 의 `server_not_running`), 읽지
+  못하면 tmux 밖 대화를 모두 막는다. (claude-mode.md)
 - **짝 합치기**: `break-pane` 금지, pane 하나뿐인 검토 세션은 거부, `join-pane -d`. (pair.md)
 - **패널 폭은 맞춤 창에서도 하나다.** VS Code·IntelliJ 터미널이 붙은 맞춤 창의 패널도 드래그를
   기억하고 저장 폭을 따른다. 고치는 손만 다르다 — resize-pane 이 아니라 자기 창의 fit 을 다시

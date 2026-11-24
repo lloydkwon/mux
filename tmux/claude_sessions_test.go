@@ -532,3 +532,92 @@ func TestAdoptClaudeSessionsLeavesAOManagedAlone(t *testing.T) {
 		}
 	})
 }
+
+// herdr 가 쥔 대화는 목록에는 보이되 입양하지 않는다 — AO 와 같은 꼴이다. herdr-loop 는 idle 인 실행세션에
+// `herdr agent prompt` 로 다음 지시를 넣으니, 여기서 같은 id 로 resume 하면 두 프로세스가 한 대화를 잡는다.
+// tmux 는 herdr 를 모르고, 무엇이 쥐었는지는 SetExternalHolds 로 받는다.
+func TestAdoptableRunsSkipsConversationsHeldElsewhere(t *testing.T) {
+	t.Setenv("AO_DATA_DIR", "")
+	cases := []struct {
+		name         string
+		holds        ExternalHolds
+		held, unsure bool
+	}{
+		{name: "off by default", holds: ExternalHolds{}},
+		{name: "held by its id", holds: ExternalHolds{By: "herdr", IDs: map[string]bool{"sid-1": true}}, held: true},
+		{name: "another id is not this one", holds: ExternalHolds{By: "herdr", IDs: map[string]bool{"sid-other": true}}},
+		{name: "an agent that told no id, in the same folder", holds: ExternalHolds{By: "herdr", Dirs: map[string]bool{"/w/plain": true}}, held: true},
+		{name: "an agent that told no id, elsewhere", holds: ExternalHolds{By: "herdr", Dirs: map[string]bool{"/w/other": true}}},
+		{name: "unreadable counts as held", holds: ExternalHolds{By: "herdr", Unknown: true}, held: true, unsure: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files := map[string]string{"a.json": runFile(1, "sid-1", "/w/plain", "idle", "conv", "", 1000, 2000)}
+			withClaudeSessions(t, files, nil, func() {
+				SetExternalHolds(func() ExternalHolds { return tc.holds })
+				defer SetExternalHolds(nil)
+				runs := ClaudeSessions()
+				if len(runs) != 1 {
+					t.Fatalf("runs = %d, want the conversation listed either way", len(runs))
+				}
+				r := runs[0]
+				if (r.HeldBy == "herdr") != tc.held || r.HeldUnsure != tc.unsure {
+					t.Errorf("HeldBy=%q HeldUnsure=%v, want held=%v unsure=%v", r.HeldBy, r.HeldUnsure, tc.held, tc.unsure)
+				}
+				if adopted := len(AdoptableRuns(runs)) == 1; adopted == tc.held {
+					t.Errorf("adopted = %v, want %v", adopted, !tc.held)
+				}
+			})
+		})
+	}
+}
+
+// tmux 안의 대화는 묻지 않는다 — Enter 가 그 세션으로 갈 뿐 아무것도 시작하지 않는다. «못 읽음» 이어도 그렇다.
+func TestHoldsLeaveConversationsInTmuxAlone(t *testing.T) {
+	files := map[string]string{"tmux.json": runFile(2, "sid-t", "/w/proj", "idle", "in-tmux", "sess:@0.%0", 1000, 2000)}
+	withClaudePanes(t, files, "%0 2 sess\n", func() {
+		SetExternalHolds(func() ExternalHolds {
+			return ExternalHolds{By: "herdr", IDs: map[string]bool{"sid-t": true}, Unknown: true}
+		})
+		defer SetExternalHolds(nil)
+		runs := ClaudeSessions()
+		if len(runs) != 1 || runs[0].TmuxSession != "sess" {
+			t.Fatalf("runs = %+v, want the conversation in tmux", runs)
+		}
+		if runs[0].HeldBy != "" {
+			t.Errorf("HeldBy = %q for a conversation in tmux", runs[0].HeldBy)
+		}
+	})
+}
+
+// 시작할 때의 입양 전체로 본다: herdr 가 쥔 대화와 평범한 대화가 함께 있으면 평범한 것만 세션이 생긴다.
+func TestAdoptClaudeSessionsLeavesHerdrHeldAlone(t *testing.T) {
+	withoutSecondWait(t)
+	t.Setenv("AO_DATA_DIR", "")
+	files := map[string]string{
+		"plain.json": runFile(2, "sid-plain", "/w/plain", "idle", "plain", "", 1000, 2000),
+		"herdr.json": runFile(1, "sid-herdr", "/w/loop", "idle", "loop-exec", "", 1000, 3000),
+	}
+	withClaudeSessions(t, files, nil, func() {
+		m, ok := runner.(*mockRunner)
+		if !ok {
+			t.Fatalf("runner = %T, want the helper's mock", runner)
+		}
+		SetExternalHolds(func() ExternalHolds {
+			return ExternalHolds{By: "herdr", IDs: map[string]bool{"sid-herdr": true}}
+		})
+		defer SetExternalHolds(nil)
+
+		AdoptClaudeSessions(nil)
+
+		var created []string
+		for _, r := range m.runs {
+			if strings.Contains(r, "new-session") {
+				created = append(created, r)
+			}
+		}
+		if len(created) != 1 || !strings.Contains(created[0], "--resume sid-plain") {
+			t.Fatalf("new-session calls = %v, want only the ordinary conversation resumed", created)
+		}
+	})
+}

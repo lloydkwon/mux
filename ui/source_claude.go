@@ -83,6 +83,9 @@ func elsewhereNotice(r tmux.ClaudeRun) string {
 	if r.AOManaged {
 		return aoManagedNotice(r)
 	}
+	if r.HeldBy != "" {
+		return heldNotice(r)
+	}
 	fork := tmux.ClaudeBusyElsewhere(r)
 
 	var b strings.Builder
@@ -130,6 +133,31 @@ func aoManagedNotice(r tmux.ClaudeRun) string {
 	return b.String()
 }
 
+// heldRefusal 은 tmux 밖에서 쥔 대화(herdr)에서 Enter 를 눌렀을 때 상태 줄에 뜬다.
+func heldRefusal(r tmux.ClaudeRun) string {
+	if r.HeldUnsure {
+		return r.HeldBy + " could not be read — not opened here, it may still hold this conversation"
+	}
+	return "held by " + r.HeldBy + " — not opened here, go to it in " + r.HeldBy
+}
+
+// heldNotice 는 tmux 밖에서 쥔 대화(herdr)의 미리보기다. aoManagedNotice 와 같은 이유로 claude --resume 명령을
+// 싣지 않는다 — 여기서 Enter 는 아무것도 시작하지 않는다.
+func heldNotice(r tmux.ClaudeRun) string {
+	var b strings.Builder
+	if r.HeldUnsure {
+		b.WriteString(r.HeldBy + " is running but could not be read, so mux cannot tell\n")
+		b.WriteString("whether it holds this conversation.\n\n")
+	} else {
+		b.WriteString("This conversation is held by " + r.HeldBy + ".\n\n")
+	}
+	writeRunFacts(&b, r)
+	b.WriteString("\nEnter does not open it here. " + r.HeldBy + " can send it its next message at any\n")
+	b.WriteString("time (a review loop, or you typing in that pane), so a copy started here\n")
+	b.WriteString("would hold the same conversation id as the one " + r.HeldBy + " is driving.\n")
+	return b.String()
+}
+
 // Activate says what `enter` means for a conversation, and the split is the
 // point of the whole feature.
 //
@@ -146,7 +174,7 @@ func aoManagedNotice(r tmux.ClaudeRun) string {
 //
 // AO 가 관리하는 대화는 tmux 밖이면 거절한다 — resume 도 포크도 하지 않는다. 그래서
 // 이 검사는 포크 판단보다 앞에 있다. tmux 안에 있으면 위의 첫 분기로 그 세션에 간다:
-// 이미 열린 것을 보러 가는 일은 아무것도 시작하지 않는다.
+// 이미 열린 것을 보러 가는 일은 아무것도 시작하지 않는다. herdr 가 쥔 대화(HeldBy)도 같다.
 func (c *claudeSource) Activate(session string) (previewKey, *resumeRequest, string, bool) {
 	r, ok := c.find(session)
 	if !ok {
@@ -162,6 +190,9 @@ func (c *claudeSource) Activate(session string) (previewKey, *resumeRequest, str
 	}
 	if r.AOManaged {
 		return previewKey{}, nil, aoManagedRefusal, false
+	}
+	if r.HeldBy != "" {
+		return previewKey{}, nil, heldRefusal(r), false
 	}
 	name := tmux.SafeSessionName(r.Session.Name)
 	if name == "" || r.CWD == "" || r.SessionID == "" {

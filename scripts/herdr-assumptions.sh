@@ -142,6 +142,27 @@ ok "pane read 는 화면 텍스트를 그대로 낸다 (JSON 아님)" "no" \
 	"$(printf '%s' "$READ_OUT" | jq -e . >/dev/null 2>&1 && echo yes || echo no)"
 
 echo
+echo "9. 서버가 없으면 — 봉투의 error.code 가 server_not_running 이다 (herdr.ClaudeHolds 가 «쥔 것 없음» 으로 읽는다)"
+# 없는 소켓을 가리킨다. herdr 는 그 자리에 아무것도 만들지 않고 답한다(0.9.5 실측). 오류 봉투는 stdout 이 아니라
+# stderr 로 나오고 종료 코드는 1 이다 — 러너는 stderr 를 오류에 붙이므로 ClaudeHolds 는 거기서 이 코드를 찾는다.
+# 이 답이 바뀌면 ClaudeHolds 는 서버가 꺼져 있을 때도 «못 읽음» 으로 보고 tmux 밖 대화를 모두 막는다 — 안전하지만
+# --claude 의 Enter 가 막힌다.
+NO_SERVER_SOCK="${TMPDIR:-/tmp}/mux-herdr-check-$$-none.sock"
+NO_SERVER_OUT=$(HERDR_SOCKET_PATH="$NO_SERVER_SOCK" "$HERDR_BIN" agent list 2>/dev/null)
+NO_SERVER_ERR=$(HERDR_SOCKET_PATH="$NO_SERVER_SOCK" "$HERDR_BIN" agent list 2>&1 >/dev/null)
+ok "서버 없음은 stderr 의 error.code = server_not_running" "server_not_running" \
+	"$(printf '%s' "$NO_SERVER_ERR" | jq -r '.error.code // empty' 2>/dev/null)"
+ok "서버 없음은 stdout 이 비어 있다" "0" "${#NO_SERVER_OUT}"
+# 소켓 파일은 남았는데 서버가 죽은 경우(크래시)도 같은 코드여야 한다 — 아니면 herdr 가 죽은 뒤 --claude 가 tmux 밖 대화를
+# 모두 막는다. 듣는 쪽 없는 소켓을 만들어 잰다(0.9.5: 같은 코드).
+STALE_SOCK="${TMPDIR:-/tmp}/mux-herdr-check-$$-stale.sock"
+python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.close()' "$STALE_SOCK" 2>/dev/null
+STALE_ERR=$(HERDR_SOCKET_PATH="$STALE_SOCK" "$HERDR_BIN" agent list 2>&1 >/dev/null)
+rm -f "$STALE_SOCK"
+ok "죽은 서버가 남긴 소켓도 server_not_running" "server_not_running" \
+	"$(printf '%s' "$STALE_ERR" | jq -r '.error.code // empty' 2>/dev/null)"
+
+echo
 if [ "$FAILED" -eq 0 ]; then
 	echo "$CHECKED 개 전부 통과 — $VERSION 에서 mux 의 가정이 유지됩니다."
 	exit 0

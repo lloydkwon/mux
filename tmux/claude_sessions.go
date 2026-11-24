@@ -56,6 +56,55 @@ type ClaudeRun struct {
 	// 프로세스에 다음 메시지를 계속 보내므로, 입양도 Enter 의 resume 도 같은 id 를
 	// 두 프로세스가 잡게 만든다(이슈 #1). 판정은 scanClaudeRuns 가 한다.
 	AOManaged bool
+	// HeldBy 는 tmux 밖의 무엇이 이 대화를 쥐고 몰고 있다는 뜻이고, 그 이름이다("herdr"). 빈 값이면 아무도 쥐지
+	// 않았다. AO 와 같은 이유로 입양도 Enter 의 resume 도 하지 않는다 — herdr-loop 는 idle 인 실행세션에
+	// `herdr agent prompt` 로 다음 지시를 넣는다. 판정은 scanClaudeRuns 가 externalHolds 로 한다.
+	HeldBy string
+	// HeldUnsure 는 쥔 쪽에 물었지만 답을 읽지 못해, 쥐었다고 «본» 것이라는 뜻이다(ExternalHolds.Unknown).
+	HeldUnsure bool
+}
+
+// ExternalHolds 는 tmux 밖의 무엇(지금은 herdr)이 쥐고 몰고 있는 Claude 대화다.
+//
+// tmux 패키지는 그것이 무엇인지 모른다. herdr 를 읽는 것은 herdr/ 패키지뿐이고, 둘을 잇는 것은 cmd/mux 다
+// (SetExternalHolds). 설계 이유는 docs/design/claude-mode.md «herdr 가 쥔 대화».
+type ExternalHolds struct {
+	// By 는 쥔 쪽의 이름이다. 미리보기와 상태 줄에 그대로 보인다.
+	By string
+	// IDs 는 쥔 대화의 id 다.
+	IDs map[string]bool
+	// Dirs 는 대화 id 를 알리지 않은 에이전트의 폴더다. 그 폴더의 tmux 밖 대화는 모두 쥔 것으로 본다.
+	// 놓치면 같은 id 를 두 프로세스가 잡고, 잘못 막으면 Enter 한 번이 거절될 뿐이다 — 막는 쪽이 싸다.
+	Dirs map[string]bool
+	// Unknown 은 물었지만 답을 읽지 못했다는 뜻이다. 같은 이유로 tmux 밖 대화를 모두 쥔 것으로 본다.
+	Unknown bool
+}
+
+// heldBy 는 r 을 이 쪽이 쥐었는지 답한다. tmux 안의 대화는 묻지 않는다 — Enter 가 그 세션으로 갈 뿐 아무것도
+// 시작하지 않고, 입양 대상도 아니다.
+func (h ExternalHolds) heldBy(r ClaudeRun) (held, unsure bool) {
+	if r.TmuxSession != "" || h.By == "" {
+		return false, false
+	}
+	if h.Unknown {
+		return true, true
+	}
+	return h.IDs[r.SessionID] || (r.CWD != "" && h.Dirs[r.CWD]), false
+}
+
+// externalHolds 는 스캔마다 한 번 부른다(스캔은 claudeRunTTL 동안 재사용된다). 제로값 — 아무것도 쥐지 않음 —
+// 이 «꺼짐» 이라, SetExternalHolds 를 부르지 않는 경로(시험, `mux` 의 다른 명령)는 지금까지와 같다.
+var externalHolds = func() ExternalHolds { return ExternalHolds{} }
+
+// SetExternalHolds 는 tmux 밖에서 대화를 쥔 쪽에 물을 함수를 준다. nil 이면 꺼짐으로 돌아간다.
+func SetExternalHolds(fn func() ExternalHolds) {
+	if fn == nil {
+		fn = func() ExternalHolds { return ExternalHolds{} }
+	}
+	claudeRunCacheMu.Lock()
+	externalHolds = fn
+	claudeRunCache = cachedClaudeRuns{}
+	claudeRunCacheMu.Unlock()
 }
 
 // aoDataDirEnv 는 AO 가 데이터 폴더를 기본값(~/.ao/data) 대신 쓰게 하는 환경 변수다.
@@ -175,6 +224,8 @@ func scanClaudeRuns() []ClaudeRun {
 	panes := paneSessions()
 	// AO 뿌리도 스캔당 한 번 구한다. 대화마다 더 읽는 파일은 없다.
 	aoRoots := aoDataRoots()
+	// tmux 밖에서 쥔 쪽(herdr)에도 스캔당 한 번 묻는다.
+	holds := externalHolds()
 
 	// Keyed by session id: one conversation is one row however many processes
 	// hold it. Measured, two did — the same id alive in a herdr pane and in a
@@ -193,6 +244,9 @@ func scanClaudeRuns() []ClaudeRun {
 			continue
 		}
 		run.AOManaged = underAnyRoot(run.CWD, aoRoots)
+		if held, unsure := holds.heldBy(run); held {
+			run.HeldBy, run.HeldUnsure = holds.By, unsure
+		}
 		if prev, dup := best[run.SessionID]; dup && !preferRun(run, prev) {
 			continue
 		}
@@ -455,13 +509,16 @@ type AdoptedRun struct {
 // idle 로 보이지만 AO 가 원래 프로세스에 다음 메시지를 계속 보내므로, 남겨진 쪽이
 // 아무것도 쓰지 않는다는 보장이 없다. 이슈 #1 에서 본 것(2026-11-23): 워커와
 // 오케스트레이터 대화가 둘 다 tmux 밖·idle 이라 이 조건에 맞았다.
+//
+// **herdr 가 쥔 대화도 빼낸다**(HeldBy). 같은 꼴이다 — herdr-loop 는 idle 인 실행세션에
+// `herdr agent prompt` 로 다음 지시를 넣고, 사람도 그 herdr pane 에 계속 친다.
 func AdoptableRuns(runs []ClaudeRun) []ClaudeRun {
 	var out []ClaudeRun
 	for _, r := range runs {
 		if r.TmuxSession != "" {
 			continue
 		}
-		if r.AOManaged {
+		if r.AOManaged || r.HeldBy != "" {
 			continue
 		}
 		if r.Session.AIState != AIStateReady {

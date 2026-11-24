@@ -130,6 +130,44 @@ mock runner 가 없어 Update 에서 tmux 를 만지면 `go test ./ui` 가 개�
 `TestAdoptClaudeSessionsLeavesAOManagedAlone`, `TestClaudeEnterRefusesAnAOManagedConversation`,
 `TestClaudePreviewSaysAOManagedAndOffersNoResume`, `TestClaudeEnterStillGoesToAnAOManagedConversationInTmux`.
 
+### herdr 가 쥔 대화도 입양도 Enter resume 도 하지 않는다
+
+**같은 꼴이다.** herdr-loop(`~/.claude/herdr-loop/`)는 idle 인 실행세션에 `herdr agent prompt` 로 다음 지시를 넣고,
+사람도 그 herdr pane 에 계속 친다. 그래서 «버려진 쪽이 아무것도 쓰지 않는다» 가 성립하지 않는다. 이 절은
+2026-11-24 에 사용자가 herdr 와 mux 를 함께 쓰기로 하면서 생겼다. 그 전까지 입양은 herdr 에 흩어진 일을 mux 로
+들여오는 길이었는데, 함께 쓰면 herdr 에 둔 일은 거기 남아야 한다.
+
+**판정은 herdr 에 묻는다.** cwd 로는 못 가른다 — herdr pane 은 어느 프로젝트 폴더에서나 돈다. `/proc/<pid>/environ`
+의 `HERDR_ENV` 는 AO 때 버린 이유(Linux 전용, 대화마다 파일 하나, 권한)가 그대로다. herdr 안에서 띄운 tmux 서버라면
+그 pane 들도 그 변수를 물려받아 잘못 걸릴 수 있다(추론, 재지 않음). `herdr agent list` 의 `agent_session`(kind `"id"`)이 Claude 대화 id 를
+그대로 준다(0.9.5 스키마도 같다).
+
+**층 규칙 때문에 잇는 자리가 셋이다.** `tmux` 는 herdr 를 모른다. 그래서 `tmux.ExternalHolds` 라는 이름 없는
+모양과 `SetExternalHolds` 훅만 두고, 스캔(`scanClaudeRuns`)이 스캔당 한 번 묻는다. 1초 TTL 이라 `--claude` 목록에서
+초당 한 번이다. 답하는 것은 `herdr.ClaudeHolds` 이고, 둘을 잇는 것은 `cmd/mux` 의 `--claude` 갈래 한 줄이다.
+- 제로값(아무것도 쥐지 않음)이 «꺼짐» 이다. 그래서 시험과 다른 명령은 지금까지와 같다.
+- 잇는 한 줄은 단위 시험이 못 잡는다. e2e `TestClaudeModeLeavesHerdrHeldConversationsAlone` 가 가짜 herdr 로 본다.
+
+**`ClaudeHolds` 가 답하는 네 경우**
+| 상황 | 답 |
+|---|---|
+| herdr 가 없거나 서버가 꺼져 있다 | 쥔 것 없음 — 비용 0. 서버가 없으면 herdr 는 stdout 을 비우고 오류 봉투를 **stderr** 로 낸다(종료 코드 1, 0.9.5 실측, `scripts/herdr-assumptions.sh` 9절). 서버가 죽고 소켓 파일만 남은 경우도 같은 코드다. 러너가 stderr 를 오류에 붙이므로 거기서 `server_not_running` 을 찾는다 |
+| 대화 id 를 알린 Claude 에이전트 | 그 id 를 쥔 것이다 |
+| id 를 알리지 않은 Claude 에이전트 | 그 폴더(`cwd`·`foreground_cwd`)의 tmux 밖 대화를 모두 쥔 것으로 본다. kind `"path"` 도 여기다. herdr 의 Claude 통합(`herdr integration install claude`)이 빠졌거나 아직 보고하기 전이다 |
+| 그 밖의 실패, 2초 안에 답이 없음 | «못 읽음»(`Unknown`) — tmux 밖 대화를 모두 쥔 것으로 본다(`HeldUnsure`) |
+
+놓치는 쪽이 비싸다(같은 id 를 두 프로세스가 잡는다). 잘못 막는 쪽은 Enter 한 번이 거절될 뿐이고, 그 대화는 herdr
+에서 열면 된다. tmux 안의 대화는 묻지 않는다 — Enter 가 그 세션으로 갈 뿐이다.
+
+**표시는 AO 와 같다.** 목록에서 숨기지 않고, 미리보기는 «herdr 가 쥐었다(또는 읽지 못했다)» 고 말하며 resume 명령을
+싣지 않는다. Enter 는 상태 줄에 이유를 남기고 mux 를 닫지 않는다.
+
+지키는 테스트: `TestAdoptableRunsSkipsConversationsHeldElsewhere`(하위 여섯), `TestHoldsLeaveConversationsInTmuxAlone`,
+`TestAdoptClaudeSessionsLeavesHerdrHeldAlone`, `herdr/holds_test.go` 의 일곱(픽스처, 폴더 대체, 폴더의 정리·심링크 꼴, 못 읽음, 서버 없음 —
+가짜 실행 파일과 진짜 러너, 멎은 서버의 제한 시간, herdr 없음), `TestClaudeEnterRefusesAHerdrHeldConversation`,
+`TestClaudePreviewSaysHerdrHoldsItAndOffersNoResume`, `TestClaudeEnterStillGoesToAHerdrHeldConversationInTmux`, e2e
+`TestClaudeModeLeavesHerdrHeldConversationsAlone`.
+
 ### enter 의 뜻이 소스마다 다르다 — `sourceActivator`
 
 `sessionSource` 에 얹지 않고 선택 구현 인터페이스로 뺐다. 세 소스의 답이 서로 무관하기

@@ -2,9 +2,11 @@ package herdr
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // CommandRunner abstracts command execution for testability.
@@ -43,6 +45,34 @@ func withStderr(err error, stderr []byte) error {
 		return fmt.Errorf("%w: %s", err, msg)
 	}
 	return err
+}
+
+// timedRunner 는 제한 시간을 받는 러너다(tmux/runner.go 의 쌍둥이). 진짜 러너만 갖는다 — 목은 Output 으로
+// 물러서므로 시험은 시간을 쓰지 않는다.
+type timedRunner interface {
+	OutputWithin(limit time.Duration, name string, args ...string) ([]byte, error)
+}
+
+func (execRunner) OutputWithin(limit time.Duration, name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = time.Second
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if ctx.Err() == context.DeadlineExceeded {
+		return out, fmt.Errorf("%s did not answer within %v", name, limit)
+	}
+	return out, withStderr(err, stderr.Bytes())
+}
+
+// outputWithin 은 runner.Output 에 제한 시간을 준다. 러너가 제한 시간을 모르면(목) 그냥 Output 이다.
+func outputWithin(limit time.Duration, name string, args ...string) ([]byte, error) {
+	if tr, ok := runner.(timedRunner); ok {
+		return tr.OutputWithin(limit, name, args...)
+	}
+	return runner.Output(name, args...)
 }
 
 // runner is this package's own command runner, deliberately separate from the

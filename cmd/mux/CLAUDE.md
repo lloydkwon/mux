@@ -5,7 +5,7 @@
 | 함수 | 문서 (`docs/design/`) |
 |---|---|
 | `runRoot`, `runTUI` (attach·팝업 bootstrap·detach) | bootstrap.md, tui.md |
-| `adoptClaudeSessions` | claude-mode.md |
+| `adoptClaudeSessions`, `--claude` 갈래의 `tmux.SetExternalHolds(herdr.ClaudeHolds)` | claude-mode.md |
 | `runTUI` 의 `UnparkRequest` 분기 (보관함 복원) | park.md |
 | `runTUI` 의 `NewSessionRequest` 분기 (New worktree) | worktree.md |
 | `reviveAndRemember` | revive.md |

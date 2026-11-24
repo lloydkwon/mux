@@ -450,3 +450,66 @@ func TestClaudeEnterStillGoesToAnAOManagedConversationInTmux(t *testing.T) {
 		t.Error("a conversation already in tmux asked to be started again")
 	}
 }
+
+// herdr 가 쥔 대화도 AO 처럼 tmux 밖에서는 열지 않는다 — resume 도 포크도 하지 않고, 거절을 상태 줄에 남긴다.
+// herdr 를 읽지 못한 때(HeldUnsure)도 같고, 상태 줄이 그렇다고 말한다.
+func TestClaudeEnterRefusesAHerdrHeldConversation(t *testing.T) {
+	for _, tc := range []struct {
+		unsure bool
+		want   string
+	}{{false, "held by herdr"}, {true, "herdr could not be read"}} {
+		m, _ := claudeModelWith([]tmux.ClaudeRun{{
+			Session:    tmux.Session{Name: "loop-exec", AIState: tmux.AIStateReady},
+			SessionID:  "sid-h",
+			CWD:        "/w/loop",
+			Elsewhere:  true,
+			HeldBy:     "herdr",
+			HeldUnsure: tc.unsure,
+		}})
+		updated, cmd := m.updateList(tea.KeyMsg{Type: tea.KeyEnter})
+		got := updated.(Model)
+		if r := got.ResumeRequest(); r != nil {
+			t.Errorf("unsure=%v: resume = %v, want none for a conversation herdr holds", tc.unsure, r.Args)
+		}
+		if got.AttachName() != "" || cmd != nil {
+			t.Errorf("unsure=%v: attach=%q cmd=%v, want mux to stay open", tc.unsure, got.AttachName(), cmd != nil)
+		}
+		if bar := ansi.Strip(got.extraBar()); !strings.Contains(bar, tc.want) {
+			t.Errorf("unsure=%v: extra bar = %q, want %q", tc.unsure, bar, tc.want)
+		}
+	}
+}
+
+// 미리보기는 누가 쥐었는지 말하고, resume 명령을 싣지 않는다(AO 와 같은 이유).
+func TestClaudePreviewSaysHerdrHoldsItAndOffersNoResume(t *testing.T) {
+	notice := elsewhereNotice(tmux.ClaudeRun{
+		Session:   tmux.Session{Name: "loop-exec", AIState: tmux.AIStateReady, AIPID: 42},
+		SessionID: "sid-h",
+		CWD:       "/w/loop",
+		Elsewhere: true,
+		HeldBy:    "herdr",
+	})
+	if !strings.Contains(notice, "held by herdr") {
+		t.Errorf("preview does not say who holds it:\n%s", notice)
+	}
+	for _, banned := range []string{"--resume", "--fork-session", "Enter starts it here"} {
+		if strings.Contains(notice, banned) {
+			t.Errorf("preview offers %q for a conversation herdr holds:\n%s", banned, notice)
+		}
+	}
+}
+
+// tmux 안에 이미 있으면 그 세션으로 간다 — herdr 거절이 tmux attach 보다 앞으로 오면 이것이 깨진다.
+func TestClaudeEnterStillGoesToAHerdrHeldConversationInTmux(t *testing.T) {
+	m, _ := claudeModelWith([]tmux.ClaudeRun{{
+		Session:     tmux.Session{Name: "loop-exec", Attached: true},
+		SessionID:   "sid-h",
+		CWD:         "/w/loop",
+		TmuxSession: "loop-exec",
+		HeldBy:      "herdr",
+	}})
+	updated, _ := m.updateList(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := updated.(Model).AttachName(); got != "loop-exec" {
+		t.Errorf("attach = %q, want the tmux session", got)
+	}
+}

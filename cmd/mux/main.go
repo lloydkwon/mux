@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
+	"github.com/lloydkwon/mux/herdr"
 	"github.com/lloydkwon/mux/tmux"
 	"github.com/lloydkwon/mux/ui"
 )
@@ -330,6 +331,9 @@ func runRoot(herdrMode, claudeMode bool) error {
 		// conversation may well be held by a tmux pane, and going to it needs
 		// the server the socket wipe can orphan.
 		reviveAndRemember()
+		// herdr 가 쥔 대화는 입양도 Enter 의 resume 도 하지 않는다(AO 와 같은 이유 — herdr-loop 는 idle 인
+		// 실행세션에 다음 지시를 넣는다). tmux 는 herdr 를 모르므로 여기서 잇는다. 서버가 꺼져 있으면 비용은 0.
+		tmux.SetExternalHolds(herdr.ClaudeHolds)
 		adoptClaudeSessions()
 		pairSessions()
 		return runTUI(ui.NewClaudeModel())

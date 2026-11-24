@@ -10,7 +10,7 @@
 | `aitools.go`, `claude_status.go`, `claude_activity.go`, `claude.go` | ai-state.md |
 | `claude_work.go`, `claude_work_title.go` | panel.md (세션 아래 줄), `transcript.go` 의 줄 모양은 agent-api.md |
 | `proc.go` | ai-state.md, revive.md |
-| `claude_sessions.go` | claude-mode.md |
+| `claude_sessions.go` (`ExternalHolds` 는 «herdr 가 쥔 대화» 절) | claude-mode.md |
 | `pair.go` | pair.md |
 | `park.go`, `park_opencode.go` | park.md |
 | `worktree.go` (`session.go` 의 `CurrentSessionName` 도) | worktree.md |
