@@ -94,7 +94,7 @@ func SessionProjectDir(session string) string {
 	if session == "" {
 		return ""
 	}
-	out, err := runner.Output("tmux", "show-options", "-qv", "-t", session, projectDirOption)
+	out, err := runner.Output("tmux", "show-options", "-qv", "-t", exactSessionOption(session), projectDirOption)
 	if err != nil {
 		return ""
 	}
@@ -282,7 +282,7 @@ func CreateSessionWithDir(name, dir string) error {
 	}
 	// Best-effort: a session without its tag is the old behaviour, not a
 	// failure worth refusing the session over.
-	_ = runner.Run("tmux", "set-option", "-t", name, projectDirOption, dir)
+	_ = runner.Run("tmux", "set-option", "-t", exactSessionOption(name), projectDirOption, dir)
 	return nil
 }
 
@@ -355,14 +355,22 @@ func freeSessionName(name string) string {
 // tmux-assumptions 17절이 ## 가 글자 그대로 돌아오는 것을 단언한다.
 func tmuxDirArg(dir string) string { return strings.ReplaceAll(dir, "#", "##") }
 
+// exactSession 은 그 이름의 세션만 지목하는 대상이다. 맨 이름은 그 세션이 이미 없을 때 앞부분이 같은 이웃에게 간다
+// (t-m1 → t-m12, tmux-assumptions 17절). 확인 창이 떠 있는 사이에도 세션은 사라진다 — mux task done 이 닫는다.
+func exactSession(name string) string { return "=" + name }
+
+// exactSessionOption 은 세션 옵션을 읽고 쓸 때의 대상이다. set-option·show-options 의 -t 는 pane 대상이라 콜론까지 있어야
+// 한다.
+func exactSessionOption(name string) string { return "=" + name + ":" }
+
 // KillSession destroys the tmux session with the given name.
 func KillSession(name string) error {
-	return runner.Run("tmux", "kill-session", "-t", name)
+	return runner.Run("tmux", "kill-session", "-t", exactSession(name))
 }
 
 // RenameSession renames a tmux session from oldName to newName.
 func RenameSession(oldName, newName string) error {
-	return runner.Run("tmux", "rename-session", "-t", oldName, newName)
+	return runner.Run("tmux", "rename-session", "-t", exactSession(oldName), newName)
 }
 
 // SwitchClient points the current tmux client at the named session. Only valid

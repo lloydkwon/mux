@@ -196,7 +196,7 @@ func TestKillSessionWithMock(t *testing.T) {
 		if err := KillSession("old-sess"); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		expected := "tmux kill-session -t old-sess"
+		expected := "tmux kill-session -t =old-sess"
 		if m.runs[0] != expected {
 			t.Errorf("expected %q, got %q", expected, m.runs[0])
 		}

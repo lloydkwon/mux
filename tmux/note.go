@@ -37,7 +37,7 @@ func SessionNote(session string) string {
 	if session == "" {
 		return ""
 	}
-	out, err := runner.Output("tmux", "show-options", "-qv", "-t", session, noteOption)
+	out, err := runner.Output("tmux", "show-options", "-qv", "-t", exactSessionOption(session), noteOption)
 	if err != nil {
 		return ""
 	}
@@ -54,9 +54,9 @@ func SetSessionNote(session, note string) error {
 	}
 	note = sanitizeNote(note)
 	if note == "" {
-		return runner.Run("tmux", "set-option", "-ut", session, noteOption)
+		return runner.Run("tmux", "set-option", "-ut", exactSessionOption(session), noteOption)
 	}
-	return runner.Run("tmux", "set-option", "-t", session, noteOption, note)
+	return runner.Run("tmux", "set-option", "-t", exactSessionOption(session), noteOption, note)
 }
 
 // sanitizeNote makes a string safe to put in a tmux option that listFormat reads

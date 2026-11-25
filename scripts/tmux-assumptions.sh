@@ -536,6 +536,16 @@ ok "그 이름이 없으면 kill-session -t =name 은 실패한다" "fail" "$(t 
 ok "그리고 name-2 는 건드리지 않는다" "yes" "$(t has-session -t "=pk-2" 2>/dev/null && echo yes || echo no)"
 ok "그 이름이 없으면 set-option -t =name: 도 실패한다" "fail" \
 	"$(t set-option -t "=pk:" @mux_park_probe on 2>/dev/null && echo ok || echo fail)"
+# TUI 의 x·이름 바꾸기·메모(tmux/session.go, note.go)도 같은 모양으로 지목한다. 확인 창이 떠 있는 사이 그 세션이 사라질
+# 수 있고(task done), 그때 맨 이름은 이웃에게 간다.
+ok "그 이름이 없으면 rename-session -t =name 도 실패한다" "fail" \
+	"$(t rename-session -t "=pk" gone 2>/dev/null && echo ok || echo fail)"
+ok "맨 이름 rename-session 은 그때 name-2 의 이름을 바꾼다 (그래서 = 를 붙인다)" "gone" \
+	"$(t rename-session -t pk gone 2>/dev/null; t has-session -t "=gone" 2>/dev/null && echo gone || echo kept)"
+t rename-session -t "=gone" pk-2
+t set-option -t "=pk-2:" @mux_park_probe on
+t set-option -ut "=pk-2:" @mux_park_probe
+ok "set-option -ut =name: 은 그 세션의 옵션을 지운다" "" "$(t show-options -qv -t "=pk-2:" @mux_park_probe)"
 t kill-session -t "=pk-2"
 rmdir "$PKDIR"
 

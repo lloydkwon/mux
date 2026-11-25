@@ -105,6 +105,29 @@ func TestParkAndRestore(t *testing.T) {
 	}
 }
 
+// 확인 창(x)이 떠 있는 사이 그 세션이 사라지면 y 가 앞부분이 같은 이웃을 닫으면 안 된다.
+func TestKillConfirmNeverReachesANeighbour(t *testing.T) {
+	const session, neighbour = "e2e-kx", "e2e-kx-2"
+	newSession(t, session)
+	newSession(t, neighbour)
+	tui := startTUI(t, "tui-kx")
+	eventually(t, "TUI 가 뜬다", 10*time.Second, func() bool { return strings.Contains(screen(t, tui), neighbour) })
+	tm(t, "send-keys", "-t", tui, "/")
+	tm(t, "send-keys", "-t", tui, "-l", session)
+	tm(t, "send-keys", "-t", tui, "Enter")
+	tm(t, "send-keys", "-t", tui, "g")
+	tm(t, "send-keys", "-t", tui, "x")
+	eventually(t, "닫기 확인 줄", 5*time.Second, func() bool {
+		return strings.Contains(screen(t, tui), `Kill "`+session+`"?`)
+	})
+	tm(t, "kill-session", "-t", "="+session)
+	tm(t, "send-keys", "-t", tui, "y")
+	time.Sleep(1500 * time.Millisecond)
+	if _, err, _ := runTmux("has-session", "-t", "="+neighbour); err != nil {
+		t.Errorf("이웃 세션 %s 을 닫았다", neighbour)
+	}
+}
+
 var (
 	fakeOpencodeOnce sync.Once
 	fakeOpencodeBin  string

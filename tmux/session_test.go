@@ -201,3 +201,30 @@ func TestEditorClientMarkers(t *testing.T) {
 		}
 	}
 }
+
+// 이름으로 세션을 바꾸는 명령은 모두 정확히 지목한다. 맨 이름은 그 세션이 이미 없을 때 앞부분이 같은 이웃에게 간다
+// (t-m1 → t-m12). 짧은 작업 세션(task.md)은 확인 창이 떠 있는 사이에도 사라진다.
+func TestSessionCommandsNeverReachANeighbour(t *testing.T) {
+	cases := map[string]struct {
+		run  func() error
+		want string
+	}{
+		"닫기":          {func() error { return KillSession("t-m1") }, "tmux kill-session -t =t-m1"},
+		"이름 바꾸기":      {func() error { return RenameSession("t-m1", "new") }, "tmux rename-session -t =t-m1 new"},
+		"메모":          {func() error { return SetSessionNote("t-m1", "글") }, "tmux set-option -t =t-m1: @mux_note 글"},
+		"메모 지우기":      {func() error { return SetSessionNote("t-m1", "") }, "tmux set-option -ut =t-m1: @mux_note"},
+		"만들며 다는 프로젝트": {func() error { return CreateSessionWithDir("t-m1", "/p") }, "tmux set-option -t =t-m1: @project_dir /p"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			withMock(t, func(m *mockRunner) {
+				if err := tc.run(); err != nil {
+					t.Fatal(err)
+				}
+				if got := m.runs[len(m.runs)-1]; got != tc.want {
+					t.Errorf("%q, want %q", got, tc.want)
+				}
+			})
+		})
+	}
+}

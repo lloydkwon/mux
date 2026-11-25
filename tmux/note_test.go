@@ -14,7 +14,7 @@ func TestSetSessionNoteWritesAndClears(t *testing.T) {
 		if err := SetSessionNote("dev", "라벨링 후 진행"); err != nil {
 			t.Fatalf("set: %v", err)
 		}
-		want := "tmux set-option -t dev @mux_note 라벨링 후 진행"
+		want := "tmux set-option -t =dev: @mux_note 라벨링 후 진행"
 		if len(m.runs) != 1 || m.runs[0] != want {
 			t.Errorf("runs = %v, want [%q]", m.runs, want)
 		}
@@ -26,7 +26,7 @@ func TestSetSessionNoteWritesAndClears(t *testing.T) {
 		if err := SetSessionNote("dev", "   "); err != nil {
 			t.Fatalf("clear: %v", err)
 		}
-		want := "tmux set-option -ut dev @mux_note"
+		want := "tmux set-option -ut =dev: @mux_note"
 		if len(m.runs) != 1 || m.runs[0] != want {
 			t.Errorf("runs = %v, want [%q]", m.runs, want)
 		}
@@ -36,7 +36,7 @@ func TestSetSessionNoteWritesAndClears(t *testing.T) {
 func TestSessionNoteReadsOption(t *testing.T) {
 	withMock(t, func(m *mockRunner) {
 		m.OnOutput([]byte("라벨링 후 진행\n"), nil,
-			"tmux", "show-options", "-qv", "-t", "dev", "@mux_note")
+			"tmux", "show-options", "-qv", "-t", "=dev:", "@mux_note")
 		if got := SessionNote("dev"); got != "라벨링 후 진행" {
 			t.Errorf("SessionNote = %q", got)
 		}
@@ -46,7 +46,7 @@ func TestSessionNoteReadsOption(t *testing.T) {
 	// a tmux that is not running all mean there is nothing to draw.
 	withMock(t, func(m *mockRunner) {
 		m.OnOutput(nil, fmt.Errorf("no server"),
-			"tmux", "show-options", "-qv", "-t", "dev", "@mux_note")
+			"tmux", "show-options", "-qv", "-t", "=dev:", "@mux_note")
 		if got := SessionNote("dev"); got != "" {
 			t.Errorf("SessionNote on error = %q, want empty", got)
 		}

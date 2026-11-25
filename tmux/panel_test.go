@@ -592,7 +592,7 @@ func TestTogglePanelAutoSkipsProjectSession(t *testing.T) {
 			"-F", "#{pane_id} #{pane_start_command}")
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
-		m.OnOutput([]byte("/home/u/dev/front\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@project_dir")
+		m.OnOutput([]byte("/home/u/dev/front\n"), nil, "tmux", "show-options", "-qv", "-t", "=work:", "@project_dir")
 		// Nothing is attached — the case that defeated the client-based check.
 		m.OnOutput([]byte(""), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
 	}
@@ -627,7 +627,7 @@ func TestTogglePanelAutoOpensInUntaggedSession(t *testing.T) {
 			"-F", "#{pane_id} #{pane_start_command}")
 		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-wqv", "-t", "@7", "@mux_panel_off")
 		m.OnOutput([]byte("work\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{session_name}")
-		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "work", "@project_dir")
+		m.OnOutput([]byte("\n"), nil, "tmux", "show-options", "-qv", "-t", "=work:", "@project_dir")
 		m.OnOutput([]byte("27\n"), nil, "tmux", "list-clients", "-t", "work", "-F", "#{client_pid}")
 		m.OnOutput([]byte("300\n"), nil, "tmux", "display-message", "-p", "-t", "%3", "#{window_width}")
 		old := clientEnvHas
