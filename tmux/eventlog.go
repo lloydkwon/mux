@@ -127,6 +127,11 @@ func MergeEvents(fresh []PanelEvent, live []string) []PanelEvent {
 			if !missing[e.Session] || duplicateAt(events, e) >= 0 {
 				continue
 			}
+			// «종료» 는 되돌리지 않는다. 여기서 채우는 것은 살아 있는 세션이라, 같은 이름이 다시 생겼을 뿐인 세션
+			// 아래에 옛 «○ 종료» 가 보인다. 그다음 소식이 있으면 그것을 쓴다.
+			if e.State == AIStateNone {
+				continue
+			}
 			events = append(events, e)
 			delete(missing, e.Session)
 			added = true

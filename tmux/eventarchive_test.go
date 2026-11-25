@@ -56,6 +56,27 @@ func TestMergeEventsBackfillsASessionThatCameBack(t *testing.T) {
 	})
 }
 
+// 이름을 다시 쓴 세션 아래에 옛 «종료» 가 보이면 안 된다 — 살아 있는 세션에 종료는 늘 거짓이다(task.md). 그 앞의
+// 소식이 있으면 그것을 쓴다. 보관본의 내용은 그대로다.
+func TestBackfillSkipsTheEndingOfAnEarlierSession(t *testing.T) {
+	freezeNow(t, 1000)
+	withMock(t, func(m *mockRunner) {
+		seedArchive(t, []PanelEvent{
+			ev("t-m1", AIStateNone, 300, 0), ev("t-m1", AIStateReady, 200, 200), ev("t-m2", AIStateNone, 100, 0),
+		})
+		mockEventLog(m, nil)
+
+		got := MergeEvents(nil, []string{"t-m1", "t-m2"})
+
+		if len(got) != 1 || got[0].Session != "t-m1" || got[0].State != AIStateReady {
+			t.Errorf("채운 것 = %+v, want t-m1 의 완료 하나", got)
+		}
+		if n := len(loadArchiveFrom(archivePath(t))); n != 3 {
+			t.Errorf("보관본이 %d건이 됐다, want 3", n)
+		}
+	})
+}
+
 // 이 테스트 하나가 설계 전체를 담고 있다. 지우면 기능이 조용히 버그로 되돌아간다:
 // trimLog 이 옵션에서 버린 죽은 세션의 이력이 파일에는 남아 있어야, 그 세션이
 // 돌아왔을 때 채워 넣을 것이 있다.
