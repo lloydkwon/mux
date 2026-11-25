@@ -688,3 +688,17 @@ func TestDoneOnlyWarnsWhenTheSaveFails(t *testing.T) {
 		}
 	})
 }
+
+// 이웃 start 가 worktree 를 만드는 순간에 지워도 멈추지 않는다 — 여기서 멈추면 세션만 닫힌다.
+func TestDoneGetsPastAHalfMadeWorktree(t *testing.T) {
+	withTaskWorld(t, func(w *taskWorld) {
+		w.running("idle")
+		w.failTimes(2, "-c status.showUntrackedFiles=normal worktree remove", halfMade())
+		if _, err := w.done(false); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(w.worktree("m1")); !os.IsNotExist(err) {
+			t.Errorf("worktree 가 남았다: %v", err)
+		}
+	})
+}

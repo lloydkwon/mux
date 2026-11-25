@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -19,7 +20,28 @@ const (
 	// worktreeAddLimit 는 `git worktree add` 의 제한 시간이다. 체크아웃과 post-checkout 훅이 함께 돌아 읽기보다 길게 준다.
 	// 끝이 없으면 입력 화면의 «creating worktree…» 가 영원히 남는다.
 	worktreeAddLimit = 2 * time.Minute
+
+	// worktreeTries 번까지, worktreeRetryDelay 간격으로 gitWorktree 가 다시 부른다.
+	worktreeTries      = 10
+	worktreeRetryDelay = 100 * time.Millisecond
 )
+
+// halfMadeWorktree 는 git 이 이웃 worktree 의 관리 파일을 읽지 못했다는 오류다. 문구는 로캘을 타고 파일 이름은 타지 않는다.
+var halfMadeWorktree = regexp.MustCompile(`worktrees/[^/\n]+/(commondir|locked)\b`)
+
+// gitWorktree 는 `git … worktree …` 하나를 부른다. 다른 git 이 같은 저장소의 worktree 를 만들거나 지우는 순간에는
+// list·add·remove 가 모두 128 로 끝나므로(task.md «겹친 git worktree») 그 오류일 때만 잠깐 뒤 다시 부른다.
+//
+// 다시 불러도 되는 명령만 넘긴다 — `add -b` 는 실패해도 브랜치를 남겨 두 번째가 «이미 있다» 가 된다.
+func gitWorktree(limit time.Duration, args ...string) ([]byte, error) {
+	for try := 1; ; try++ {
+		out, err := outputWithin(limit, "git", args...)
+		if err == nil || try == worktreeTries || !halfMadeWorktree.MatchString(err.Error()) {
+			return out, err
+		}
+		agentSleep(worktreeRetryDelay)
+	}
+}
 
 // WorktreeSession 은 새 worktree 세션을 열 자리다.
 type WorktreeSession struct {

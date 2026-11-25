@@ -405,7 +405,7 @@ func removeTaskWorktree(t Task) error {
 	if err := checkTaskLoss(t); err != nil {
 		return fmt.Errorf("세션은 닫았고 worktree 는 남겼다: %w", err)
 	}
-	if _, err := outputWithin(worktreeAddLimit, "git", "-C", t.Repo, "-c", "status.showUntrackedFiles=normal",
+	if _, err := gitWorktree(worktreeAddLimit, "-C", t.Repo, "-c", "status.showUntrackedFiles=normal",
 		"worktree", "remove", t.Worktree); err != nil {
 		return fmt.Errorf("git worktree remove: %w", err)
 	}

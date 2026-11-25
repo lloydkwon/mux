@@ -44,11 +44,13 @@ type taskWorld struct {
 	onKill    func()
 	onGit     func(k string)
 	gitErr    error // worktree list 의 오류
-	survives  bool  // 세션을 닫아도 Claude 가 끝나지 않는다
-	noClaude  bool  // new-session 해도 Claude 가 뜨지 않는다
-	state     string
-	pane      *fakePane
-	calls     []string
+	// failGit 은 그 git 호출 하나를 실패시킨다. nil 이면 그대로 돈다.
+	failGit  func(k string) error
+	survives bool // 세션을 닫아도 Claude 가 끝나지 않는다
+	noClaude bool // new-session 해도 Claude 가 뜨지 않는다
+	state    string
+	pane     *fakePane
+	calls    []string
 
 	seeds   []string // 만든 씨앗 «폴더|id|제목»
 	seedErr error
@@ -126,6 +128,11 @@ func (w *taskWorld) git(args []string) ([]byte, error) {
 	if w.gitErr != nil && k == "worktree list --porcelain -z" {
 		return nil, w.gitErr
 	}
+	if w.failGit != nil {
+		if err := w.failGit(k); err != nil {
+			return nil, err
+		}
+	}
 	switch {
 	case k == "worktree list --porcelain -z":
 		if !strings.HasPrefix(dir, filepath.Dir(w.main)) {
@@ -146,10 +153,15 @@ func (w *taskWorld) git(args []string) ([]byte, error) {
 			list = append(list, e)
 		}
 		return wtList(list...), nil
-	case strings.HasPrefix(k, "worktree add -b "):
-		branch, path := rest[3], rest[4]
-		w.addTree(path, "refs/heads/"+branch)
-		w.refs = append(w.refs, "refs/heads/"+branch)
+	case len(rest) == 3 && rest[0] == "branch" && rest[2] == "HEAD":
+		w.refs = append(w.refs, "refs/heads/"+rest[1])
+		return nil, nil
+	case strings.HasPrefix(k, "worktree add "):
+		path, ref := rest[2], "refs/heads/"+rest[3]
+		if !slices.Contains(w.refs, ref) {
+			return nil, fmt.Errorf("%w: fatal: invalid reference: %s", exitError(), rest[3])
+		}
+		w.addTree(path, ref)
 		return nil, nil
 	case strings.HasPrefix(k, "-c status.showUntrackedFiles=normal worktree remove "):
 		path := rest[len(rest)-1]
@@ -287,7 +299,7 @@ func (w *taskWorld) called(prefix string) int {
 func (w *taskWorld) mutated() []string {
 	var out []string
 	for _, c := range w.calls {
-		for _, verb := range []string{"worktree add", "worktree remove", "new-session", "kill-session", "send-keys", "run-shell"} {
+		for _, verb := range []string{" branch ", "worktree add", "worktree remove", "new-session", "kill-session", "send-keys", "run-shell"} {
 			if strings.Contains(c, verb) {
 				out = append(out, c)
 			}

@@ -213,6 +213,23 @@ tmux new-session -d -s t-<id> -c <worktree> -x 120 -y 50 'claude --resume U; exe
   지우는 쪽이 더 나쁘다.
 - 권한 모드 옵션은 넘기지 않는다. 사용자의 설정이 정한다.
 
+### 겹친 git worktree
+
+git 은 worktree 를 만들고 지우는 동안 관리 파일(`.git/worktrees/<이름>/commondir`·`locked`)을 잠그지 않는다. 다른 git 이 그 순간 빈
+파일을 읽으면 128 로 끝난다(`failed to read …/commondir`). 빈 `commondir` 을 손으로 만들어 잰 것(git 2.56.1): `worktree list`·`add`·
+`remove` 가 걸리고, mux 가 부르는 나머지(`branch`·`for-each-ref`·`status`·`rev-parse`·`reflog`·`rev-list`)는 걸리지 않는다.
+
+- **그 오류일 때만 0.1초 간격으로 모두 열 번까지 부른다**(`gitWorktree`). 문구는 로캘을 타서 파일 이름으로 알아본다. 만들다 죽어 그대로
+  남은 것이면 호출 하나가 1초쯤 뒤 멈추고 git 의 말을 보인다. 훑기는 세션 폴더마다 저장소를 읽으므로 그런 저장소에 세션이 10개면 10초다(잼).
+  쓰는 순간에 죽어야 생기고 그 저장소는 사람의 `git worktree list` 도 안 되는 상태라 그대로 둔다.
+- **`worktree add -b` 하나로 하지 않는다.** 실패해도 브랜치는 만들어 놓아서, 다시 부르면 «이미 있다» 가 된다. `git branch t-<id> HEAD` 와
+  `worktree add <자리> t-<id>` 로 나누면 둘째만 다시 부르면 된다. 추적 설정·reflog 는 `add -b` 와 같다(`branch.autoSetupMerge` 다섯 값 ×
+  원본·linked worktree 로 잼).
+- 실제로 돌린 것(목록 → 만들기 → 절반은 지우기를 8개씩 동시에, `add` 1600번씩 두 번): 고치기 전 43번 실패, 고친 뒤 0. 셋씩 겹칠 때는
+  고치기 전에도 360번 중 0이었다.
+- `list` 는 걸려도 조용하다 — 훑을 때 세션 폴더와 `--repo` 의 실패는 건너뛰고, 다른 저장소인지 보는 검사는 128 을 «저장소 밖» 으로 읽는다.
+- New worktree(`PrepareWorktree`)는 고치지 않았다. 사람이 하나씩 부르고, 실패해도 다시 하면 남은 브랜치를 쓴다.
+
 ### 제목
 
 `--title` 은 씨앗의 `/rename` 으로 들어가 대화 기록에 남는다. 그래서 재부팅·이어 열기 뒤에도 따라오고 상태 파일이 필요 없다.
@@ -375,6 +392,7 @@ Claude Code 2.1.332, Opus 5.5, auto 모드):
   1초 쥐기를 하나씩 빼면 실패하는 것을 확인했다. 뒤의 저장이 깨진 `last` 를 고쳐 버리므로 `done` 이 도는 내내 `last` 를 지켜본다 — 끝난 뒤에만
   보고 `done` 이 둘일 때는 1초 쥐기를 빼도 통과했다. 넷이면 어느 둘의 저장은 같은 초에 선다(빼고 4번 중 4번 실패).
 - e2e: 터미널이 끊긴 뒤 3초 더 사는 가짜 Claude 의 세션을 닫자마자 `done` 을 부른다.
+- e2e: 작업의 브랜치가 생긴 순간 훅으로 이웃 worktree 의 `commondir` 을 0.3초 비운다. `start` 가 다시 불러 성공한다.
 - e2e: 대화상자를 띄운 채 시작하는 가짜 Claude 에게 `start` 가 글자를 치지 않는다(3).
 - e2e: 다른 소켓을 보는 환경과 UTF-8 이 아닌 로캘에서의 `done`. `TMUX=` 처럼 빈 값은 지운 것이 아니라(tmux 는 있기만 하면 UTF-8 로
   본다) 처음에는 이 시험이 결함을 놓쳤다.
@@ -408,6 +426,8 @@ Claude Code 2.1.332, Opus 5.5, auto 모드):
 
 ## 버린 것
 
+- **`worktree add` 를 mux 의 잠금으로 줄 세우기** — `add` 끼리는 800번 중 0이 되지만, 잠금을 잡은 채로도 `list` 는 21,579번 중 4번
+  실패했고 mux 밖의 git(사람, `claude --worktree`, LADO)은 잠금을 모른다. 체크아웃과 훅까지 줄을 선다.
 - **`claude --worktree`** — 위.
 - **제목을 `claude -n` 으로** — 복구 때 인용이 풀린다.
 - **tmux.conf 의 `@resurrect-processes` 에 `"claude --session-id->claude --resume *"` 더하기** — 동작하겠지만 사용자의 설정을 고쳐야

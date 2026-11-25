@@ -277,6 +277,30 @@ func TestTaskDoneLeavesTheNeighbourAlone(t *testing.T) {
 	}
 }
 
+// 다른 git 이 같은 저장소에 worktree 를 만드는 순간에는 worktree 명령이 128 로 끝난다(git 이 이웃의 빈 commondir 을 읽는다). 그
+// 순간을 훅으로 만든다: 작업의 브랜치가 생기면 이웃의 commondir 을 잠깐 비운다.
+func TestTaskStartGetsPastAHalfMadeWorktree(t *testing.T) {
+	repo := taskRepo(t)
+	git(t, repo, "worktree", "add", "-q", "-b", "other", repo+"-other")
+	commondir := filepath.Join(repo, ".git", "worktrees", filepath.Base(repo)+"-other", "commondir")
+	mark := filepath.Join(t.TempDir(), "fired")
+	hook := "#!/bin/sh\n[ \"$1\" = committed ] && grep -q refs/heads/t-race1 || exit 0\n[ -e " + mark + " ] && exit 0\n" +
+		"cp " + commondir + " " + mark + " && : > " + commondir + "\n" +
+		"(sleep 0.3; cp " + mark + " " + commondir + ") </dev/null >/dev/null 2>&1 &\n"
+	if err := os.WriteFile(filepath.Join(repo, ".git", "hooks", "reference-transaction"), []byte(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	killTask(t, "race1")
+	out, errOut, code := muxTask(t, repo, "start", "race1", "--prompt", "겹친 시작")
+	if _, err := os.Stat(mark); err != nil {
+		t.Fatalf("훅이 돌지 않았다 — 이 시험은 아무것도 재지 않는다: %v", err)
+	}
+	if code != 0 || out == "" {
+		t.Fatalf("start: exit %d, 토큰 %q\n%s", code, out, errOut)
+	}
+	waitTaskIdle(t, repo, "race1")
+}
+
 // 세션을 닫자마자 부른 done 은 그 Claude 가 끝나기를 기다렸다가 지운다. 진짜 Claude 는 끝낼 때 훅이 돌아 몇 초 더 산다.
 func TestTaskDoneWaitsForAClosingClaude(t *testing.T) {
 	repo := taskRepo(t)

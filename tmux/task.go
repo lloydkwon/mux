@@ -168,7 +168,7 @@ type taskRepo struct {
 
 // readTaskRepo 는 dir 이 든 저장소를 읽는다. linked worktree 에서 물어도 원본이 첫 항목이다.
 func readTaskRepo(dir string) (taskRepo, error) {
-	out, err := outputWithin(worktreeReadLimit, "git", "-C", dir, "worktree", "list", "--porcelain", "-z")
+	out, err := gitWorktree(worktreeReadLimit, "-C", dir, "worktree", "list", "--porcelain", "-z")
 	if err != nil {
 		return taskRepo{}, fmt.Errorf("git 저장소를 읽지 못했다 (%s): %w", dir, err)
 	}

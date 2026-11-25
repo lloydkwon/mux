@@ -357,7 +357,11 @@ func addTaskWorktree(from string, repo taskRepo, t Task) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("시작할 커밋을 읽지 못했다: %w", err)
 	}
-	if _, err := outputWithin(worktreeAddLimit, "git", "-C", from, "worktree", "add", "-b", t.Branch, t.Worktree); err != nil {
+	// `worktree add -b` 하나로 하지 않는 이유는 gitWorktree 에 있다.
+	if _, err := outputWithin(worktreeAddLimit, "git", "-C", from, "branch", t.Branch, "HEAD"); err != nil {
+		return "", fmt.Errorf("git branch: %w", err)
+	}
+	if _, err := gitWorktree(worktreeAddLimit, "-C", from, "worktree", "add", t.Worktree, t.Branch); err != nil {
 		return "", fmt.Errorf("git worktree add: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil

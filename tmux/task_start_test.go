@@ -3,6 +3,7 @@ package tmux
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -577,7 +578,7 @@ func TestStartUsesTheRepoOfTheCurrentFolder(t *testing.T) {
 			t.Errorf("task = %+v, %v", res.Task, err)
 		}
 		// 시작점은 사람이 보던 checkout 의 HEAD 다.
-		if w.called("git -C "+w.main+"-feat-x worktree add -b t-m1 ") != 1 {
+		if w.called("git -C "+w.main+"-feat-x branch t-m1 HEAD") != 1 {
 			t.Errorf("calls = %q", w.mutated())
 		}
 	})
@@ -723,5 +724,78 @@ func TestRandomUUIDIsV4(t *testing.T) {
 	b, _ := randomUUID()
 	if err != nil || !re.MatchString(a) || a == b {
 		t.Errorf("%q %q %v", a, b, err)
+	}
+}
+
+// halfMade 는 다른 git 이 같은 저장소의 worktree 를 만드는 순간에 git 이 낸 오류다(2.56.1 에서 옮김).
+func halfMade() error {
+	return fmt.Errorf("%w: 작업 트리 준비 중 ('t-m1' 체크아웃)\nfatal: .git/worktrees/repo-t-m2/commondir 읽기 실패: Success", exitError())
+}
+
+// failTimes 는 prefix 로 시작하는 git 호출을 처음 n 번 실패시킨다.
+func (w *taskWorld) failTimes(n int, prefix string, err error) {
+	w.failGit = func(k string) error {
+		if !strings.HasPrefix(k, prefix) || n == 0 {
+			return nil
+		}
+		n--
+		return err
+	}
+}
+
+// 다른 git 이 worktree 를 만들거나 지우는 순간에는 같은 저장소의 worktree 명령이 128 로 끝난다. 잠깐 뒤 다시 부른다.
+func TestStartGetsPastAHalfMadeWorktree(t *testing.T) {
+	for _, verb := range []string{"worktree list", "worktree add"} {
+		t.Run(verb, func(t *testing.T) {
+			withTaskWorld(t, func(w *taskWorld) {
+				w.failTimes(2, verb, halfMade())
+				res, err := w.start("go")
+				if err != nil || res.Action != TaskCreated || res.Token == nil {
+					t.Fatalf("res = %+v, %v", res, err)
+				}
+				// 다시 부르는 것은 실패한 명령뿐이다 — 브랜치는 한 번만 만든다.
+				if n := w.called("git -C " + w.main + " branch t-m1 HEAD"); n != 1 {
+					t.Errorf("브랜치를 %d 번 만들었다", n)
+				}
+				if !slices.Equal(w.pane.submitted, []string{"go"}) {
+					t.Errorf("제출 = %q", w.pane.submitted)
+				}
+			})
+		})
+	}
+}
+
+// 만들다 죽어 반쯤 남은 worktree 는 기다려도 그대로다. 언젠가 멈추고 git 의 말을 보인다.
+func TestStartGivesUpOnAWorktreeThatStaysHalfMade(t *testing.T) {
+	withTaskWorld(t, func(w *taskWorld) {
+		w.failTimes(-1, "worktree add", halfMade())
+		before := agentNow()
+		_, err := w.start("go")
+		if err == nil || !strings.Contains(err.Error(), "commondir 읽기 실패") {
+			t.Errorf("err = %v", err)
+		}
+		if took := agentNow().Sub(before); took > 2*time.Second || len(w.sessions) != 0 || len(w.seeds) != 0 {
+			t.Errorf("%v 뒤, 세션 %v, 씨앗 %q", took, w.sessions, w.seeds)
+		}
+	})
+}
+
+// 기다린다고 바뀌지 않는 실패는 다시 부르지 않는다.
+func TestOnlyAHalfMadeWorktreeIsRetried(t *testing.T) {
+	for msg, want := range map[string]bool{
+		"fatal: failed to read .git/worktrees/repo-t-m2/commondir: Success":                           true,
+		"fatal: failed to read '.git/worktrees/repo-t-m2/locked': No such file or directory":          true,
+		"fatal: /home/u/repo/.git/worktrees/repo-t-m2/commondir 읽기 실패: 그런 파일이나 디렉터리가 없습니다":            true,
+		"fatal: not a git repository (or any of the parent directories): .git":                        false,
+		"fatal: '/home/u/.ao/data/worktrees/mux/repo-t-m1' already exists":                            false,
+		"fatal: '/home/u/worktrees/repo-t-m1' contains modified or untracked files, use --force to …": false,
+		"git did not answer within 5s": false,
+	} {
+		withTaskWorld(t, func(w *taskWorld) {
+			w.failTimes(1, "worktree list", fmt.Errorf("%w: %s", exitError(), msg))
+			if _, err := readTaskRepo(w.main); (err == nil) != want {
+				t.Errorf("%q: err = %v, 다시 불렀어야 하나 = %v", msg, err, want)
+			}
+		})
 	}
 }
