@@ -187,6 +187,9 @@ func newPrompt(before aiSnapshot, s tmux.Session) bool {
 	return !s.AISince.IsZero() && !before.since.IsZero() && !before.since.Equal(s.AISince)
 }
 
+// taskMarker 는 작업 세션(t-<id>) 이름 앞의 한 칸이다. 글꼴 대체에 기대지 않게 ASCII 다(task.md).
+const taskMarker = "#"
+
 // What a session's disappearance is drawn as. `○` rather than a new glyph
 // because it is already pinned at one cell by TestGlyphWidthsAreStable, and a
 // state row that measures wrong shifts every column after it.
@@ -838,6 +841,12 @@ func notifySessionLine(s tmux.Session, width int, f rowFlags) string {
 		mark = " " + ownMarker
 	}
 
+	// 작업 세션(t-<id>)이라는 표시다. 이름은 그대로 둔다 — 전환도 mux task 도 그 이름으로 부른다.
+	task := ""
+	if _, ok := tmux.TaskID(s.Name); ok {
+		task = taskMarker
+	}
+
 	// The note carries its own two-space separator, so it can be dropped as one
 	// piece and so it reads as the session's subtitle rather than as its age.
 	note := ""
@@ -856,7 +865,7 @@ func notifySessionLine(s tmux.Session, width int, f rowFlags) string {
 	// keeps at least one space before the branch when it has been cut down to
 	// exactly the room left.
 	name := s.Name
-	fixed := ansi.StringWidth(age) + ansi.StringWidth(mark)
+	fixed := ansi.StringWidth(age) + ansi.StringWidth(mark) + ansi.StringWidth(task)
 	room := avail - ansi.StringWidth(name) - fixed - 1
 	if ansi.StringWidth(note)+ansi.StringWidth(branch) > room {
 		if branchRoom := room - ansi.StringWidth(note); branchRoom >= minBranchWidth {
@@ -902,6 +911,7 @@ func notifySessionLine(s tmux.Session, width int, f rowFlags) string {
 
 	segs := []rowSeg{
 		{text: head, color: aiBadgeColor(s)},
+		{text: task, color: colorMuted},
 		{text: name, color: faded},
 		{text: age, color: ageColor},
 		{text: mark, color: colorAccent},

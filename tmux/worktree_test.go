@@ -370,7 +370,7 @@ func TestParseWorktreeList(t *testing.T) {
 	want := []worktreeEntry{
 		{path: "/r", branch: "refs/heads/main"},
 		{path: "/r-d"},
-		{path: "/r-l", branch: "refs/heads/l"},
+		{path: "/r-l", branch: "refs/heads/l", locked: true},
 		{path: "/r-p", branch: "refs/heads/p", prunable: true},
 		{path: "/b", bare: true},
 	}

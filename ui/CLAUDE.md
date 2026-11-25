@@ -16,7 +16,7 @@ tmux·파일·프로세스를 만지는 일은 `tea.Cmd` 로, 기능 스위치�
 | `park.go` | park.md |
 | `worktree.go` | worktree.md |
 | `watch.go` | panel.md, panel-width.md |
-| `watchown.go`, `notify.go`, `editor.go`, `windowfocus.go`, `restart.go` | panel.md (`notify.go` 는 note.md 도) |
+| `watchown.go`, `notify.go`, `editor.go`, `windowfocus.go`, `restart.go` | panel.md (`notify.go` 는 note.md 도, 작업 세션 표시 `taskMarker` 는 task.md) |
 | `watchevents.go` | panel-events.md |
 | `watchghost.go` | panel-width.md |
 | `watchmouse.go` | panel.md, tmux-config.md |

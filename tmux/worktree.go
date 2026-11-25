@@ -37,6 +37,7 @@ type worktreeEntry struct {
 	branch   string // refs/heads/... — detached 면 빈 값
 	bare     bool
 	prunable bool
+	locked   bool
 }
 
 // PrepareWorktree 는 repo 저장소에 branch 의 worktree 를 마련하고 그 자리를 돌려준다.
@@ -165,6 +166,8 @@ func parseWorktreeList(out string) []worktreeEntry {
 			cur.bare = true
 		case line == "prunable" || strings.HasPrefix(line, "prunable "):
 			cur.prunable = true
+		case line == "locked" || strings.HasPrefix(line, "locked "):
+			cur.locked = true
 		}
 	}
 	return trees

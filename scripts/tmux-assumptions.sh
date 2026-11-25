@@ -651,6 +651,76 @@ ok "new-window 도 그렇다" "window" "$(cat "$PD/out-window" 2>/dev/null)"
 t kill-session -t "=pathbase" 2>/dev/null
 rm -rf "$PD"
 
+# ── 21. 작업 세션의 모양 ────────────────────────────────────────────────────
+# docs/design/task.md «실행 모양», tmux/task_start.go 의 taskSessionCommand. 작업 세션은 한 줄짜리 셸 명령
+# `claude --resume <id>; exec "$SHELL"` 로 연다. resurrect 는 pane 프로세스의 **자식** 명령줄을 저장하므로(ps.sh)
+# claude 는 pane 의 자식이어야 하고, 끝난 뒤에는 그 폴더의 셸이 남아야 한다. `A; exec B` 에서 셸이 A 를 fork 하는지는
+# 셸의 일이라 기본 셸이 될 수 있는 것마다 잰다. 폴더와 PATH 는 부른 쪽의 것이다(20절의 낱말 명령과 달리 셸을 거친다).
+echo
+echo "작업 세션의 모양 (docs/design/task.md)"
+TD=$(mktemp -d)
+mkdir "$TD/bin" "$TD/work"
+printf '#!/bin/sh\nexec sleep 300\n' >"$TD/bin/muxtaskprobe"
+chmod +x "$TD/bin/muxtaskprobe"
+t new-session -d -s taskbase "sleep 300"
+for SH in /bin/sh /bin/bash /bin/zsh /usr/bin/zsh; do
+	[ -x "$SH" ] || continue
+	t set -g default-shell "$SH"
+	env PATH="$TD/bin:$PATH" SHELL="$SH" "$TMUX_BIN" -L "$SOCKET" -f /dev/null new-session -d -s t-probe -c "$TD/work" -x 120 -y 50 \
+		'muxtaskprobe --resume id; exec "$SHELL"'
+	PP=$(t display-message -p -t "=t-probe:" '#{pane_pid}')
+	# 셸이 fork 하고 exec 할 때까지 최대 2초 기다린다(settled_cwd 와 같은 이유). 판정은 바꾸지 않는다.
+	for _ in $(seq 20); do
+		ARGS=$(ps -o args= --ppid "$PP" 2>/dev/null | head -1)
+		[ "$ARGS" = "sleep 300" ] && break
+		sleep 0.1
+	done
+	ok "$SH: 명령이 pane 프로세스의 자식이다" "sleep 300" "$ARGS"
+	ok "$SH: 폴더는 -c 로 준 곳이다" "$TD/work" "$(t display-message -p -t "=t-probe:" '#{session_path}')"
+	CHILD=$(ps -o pid= --ppid "$PP" 2>/dev/null | head -1 | tr -d ' ')
+	[ -n "$CHILD" ] && kill "$CHILD" 2>/dev/null
+	for _ in $(seq 20); do
+		ps -o args= --ppid "$PP" 2>/dev/null | grep -q '^sleep 300$' || break
+		sleep 0.1
+	done
+	ok "$SH: 명령이 끝나도 같은 pane 에 셸이 남는다" "$PP 0" "$(t display-message -p -t "=t-probe:" '#{pane_pid} #{pane_dead}')"
+	ok "$SH: 남은 셸의 폴더도 그대로다" "$TD/work" "$(settled_cwd "=t-probe:")"
+	t kill-session -t "=t-probe"
+done
+t set -gu default-shell
+
+# 작업 목록은 UTF-8 로캘이 아닌 곳에서도 정확해야 한다 — done 이 «세션 없음» 을 믿고 worktree 를 지운다
+# (tmux/task.go taskSessions). -u 없이는 탭과 한글이 «_» 가 되고, q: 는 이름의 공백을 «\ » 로 바꾼다.
+mkdir "$TD/한글"
+t new-session -d -s "t-ko" -c "$TD/한글" "sleep 300"
+t new-session -d -s "t-sp x" -c "$TD" "sleep 300"
+# $TMUX 가 있으면 tmux 가 UTF-8 로 간주해 차이가 가려진다 — 빼고 잰다.
+CLIST=$(env -u TMUX -u TMUX_PANE -u LC_ALL -u LC_CTYPE LANG=C "$TMUX_BIN" -u -L "$SOCKET" -f /dev/null list-sessions -F '#{q:session_name} #{session_path}')
+ok "LANG=C 에서도 -u 면 이름과 한글 경로가 그대로다" "t-ko $TD/한글" "$(printf '%s\n' "$CLIST" | grep '^t-ko ')"
+ok "q: 는 이름의 공백을 막아 첫 공백이 경계다" 't-sp\ x '"$TD" "$(printf '%s\n' "$CLIST" | grep '^t-sp')"
+ok "그래서 -u 를 뺄 수 없다: LANG=C 의 탭은 «_» 가 된다" "t-ko_" \
+	"$(env -u TMUX -u TMUX_PANE -u LC_ALL -u LC_CTYPE LANG=C "$TMUX_BIN" -L "$SOCKET" -f /dev/null list-sessions -F "#{session_name}$(printf '\t')#{session_path}" | grep -o '^t-ko.')"
+t new-session -d -s t-nodir -c "$TD/사라진폴더" "sleep 300"
+ok "폴더가 없어도 session_path 는 준 그대로다(되살아난 작업을 알아보는 길)" "$TD/사라진폴더" \
+	"$(t -u display-message -p -t "=t-nodir:" '#{session_path}')"
+ok "start_time 은 서버가 뜬 시각(초)이다" "yes" "$(N=$(t display-message -p '#{start_time}'); D=$(($(date +%s) - N)); [ "$D" -ge 0 ] && [ "$D" -lt 3600 ] && echo yes || echo "$N")"
+# 저장(saveSessionsNow)은 run-shell 이 끝을 기다려 종료 코드를 돌려준다고 믿고, 인자의 # 를 ## 로 막는다.
+RS0=$(date +%s%N)
+t run-shell "sleep 1; exit 3" >/dev/null 2>&1
+RSC=$?
+ok "클라이언트 없이 부른 run-shell 은 끝을 기다려 종료 코드를 준다" "3 yes" "$RSC $([ $(($(date +%s%N) - RS0)) -ge 900000000 ] && echo yes || echo no)"
+t run-shell "printf 'a##b' > '$TD/hash'"
+ok "run-shell 의 ## 는 # 다" "a#b" "$(cat "$TD/hash")"
+# 서버가 없다는 오류의 문구(noTmuxServer). 다른 오류를 «없음» 으로 읽으면 안 된다.
+NOSRV="${TMUX_TMPDIR:-/tmp}/mux-assume-none-$$"
+okc "소켓이 없을 때의 오류 문구" "(No such file or directory)" "$(LANG=ko_KR.UTF-8 "$TMUX_BIN" -S "$NOSRV" list-sessions 2>&1)"
+: >"$NOSRV"
+okc "서버가 죽고 파일만 남았을 때의 오류 문구" "no server running on" "$("$TMUX_BIN" -S "$NOSRV" list-sessions 2>&1)"
+rm -f "$NOSRV"
+
+for S in t-ko "t-sp x" t-nodir taskbase; do t kill-session -t "=$S" 2>/dev/null; done
+rm -rf "$TD"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
 	echo "$CHECKED 개 전부 통과 — $VERSION 에서 mux 의 가정이 유지됩니다."

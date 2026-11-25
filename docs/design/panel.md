@@ -303,6 +303,9 @@ It runs as a **separate process**, so it shares no state with the TUI: its own `
 
 **세션 아래 줄은 지금 하는 일이다** (2026-11-04, 사용자 요청, `tmux/claude_work.go`). 이 줄은 마지막 이벤트였는데, 이벤트의 글은 상태 파일의 대화 이름이라 일을 말하지 못했다. my-mux 는 `/clear` 뒤 Mantis 정리를 하면서 어제의 `fix-intellij-viewport-height` 였고, 폴더에서 만든 이름(`mantis-5c`, `zorin-5d`)은 무엇도 말하지 않았다.
 
+예외는 작업 세션(`t-<id>`)의 사람이 준 제목 하나다(task.md «제목»). 그 이름은 그 작업의 것이라 세션이 사라질 때까지 맞고,
+있으면 모델도 부르지 않는다(`taskPanelTitle`). 작업 세션은 이름 앞에 흐린 `#` 한 칸이 붙는다(`taskMarker`).
+
 살아 있는 대화 7개에서 후보를 재 봤다.
 
 | 출처 | 판단 |

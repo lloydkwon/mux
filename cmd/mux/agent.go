@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/x/ansi"
 	"github.com/lloydkwon/mux/tmux"
 	"github.com/spf13/cobra"
 )
@@ -236,8 +235,7 @@ func agentsJSON(agents []tmux.Agent, self string) ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// writeAgentTable 은 사람이 읽는 표다. 열은 화면 폭으로 맞춘다 — tabwriter 는 글자 수로
-// 세서 한글 이름 뒤의 열이 밀린다.
+// writeAgentTable 은 사람이 읽는 표다.
 func writeAgentTable(w io.Writer, agents []tmux.Agent, self string, now time.Time) {
 	rows := [][]string{{"PANE", "SESSION", "STATE", "SINCE", "NAME", "CWD"}}
 	for _, a := range agents {
@@ -251,22 +249,7 @@ func writeAgentTable(w io.Writer, agents []tmux.Agent, self string, now time.Tim
 		}
 		rows = append(rows, []string{pane, a.Session, string(a.State), since, a.Name, a.CWD})
 	}
-	widths := make([]int, len(rows[0]))
-	for _, r := range rows {
-		for i, c := range r {
-			widths[i] = max(widths[i], ansi.StringWidth(c))
-		}
-	}
-	for _, r := range rows {
-		var b strings.Builder
-		for i, c := range r {
-			b.WriteString(c)
-			if i < len(r)-1 {
-				b.WriteString(strings.Repeat(" ", widths[i]-ansi.StringWidth(c)+2))
-			}
-		}
-		fmt.Fprintln(w, b.String())
-	}
+	writeColumns(w, rows)
 }
 
 func shortAge(d time.Duration) string {
@@ -291,7 +274,7 @@ func exitCode(err error) int {
 		return 3
 	case errors.Is(err, tmux.ErrWaitTimeout):
 		return 4
-	case errors.Is(err, tmux.ErrAgentNotReady), errors.Is(err, tmux.ErrTurnRunning):
+	case errors.Is(err, tmux.ErrAgentNotReady), errors.Is(err, tmux.ErrTurnRunning), errors.Is(err, tmux.ErrTaskRefused):
 		return 5
 	case errors.Is(err, tmux.ErrNotSubmitted):
 		return 6
@@ -299,6 +282,9 @@ func exitCode(err error) int {
 		// 6 과 떼어 둔다: 6 은 «되돌렸으니 다시 보내도 된다» 이고, 이것은 «제출은 됐을 수 있다» 다.
 		// 둘을 섞으면 6 에서 다시 보내는 스크립트가 두 번 제출한다.
 		return 7
+	case errors.Is(err, tmux.ErrTaskUnpushed):
+		// 5 와 떼어 둔다: 5 는 --force 로도 안 되고, 이것은 --force 면 된다(task.md).
+		return 8
 	default:
 		return 1
 	}

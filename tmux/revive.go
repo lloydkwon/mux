@@ -172,6 +172,20 @@ func reviveServer() bool {
 	return false
 }
 
+// liveServerElsewhere 는 기억해 둔 tmux 서버가 살아 있을 때 그 소켓 경로다. 지금 닿지 못한다는 것을 아는 쪽이 부른다 —
+// 그때 이 값이 있으면 서버가 없는 것이 아니라 다른 소켓을 보고 있거나 소켓이 지워진 것이다.
+func liveServerElsewhere() string {
+	path, err := serverStateFile()
+	if err != nil {
+		return ""
+	}
+	st, ok := loadServerStateFrom(path)
+	if !ok || st.PID <= 0 || st.ProcStart == "" || !isAlive(st.PID, st.ProcStart) || !procIsTmuxServer(st.PID) {
+		return ""
+	}
+	return st.SocketPath
+}
+
 // isTmuxServer 는 pid 가 정말 tmux 서버인지 본다.
 //
 // ProcStart 대조 위에 하나 더 얹는 이유는 신호가 되돌릴 수 없기 때문이다.

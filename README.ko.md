@@ -42,6 +42,13 @@ tmux 세션을 터미널에서 빠르게 탐색하고 관리하는 TUI 도구입
   바로 attach합니다. 저장소 칸은 mux를 띄운 세션으로 미리 채워집니다. 그 브랜치의
   worktree가 이미 있으면 그대로 쓰고, 원본 작업 트리의 브랜치나 이미 있는 폴더는
   입력 화면에서 거절합니다. worktree 지우기는 `git worktree remove`로 직접 합니다.
+- **`mux task`** — 작업 하나에 worktree 하나, tmux 세션 하나, Claude 하나를 짝지어 짧게
+  씁니다. `mux task start m123 --prompt "…"`는 저장소 옆에 `<저장소>-t-m123` worktree와
+  `t-m123` 세션을 만들고 첫 프롬프트를 보냅니다. 다시 불러도 프롬프트는 한 번만 들어가고,
+  세션이 사라졌으면 같은 대화로 다시 엽니다. `mux task ls`(`--json`)로 보고,
+  `mux task done m123`으로 세션과 worktree를 정리합니다(브랜치는 남음). 커밋 안 된 변경이
+  있으면 `--force`여도 지우지 않습니다. 볼 저장소는 `~/.config/mux/task-repos.txt`에 한 줄씩
+  적습니다.
 
 - **AI 배지가 라이브 상태까지 표현** — 어떤 AI CLI가 도는지 알려주던 기존
   배지가, 이제 그 도구가 무엇을 하는 중인지도 함께 알려줍니다. 작업

@@ -15,7 +15,8 @@
 // 받은 줄은 $HOME/fake-<name>.log 에 그대로 남긴다 — 글자 그대로 도착했는지 보는 곳이다.
 //
 // `-p` 로 불리면 패널의 제목 호출(tmux/claude_work_title.go)이다. 상태 파일도 입력창도 없이 답만 하고 끝낸다.
-// 호출이 도착한 사실은 $HOME/fake-titles.log 에 한 줄씩 남는다.
+// 호출이 도착한 사실은 $HOME/fake-titles.log 에 한 줄씩 남는다. `-p --session-id <id> '/rename …'` 이면 작업의 씨앗
+// 대화(tmux/task_start.go)다 — 진짜 2.1.332 에서 잰 대로 이름 줄만 든 기록을 남기고, 같은 id 면 거절한다.
 package main
 
 import (
@@ -63,6 +64,10 @@ type fake struct {
 func main() {
 	// flag.Parse 보다 먼저다. 제목 호출의 인자(--model, --json-schema …)를 이 가짜는 정의하지 않는다.
 	if slices.Contains(os.Args[1:], "-p") {
+		if id := argAfter("--session-id"); id != "" {
+			seedConversation(id, strings.TrimPrefix(os.Args[len(os.Args)-1], "/rename "))
+			return
+		}
 		answerTitle()
 		return
 	}
@@ -117,6 +122,54 @@ func answerTitle() {
 	os.Stdout.Write(reply)
 }
 
+func argAfter(flagName string) string {
+	if i := slices.Index(os.Args, flagName); i >= 0 && i+1 < len(os.Args) {
+		return os.Args[i+1]
+	}
+	return ""
+}
+
+// transcriptFile 은 이 폴더에서 연 대화의 기록 파일이다.
+func transcriptFile(home, cwd, sid string) string {
+	return filepath.Join(home, ".claude", "projects", nonAlnum.ReplaceAllString(cwd, "-"), sid+".jsonl")
+}
+
+// seedConversation 은 모델 없이 이름만 든 대화를 만든다.
+func seedConversation(id, title string) {
+	home, _ := os.UserHomeDir()
+	cwd, _ := os.Getwd()
+	path := transcriptFile(home, cwd, id)
+	if _, err := os.Stat(path); err == nil {
+		fmt.Fprintf(os.Stderr, "Error: Session ID %s is already in use.\n", id)
+		os.Exit(1)
+	}
+	os.MkdirAll(filepath.Dir(path), 0o700)
+	row, _ := json.Marshal(map[string]any{"type": "custom-title", "customTitle": title, "sessionId": id})
+	if err := os.WriteFile(path, append(row, '\n'), 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if f, err := os.OpenFile(filepath.Join(home, "fake-seeds.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		fmt.Fprintln(f, id, title)
+		f.Close()
+	}
+	reply, _ := json.Marshal(map[string]any{"type": "result", "is_error": false, "num_turns": 0, "result": "Session renamed to: " + title})
+	os.Stdout.Write(reply)
+}
+
+// resumedTitle 은 기록에 적힌 사람이 준 이름이다.
+func resumedTitle(path string) string {
+	data, _ := os.ReadFile(path)
+	title := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		var row struct{ Type, CustomTitle string }
+		if json.Unmarshal([]byte(line), &row) == nil && row.Type == "custom-title" {
+			title = row.CustomTitle
+		}
+	}
+	return title
+}
+
 func newFake() (*fake, error) {
 	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
@@ -124,6 +177,9 @@ func newFake() (*fake, error) {
 	f.sid = fmt.Sprintf("fake-%d-%d", f.pid, time.Now().UnixNano())
 	if *resume != "" && !*fork {
 		f.sid = *resume
+		if title := resumedTitle(transcriptFile(home, cwd, *resume)); title != "" {
+			*name = title
+		}
 	}
 	f.procStart = procStart()
 	out, err := exec.Command("tmux", "display-message", "-p", "-t", os.Getenv("TMUX_PANE"),
@@ -343,9 +399,9 @@ func (f *fake) writeStatus(status, waitingFor string) {
 var nonAlnum = regexp.MustCompile(`[^A-Za-z0-9]`)
 
 func (f *fake) appendTranscript(row map[string]any) {
-	dir := filepath.Join(f.home, ".claude", "projects", nonAlnum.ReplaceAllString(f.cwd, "-"))
-	os.MkdirAll(dir, 0o700)
-	fh, err := os.OpenFile(filepath.Join(dir, f.sid+".jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	path := transcriptFile(f.home, f.cwd, f.sid)
+	os.MkdirAll(filepath.Dir(path), 0o700)
+	fh, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}

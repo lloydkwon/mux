@@ -14,7 +14,7 @@ test:
 # 패널 폭 저장값, 훅 응답 시간. 단위 테스트는 tmux 를 목으로 바꾸므로 이것들을 못 잡는다.
 # 설치 전에 반드시 통과시킨다.
 e2e:
-	go test -tags e2e -count=1 -timeout 5m ./e2e/
+	go test -tags e2e -count=1 -timeout 8m ./e2e/
 
 # tmux 자신의 동작이 바뀌었는지 확인한다. 유닛 테스트는 tmux 를 목으로 대신하므로
 # 여기서만 잡힌다 — apt/brew 로 tmux 를 올린 뒤에 돌린다.

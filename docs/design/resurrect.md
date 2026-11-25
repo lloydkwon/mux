@@ -131,6 +131,12 @@ resurrect 에도 시드 처리가 있다(«처음부터 복원»이면 세션 `0
 시험할 때: `TMUX_TMPDIR` 로 기본 소켓을 옮기면 mux 의 `tmux` 호출이 전부 격리 서버로 간다. 다만 소켓 경로는
 유닉스 소켓 길이 제한(약 108바이트)에 걸리므로 짧은 디렉터리를 쓴다 — 스크래치 경로는 «File name too long» 이었다.
 
+## 작업 세션 (`t-<id>`)
+
+`mux task` 의 세션은 이 복구가 그대로 되살리는 모양으로 열린다 — pane 프로세스(셸)의 자식이 `claude --resume <id>` 다. mux 가
+복구 때 따로 하는 일은 없고, `mux task done` 이 지운 작업이 되살아나지 않게 저장을 한 번 부르는 것뿐이다(`saveSessionsNow`).
+근거와 왕복 실측은 [task.md](task.md). pane 명령이 Claude 자신인 세션은 그 **자식**(MCP 서버 등)이 저장돼 Claude 가 돌아오지 않는다.
+
 ## 플러그인
 
 - **고정 리비전으로 clone 한다** (`resurrectPlugins`). 영역은 설정을 읽을 때마다 플러그인 코드를 실행하므로,

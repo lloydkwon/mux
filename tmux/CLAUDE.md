@@ -1,7 +1,7 @@
 # tmux/ — 고치기 전에 읽을 설계 문서
 
 루트 `CLAUDE.md` 의 «되돌리기 쉬운 것들»이 먼저다. 모든 `tmux`/`ps`/`pgrep` 호출은
-`runner` 를 거친다(예외 셋은 루트에). 목은 정확한 `"name arg1 arg2"` 로 키잉되므로 플래그를
+`runner` 를 거친다(예외는 루트에). 목은 정확한 `"name arg1 arg2"` 로 키잉되므로 플래그를
 더하면 그 테스트의 목 키도 고친다. 주석에 «measured» 를 쓰면 `scripts/tmux-assumptions.sh` 에 단언을 더한다.
 
 | 파일 | 문서 (`docs/design/`) |
@@ -14,6 +14,7 @@
 | `pair.go` | pair.md |
 | `park.go`, `park_opencode.go` | park.md |
 | `worktree.go` (`session.go` 의 `CurrentSessionName` 도) | worktree.md |
+| `task.go`, `task_start.go`, `task_done.go` (`mux task`) | task.md |
 | `panel.go` | panel.md, tmux-config.md (폭·VS Code 게이트) |
 | `panelwidth.go`, `client.go` | panel-width.md |
 | `eventlog.go`, `eventarchive.go` | panel-events.md |

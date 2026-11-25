@@ -22,7 +22,7 @@ var allAIStates = []tmux.AIState{
 // tries to apply is undone — the only workable rule is that measured width
 // equals drawn width.
 func TestGlyphWidthsAreStable(t *testing.T) {
-	oneCell := []string{"▶", "▼", "◀", "○", "*", "✦", "◈", "⬡", "✧", "⌥", "─", noteGlyph, parkedGlyph}
+	oneCell := []string{"▶", "▼", "◀", "○", "*", "✦", "◈", "⬡", "✧", "⌥", "─", noteGlyph, parkedGlyph, taskMarker}
 	// Screen detection brought sixteen more tools, and every one of their icons
 	// shares the same badge slot. Taken from the map rather than copied here, so
 	// a tool added later cannot skip this check.

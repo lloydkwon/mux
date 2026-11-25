@@ -171,7 +171,7 @@ verdict=$STEP_RC
 finish_step "tmux 가정" "$verdict" "$tline · $(tmux -V)"
 
 # 8. e2e — Makefile 의 e2e 와 같은 명령에 -v 만 더한다(돈 테스트 수를 세려고)
-run_step e2e go test -tags e2e -count=1 -timeout 5m -v ./e2e/
+run_step e2e go test -tags e2e -count=1 -timeout 8m -v ./e2e/
 count_tests "$step_out"
 collect_skips "$step_out" "e2e:"
 verdict=$STEP_RC

@@ -89,6 +89,12 @@ func WithClaudeWork(sessions []Session) []Session {
 	out := make([]Session, len(sessions))
 	for i, s := range sessions {
 		if st, ok := statuses[s.Name]; ok {
+			// 작업 세션에 사람이 준 제목이 있으면 그것이 이 줄이다. 모델을 부를 일도 없다(AIWorkUntitled 를 세우지 않는다).
+			if title := taskPanelTitle(s.Name, cleanWorkText(st.UserName)); title != "" {
+				s.AIWork = title
+				out[i] = s
+				continue
+			}
 			s.AIWork = claudeWork(st.SessionID, st.CWD)
 			if s.AIWork != "" {
 				title, known := storedWorkTitle(st.SessionID, s.AIWork)

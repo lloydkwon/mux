@@ -49,6 +49,9 @@ type Agent struct {
 	SessionID string
 	PID       int
 
+	// namedByUser 는 Name 을 사람이 정했다는 뜻이다(nameSource user).
+	namedByUser bool
+
 	procStart string
 	startedAt int64
 }
@@ -155,6 +158,8 @@ func agentFromFile(sf claudeSessionFile, paneID, session string) Agent {
 		procStart:  sf.ProcStart,
 		startedAt:  sf.StartedAt,
 		WaitingFor: "",
+
+		namedByUser: sf.NameSource == "user",
 	}
 	if a.State == AgentBlocked {
 		a.WaitingFor = sf.WaitingFor

@@ -35,8 +35,11 @@ type ClaudeStatus struct {
 	// A missing nameSource — older Claude builds, 12 of 67 files here — counts as
 	// the tool's. That is what mux did before it read the field, and there is no
 	// evidence either way to act on.
-	Name  string
-	Since time.Time // when the current state began; zero when unknown
+	Name string
+	// UserName 은 사람이 정한 대화 이름이다. 작업 세션(t-<id>)의 패널 제목에만 쓴다(taskPanelTitle) — 그 밖에서는
+	// Name 이 사람 이름을 버리는 이유가 그대로다.
+	UserName string
+	Since    time.Time // when the current state began; zero when unknown
 	// LastActive 는 idle 세션이 실제로 마지막 일을 한 시각이다(대화 기록, claude_activity.go). Since 보다
 	// 늦지 않고, idle 이 아니거나 기록을 못 읽으면 0 이다. 화면의 경과 시간과 recent 정렬은 이것을,
 	// 이벤트 기록은 Since 를 쓴다.
@@ -172,6 +175,9 @@ func parseClaudeStatus(data []byte) (status ClaudeStatus, tmuxRef string, ok boo
 		CWD:       sf.CWD,
 		PID:       sf.PID,
 		Name:      claudeTaskName(sf),
+	}
+	if sf.NameSource == "user" {
+		status.UserName = strings.TrimSpace(sf.Name)
 	}
 	if state == AIStateApproval {
 		status.WaitingFor = sf.WaitingFor

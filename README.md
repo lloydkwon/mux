@@ -43,6 +43,14 @@ Running Claude in one session, Codex in another, and a dev server in a third? Sw
   opened mux from. A branch that already has a worktree is reused; the branch
   the main checkout is on, or a folder already in the way, is refused on the
   prompt. Removing a worktree is left to `git worktree remove`.
+- **`mux task`** — short-lived workers: one task, one worktree, one tmux session,
+  one Claude. `mux task start m123 --prompt "…"` makes the worktree
+  `<repo>-t-m123` and the session `t-m123` and sends the first prompt. Running it
+  again never sends the prompt twice, and reopens the same conversation when the
+  session is gone. `mux task ls` (`--json`) lists them; `mux task done m123` ends
+  the session and removes the worktree (the branch stays), and refuses uncommitted
+  changes even with `--force`. The repositories to look in are listed one per line
+  in `~/.config/mux/task-repos.txt`.
 
 - **The AI badge shows live state** — the badge that already told you *which*
   AI CLI a session runs now also tells you *what it is doing*: working (`⏳`),

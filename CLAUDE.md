@@ -36,6 +36,7 @@ make herdr-check                # herdr 의 응답 모양이 그대로인지 (he
 ./mux --herdr                   # herdr 를 데이터 출처로 목록을 연다 (읽기 전용)
 ./mux --claude                  # 돌고 있는 클로드 «대화» 목록; enter 로 가거나 여기서 이어간다
 ./mux agent ls                  # 이 서버의 Claude pane 목록 — prompt/wait/read 의 대상 (docs/design/agent-api.md)
+./mux task start m123 --prompt "…"    # 작업 하나 = worktree 하나 = t-m123 세션 하나; ls · done (docs/design/task.md)
 ./mux serve --allow you@example.com   # 폰 브라우저 화면(Muxtap), 127.0.0.1:7690 — 폰에서는 `tailscale serve --bg --https=8443 127.0.0.1:7690` 뒤에서 (docs/design/serve.md)
 ./mux serve enroll                    # 폰 하나를 패스키(Face ID·보안 키)로 등록할 일회용 코드 — 10분, 한 번
 go test -tags e2e -run TestAgent ./e2e/   # agent API 만 가짜 Claude 로 (~20초)
@@ -45,7 +46,7 @@ CI (`.github/workflows/ci.yml`) runs test + build + arm64 cross-build + `scripts
 
 **`scripts/tmux-assumptions.sh` is the only thing that tests tmux itself.** Every unit test mocks the runner, which is what makes them fast and hermetic — and also means tmux can change underneath mux without a single test failing. The script starts a private server (`-L`, `-f /dev/null`, so the developer's own sessions and hooks are never touched) and asserts the behaviours the code depends on: the `tmux -V` string `getTmuxVersion` parses, `listFormat`'s field count, that `#{@user_option}` resolves a session option through a pane target, that `-l N` on `split-window` gives exactly N columns, that `list-panes` remembers `pane_start_command` (the panel's only marker), that a batched `capture-pane ; display-message ; capture-pane` emits one separator, and that `run-shell` and `after-new-session` expand `#{pane_id}`. **Add a line here whenever a comment says "measured" or "verified"** — otherwise that one assumption is the one that breaks silently on the next upgrade. `make tmux-check` runs it; `TMUX_BIN=/path/to/tmux` points it at a candidate binary instead of PATH.
 
-**Check the candidate before switching, not after.** Putting a new tmux on PATH makes the *client* new while the running *server* stays old, and the protocol mismatch rejects every tmux call — mux, its panels and any command you type — until the server restarts, which ends every session on it. `TMUX_BIN` is how the answer arrives before that price is paid. Verified this way: 22/22 on 3.4 and on 3.7c; 62/62 on 3.4 and 3.8 (2026-11-02, 3.8 은 Docker `ubuntu:24.04` 에서 `--enable-systemd --enable-utempter` 로 빌드). 3.8 은 `mouse` 의 기본값이 on 이 되어, 기본값에 기대던 13절이 `mouse off` 를 명시하게 됐다. CI 러너(ubuntu-26.04, apt 의 tmux 3.6)와 같은 컨테이너에서도 63/63 과 e2e 통과 — 러너에는 `TERM` 이 없어 스크립트가 `xterm-256color` 를 정해 준다. 2026-11-03 에 16절(`session_activity`)을 더해 3.4·3.8 모두 64/64, 같은 날 17절(보관함의 `=name` 지목, `-c` 의 `#` 이스케이프)과 18절(창 밖 칸의 fill-character, 마우스 움직임과 client_activity, 맞춤 표식)을 더해 77/77. 2026-11-17 에 19절(`mux serve` 의 `capture-pane -t =name:` 지목)을 더해 3.8 에서 80/80. 2026-11-23 에 러너의 3.6 에서 17절이 한 번 깨졌는데, `##` 이스케이프가 아니라 pane 을 만들자마자 폴더를 읽는 경쟁이었다(fork 된 자식이 chdir 하기 전이면 빈 값이나 서버의 폴더) — 그런 단언은 `settled_cwd` 로 읽는다. 고친 뒤 `ubuntu:26.04` 컨테이너의 3.6 과 3.8 에서 82/82. 컨테이너에는 `LANG=C.UTF-8` 을 준다 — 없으면 한글 메모 단언 2개가 로캘 때문에 깨진다.
+**Check the candidate before switching, not after.** Putting a new tmux on PATH makes the *client* new while the running *server* stays old, and the protocol mismatch rejects every tmux call — mux, its panels and any command you type — until the server restarts, which ends every session on it. `TMUX_BIN` is how the answer arrives before that price is paid. Verified this way: 22/22 on 3.4 and on 3.7c; 62/62 on 3.4 and 3.8 (2026-11-02, 3.8 은 Docker `ubuntu:24.04` 에서 `--enable-systemd --enable-utempter` 로 빌드). 3.8 은 `mouse` 의 기본값이 on 이 되어, 기본값에 기대던 13절이 `mouse off` 를 명시하게 됐다. CI 러너(ubuntu-26.04, apt 의 tmux 3.6)와 같은 컨테이너에서도 63/63 과 e2e 통과 — 러너에는 `TERM` 이 없어 스크립트가 `xterm-256color` 를 정해 준다. 2026-11-03 에 16절(`session_activity`)을 더해 3.4·3.8 모두 64/64, 같은 날 17절(보관함의 `=name` 지목, `-c` 의 `#` 이스케이프)과 18절(창 밖 칸의 fill-character, 마우스 움직임과 client_activity, 맞춤 표식)을 더해 77/77. 2026-11-17 에 19절(`mux serve` 의 `capture-pane -t =name:` 지목)을 더해 3.8 에서 80/80. 2026-11-23 에 러너의 3.6 에서 17절이 한 번 깨졌는데, `##` 이스케이프가 아니라 pane 을 만들자마자 폴더를 읽는 경쟁이었다(fork 된 자식이 chdir 하기 전이면 빈 값이나 서버의 폴더) — 그런 단언은 `settled_cwd` 로 읽는다. 고친 뒤 `ubuntu:26.04` 컨테이너의 3.6 과 3.8 에서 82/82. 2026-11-25 에 21절(작업 세션의 모양, 셸마다)을 더해 3.8 에서 107/107(셸 수에 따라 준다). 컨테이너에는 `LANG=C.UTF-8` 을 준다 — 없으면 한글 메모 단언 2개가 로캘 때문에 깨진다.
 
 Note the private server has no user config, so `base-index` is tmux's default 0 — target windows by `#{window_id}`, never `sess:1`. Releases are tag-driven via goreleaser. Commits follow Conventional Commits.
 
@@ -73,7 +74,7 @@ Note the private server has no user config, so `base-index` is tmux's default 0 
 
 Three layers, strictly one-directional:
 
-- `cmd/mux` — cobra CLI: root (TUI), `popup`, `setup-keybind`, `setup-panel`, `status`, `watch`, `panel`, `nav`, `agent`, `serve`.
+- `cmd/mux` — cobra CLI: root (TUI), `popup`, `setup-keybind`, `setup-panel`, `status`, `watch`, `panel`, `nav`, `agent`, `task`, `serve`.
 - `tmux/` — everything that shells out or reads the filesystem. No UI dependencies.
 - `herdr/` — the same job for herdr, and the only package that reads it. Imports `tmux` for the session types and nothing else; `tmux` does not know it exists.
 - `ui/` — Bubble Tea model, rendering, preferences. Depends on `tmux` and `herdr`.
@@ -83,7 +84,7 @@ Three layers, strictly one-directional:
 
 `tmux/runner.go` defines a package-level `runner CommandRunner` var. Every `tmux`/`ps`/`pgrep` call in the package must use `runner.Output` / `runner.Run` — that is what makes the package testable. Tests call `SetRunner(mockRunner)` via the `withMock` helper in `tmux/runner_test.go`; the mock is keyed by the exact `"name arg1 arg2"` string, so adding a flag to a command breaks its test until the mock key is updated.
 
-Two deliberate exceptions bypass the runner because they must hit the real process: `getTmuxVersion` in `tmux/popup.go`, and `AttachToSession`/`DetachClient` in `ui/app.go`. `runWorkTitleModel` in `tmux/claude_work_title.go` 도 러너를 거치지 않는다 — stdin·환경·폴더·타임아웃이 필요하고, 테스트는 `askWorkTitle` 을 바꾼다.
+Two deliberate exceptions bypass the runner because they must hit the real process: `getTmuxVersion` in `tmux/popup.go`, and `AttachToSession`/`DetachClient` in `ui/app.go`. `runWorkTitleModel` in `tmux/claude_work_title.go` 도 러너를 거치지 않는다 — stdin·환경·폴더·타임아웃이 필요하고, 테스트는 `askWorkTitle` 을 바꾼다. `runTaskSeed`(`tmux/task_start.go`)도 같은 이유이고 테스트는 `seedTaskConversation` 을 바꾼다.
 
 ### The 500ms tick drives everything — so everything expensive is TTL-cached
 
@@ -220,6 +221,14 @@ Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale a
   보이려면 git 은 TUI 안이어야 하고, 세션은 루프 밖이어야 한다. 그 세션에 `@project_dir` 를 달지 않는다 — 달면 패널 자동 삽입이
   물러난다. 원본 작업 트리의 브랜치·이미 있는 폴더는 거절하고, 그 브랜치의 linked worktree 가 있으면 다시 쓴다. Repo 칸은
   커서가 아니라 mux 를 띄운 세션(`CurrentSessionName`, client_pid 확인)에서 온다. (worktree.md)
+- **작업 세션(`mux task`)의 명령줄은 `claude --resume <id>; exec "$SHELL"` 이고 사람이 쓴 글이 없다.** resurrect 는 pane 의 **자식** 명령을
+  저장했다가 인용 없이 다시 친다 — Claude 를 pane 명령으로 띄우면 복구되지 않고, 제목이 든 인자는 프롬프트나 셸 명령이 된다. 그래서
+  씨앗 대화를 `claude -p … /rename` 으로 먼저 만든다(모델 호출 없음). worktree 는 mux 가 만든다 — `claude --worktree` 는 `/exit` 때
+  브랜치까지 지우고 `origin/HEAD` 에서 시작한다. `done` 은 git 에 `--force` 를 주지 않고, `status.showUntrackedFiles` 를 명시하고(no 면
+  `git worktree remove` 가 추적 안 된 파일째 지운다), detached 의 떠 있는 커밋을 막고, `=t-<id>` 로 닫고(`t-m1` 이 없으면 `t-m12` 가
+  죽는다), 닫은 뒤 resurrect 저장을 한 번 부른다(없으면 지운 작업이 재부팅 뒤 홈 폴더에서 되살아난다). 종료 코드 5(`--force` 로도
+  안 됨)와 8(`--force` 면 됨)을 합치지 않는다. 답하지 못하는 tmux 서버, 다른 소켓에 살아 있는 서버를 «세션 없음» 으로 읽지 않는다 — 목록은 `tmux -u` 와 `#{q:}` 로 읽는다(UTF-8 이 아닌 로캘에서 탭이 `_` 가 되어 모든 세션이 사라진 것으로 읽힌다). 보관본에서 `○ 종료` 를
+  되돌리지 않는다. (task.md, panel-events.md)
 - **`-c` 에 넘기는 디렉터리는 `tmuxDirArg` 를 거친다** — tmux 는 `-c` 를 포맷으로 펼쳐서 디렉터리 이름의 `#(…)` 가
   셸 명령으로 돈다(실측). `set-option -t` 는 pane 대상이라 정확히 지목하려면 `=name:`(콜론까지)이다. (park.md, 17절)
 - **`mux serve` 는 127.0.0.1 에만 바인드하고, `Tailscale-User-Login` 이 `--allow` 목록일 때만 응답한다.** Host(`.ts.net`

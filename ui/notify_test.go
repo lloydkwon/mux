@@ -998,6 +998,32 @@ func TestDetectTransitionsCarriesTheTaskName(t *testing.T) {
 // gives way first, then the note is cut, and below minNoteWidth it is dropped
 // whole. The row stays owned by its session, which is what the click map
 // (sessionAtRow) and the keyboard cursor (sessionOrder) both index.
+// 작업 세션(t-<id>)만 이름 앞에 표시가 붙고, 행의 폭은 어느 폭에서나 그대로다.
+func TestNotifyMarksTaskSessions(t *testing.T) {
+	row := func(name string, width int) string {
+		s := sess(name, tmux.AIStateWorking)
+		s.AISince = time.Now().Add(-time.Minute)
+		s.GitBranch = name
+		return ansi.Strip(notifySessionLine(s, width, rowFlags{}))
+	}
+	for name, marked := range map[string]bool{"t-m1": true, "t-wms-45": true, "mux": false, "t-": false, "t-Big": false, "my-t-m1": false} {
+		got := strings.Contains(row(name, 48), taskMarker+name)
+		if got != marked {
+			t.Errorf("%s: marked = %v, want %v (%q)", name, got, marked, row(name, 48))
+		}
+	}
+	// 표시가 먹은 칸은 브랜치 왼쪽의 빈칸에서 나온다. 오른쪽 여백 한 칸이 그대로여야 폭 계산에 들어간 것이다.
+	if got := row("t-m1", 48); !strings.HasSuffix(got, "t-m1 ") {
+		t.Errorf("오른쪽 여백이 사라졌다: %q", got)
+	}
+	for width := 8; width <= 80; width++ {
+		a, b := ansi.StringWidth(row("t-m1", width)), ansi.StringWidth(row("x-m1", width))
+		if a != b {
+			t.Errorf("width %d: 작업 행 %d칸, 보통 행 %d칸", width, a, b)
+		}
+	}
+}
+
 func TestNotifyNoteSitsOnTheSessionRow(t *testing.T) {
 	now := time.Now()
 	noted := sess("mux", tmux.AIStateWorking)
