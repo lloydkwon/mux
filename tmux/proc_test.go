@@ -2,7 +2,11 @@ package tmux
 
 import (
 	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestReadProcStartSelf(t *testing.T) {
@@ -50,5 +54,35 @@ func TestProcessAliveRejectsDeadPIDs(t *testing.T) {
 		if processAlive(pid, "") {
 			t.Errorf("expected pid %d to be reported dead", pid)
 		}
+	}
+}
+
+// 끝났는데 부모가 아직 거두지 않은 프로세스(좀비)는 signal 0 을 받고 /proc 에도 시작 시각째 남아 있다. PID 1 이 고아를 거두지
+// 않는 컨테이너에서는 영영 남는다.
+func TestProcessAliveRejectsZombies(t *testing.T) {
+	cmd := exec.Command("true")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Wait()
+	pid := cmd.Process.Pid
+	start, ok := readProcStart(pid)
+	if !ok {
+		t.Skip("no /proc on this platform")
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(stat), ") Z ") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("좀비가 되지 않았다: %s", stat)
+		}
+	}
+	if processAlive(pid, "") || processAlive(pid, start) {
+		t.Error("좀비를 살아 있다고 봤다")
 	}
 }

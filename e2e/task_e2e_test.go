@@ -114,6 +114,30 @@ func hasSession(name string) bool {
 	return err == nil
 }
 
+// claudeIn 은 dir 에서 도는 Claude 의 pid 다.
+func claudeIn(t *testing.T, dir string) int {
+	t.Helper()
+	files, _ := filepath.Glob(filepath.Join(home, ".claude", "sessions", "*.json"))
+	for _, f := range files {
+		var sf struct {
+			PID int    `json:"pid"`
+			CWD string `json:"cwd"`
+		}
+		if data, err := os.ReadFile(f); err == nil && json.Unmarshal(data, &sf) == nil && sf.CWD == dir && running(sf.PID) {
+			return sf.PID
+		}
+	}
+	t.Fatalf("%s 에서 도는 Claude 가 없다", dir)
+	return 0
+}
+
+// running 은 프로세스가 돌고 있는지 본다. 끝났는데 거두어지지 않은 것(좀비)은 도는 것이 아니다 — init 없는 컨테이너에서는
+// 그대로 남는다.
+func running(pid int) bool {
+	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	return err == nil && !strings.Contains(string(stat), ") Z ")
+}
+
 func commitFile(t *testing.T, dir, name string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(name+"\n"), 0o644); err != nil {
@@ -238,7 +262,10 @@ func TestTaskDoneLeavesTheNeighbourAlone(t *testing.T) {
 		}
 		waitTaskIdle(t, repo, id)
 	}
+	// 닫힌 세션의 Claude 가 아직 살아 있는 동안의 done 은 다음 시험이 본다. 여기서 재는 것은 이웃이다.
+	pid := claudeIn(t, repo+"-t-n1")
 	tm(t, "kill-session", "-t", "=t-n1")
+	eventually(t, "닫힌 세션의 Claude 가 끝난다", 10*time.Second, func() bool { return !running(pid) })
 	if _, errOut, code := muxTask(t, repo, "done", "n1"); code != 0 {
 		t.Fatalf("done n1: exit %d\n%s", code, errOut)
 	}
@@ -247,6 +274,30 @@ func TestTaskDoneLeavesTheNeighbourAlone(t *testing.T) {
 	}
 	if row := taskByID(t, repo, "n12"); row == nil || row.Session == "" {
 		t.Errorf("n12 = %+v", row)
+	}
+}
+
+// 세션을 닫자마자 부른 done 은 그 Claude 가 끝나기를 기다렸다가 지운다. 진짜 Claude 는 끝낼 때 훅이 돌아 몇 초 더 산다.
+func TestTaskDoneWaitsForAClosingClaude(t *testing.T) {
+	repo := taskRepo(t)
+	commitFile(t, repo, ".fake-slow-exit") // 가짜 Claude 는 이 파일이 있는 폴더에서 천천히 끝난다
+	git(t, repo, "push", "-q", "origin", "main")
+	killTask(t, "slow1")
+	if _, errOut, code := muxTask(t, repo, "start", "slow1", "--prompt", "천천히 끝나는 시험"); code != 0 {
+		t.Fatalf("start: exit %d\n%s", code, errOut)
+	}
+	waitTaskIdle(t, repo, "slow1")
+	wt := repo + "-t-slow1"
+	pid := claudeIn(t, wt)
+	tm(t, "kill-session", "-t", "=t-slow1")
+	if !running(pid) {
+		t.Fatal("가짜 Claude 가 바로 끝났다 — 이 시험은 아무것도 재지 않는다")
+	}
+	if _, errOut, code := muxTask(t, repo, "done", "slow1"); code != 0 {
+		t.Fatalf("done: exit %d\n%s", code, errOut)
+	}
+	if _, err := os.Stat(wt); !os.IsNotExist(err) || running(pid) {
+		t.Errorf("worktree %v, Claude 살아 있음 %v", err, running(pid))
 	}
 }
 

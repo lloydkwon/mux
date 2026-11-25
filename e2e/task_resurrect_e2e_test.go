@@ -92,6 +92,40 @@ func (s privateServer) assertSaved(saves string, ids ...string) {
 	}
 }
 
+// watchLast 는 돌려준 함수를 부를 때까지 last 가 늘 있는 파일을 가리키는지 지켜본다. 깨진 last 는 뒤의 저장이 고쳐 버리므로
+// 끝난 뒤에만 보면 놓친다.
+func (s privateServer) watchLast(saves string) (stop func()) {
+	s.t.Helper()
+	last := filepath.Join(saves, "last")
+	quit, done := make(chan struct{}), make(chan struct{})
+	looked, broken, first := 0, 0, ""
+	go func() {
+		defer close(done)
+		for {
+			if _, err := os.Stat(last); err != nil {
+				if broken++; first == "" {
+					target, _ := os.Readlink(last)
+					first = fmt.Sprintf("%s → %s", time.Now().Format("05.000"), target)
+				}
+			}
+			looked++
+			select {
+			case <-quit:
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}()
+	return func() {
+		s.t.Helper()
+		close(quit)
+		<-done
+		if broken > 0 || looked < 10 {
+			s.t.Errorf("last 가 깨져 있었다: %d번 봐서 %d번 (처음 %s)", looked, broken, first)
+		}
+	}
+}
+
 // waitServerAge 는 서버가 뜬 지 age 가 지나기를 기다린다.
 func waitServerAge(t *testing.T, s privateServer, age time.Duration) {
 	t.Helper()
@@ -198,12 +232,13 @@ run-shell '%s/resurrect.tmux'
 	}
 	// 서버가 뜬 지 30초 안에는 done 이 저장을 부르지 않는다(복원 중인 목록으로 덮지 않게).
 	waitServerAge(t, s, 31*time.Second)
-	// 사용자의 훅(잠금 + 1초)이 걸린 서버에서 done 둘을 함께, 이어서 start 둘을 함께 부른다. done 둘의 저장은 잠금이 없으면
-	// 같은 초에 선다.
+	// 사용자의 훅(잠금 + 1초)이 걸린 서버에서 done 넷을 함께, 이어서 start 둘을 함께 부른다. done 의 저장들은 잠금이 없으면
+	// 겹치고, 잠금만 있고 1초를 더 쥐지 않으면 이어서 돌아 같은 초에 선다 — 넷이면 어느 둘은 같은 초다.
 	s.run("set-hook", "-g", "session-created", `run-shell -b "if [ $(( $(date +%s) - #{start_time} )) -gt 30 ]; then { flock 9; `+
 		plugin+`/scripts/save.sh quiet; sleep 1; } 9>>`+saves+`/.save.lock; fi"`)
+	intact := s.watchLast(saves)
 	var wg sync.WaitGroup
-	for _, id := range []string{"r3", "r4"} {
+	for _, id := range []string{"r3", "r4", "p2", "p3"} {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -213,10 +248,10 @@ run-shell '%s/resurrect.tmux'
 		}()
 	}
 	wg.Wait()
-	// 뒤의 저장이 깨진 last 를 고쳐 버리면 겹침이 보이지 않는다 — start 를 부르기 전에 본다.
-	s.assertSaved(saves, "r1", "r12", "p1", "p2", "p3")
+	intact()
+	s.assertSaved(saves, "r1", "r12", "p1")
 	startAll("p4", "p5")
-	s.assertSaved(saves, "r1", "r12", "p1", "p2", "p3", "p4", "p5")
+	s.assertSaved(saves, "r1", "r12", "p1", "p4", "p5")
 
 	// «재부팅» — 서버를 내리고 새로 띄워 복원한다.
 	s.kill()
@@ -224,8 +259,10 @@ run-shell '%s/resurrect.tmux'
 	s.boot()
 	s.run("run-shell", plugin+"/scripts/restore.sh")
 
-	if got := s.sessions(); strings.Contains(got, "t-r3") || strings.Contains(got, "t-r4") {
-		t.Errorf("끝낸 작업이 되살아났다:\n%s", got)
+	for _, id := range []string{"r3", "r4", "p2", "p3"} {
+		if got := s.sessions(); strings.Contains(got+"\n", "t-"+id+"\n") {
+			t.Errorf("끝낸 작업 %s 가 되살아났다:\n%s", id, got)
+		}
 	}
 	for _, id := range []string{"r1", "r12", "p1", "p4"} {
 		for deadline := time.Now().Add(20 * time.Second); !idle(id); time.Sleep(200 * time.Millisecond) {

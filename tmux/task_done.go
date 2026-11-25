@@ -74,6 +74,7 @@ func FinishTask(req TaskDoneRequest) (TaskDone, error) {
 	}
 	res.Task = t
 
+	scan.waitClosingClaude(t)
 	if _, err := checkTaskIdle(scan, t, req.Pane); err != nil {
 		return res, err
 	}
@@ -89,6 +90,9 @@ func FinishTask(req TaskDoneRequest) (TaskDone, error) {
 	}
 	if t.Worktree != res.Task.Worktree {
 		return res, fmt.Errorf("확인하는 사이 작업 %s 가 바뀌었다 (%q → %q) — 다시 하라", t.ID, res.Task.Worktree, t.Worktree)
+	}
+	if res.Task.Session == "" && t.Session != "" {
+		return res, fmt.Errorf("확인하는 사이 세션 %s 가 열렸다 — 다시 하라", t.Session)
 	}
 	pids, err := checkTaskIdle(scan, t, req.Pane)
 	if err != nil {
@@ -209,6 +213,26 @@ func checkTaskIdle(scan taskScan, t Task, pane string) ([]int, error) {
 	return pids, nil
 }
 
+// waitClosingClaude 는 작업 세션이 이미 없을 때 거기서 돌던 Claude 가 끝나기를 taskExitTimeout 까지 기다린다. 사람이 세션을
+// 막 닫았으면 끝낼 때 도는 훅 때문에 아직 살아 있다(start 의 conversationHolder 와 같은 규칙). pane 에 사는 Claude 는 끝나는
+// 중이 아니므로 기다리지 않는다. 끝나지 않은 것을 거절하는 일은 checkTaskIdle 이 한다.
+func (scan taskScan) waitClosingClaude(t Task) {
+	if t.Session != "" || t.Worktree == "" || t.foreign != "" {
+		return
+	}
+	var pids []int
+	for _, sf := range liveClaudeSessionFiles() {
+		if !underDir(sf.CWD, t.Worktree) {
+			continue
+		}
+		if slices.ContainsFunc(scan.agents, func(a Agent) bool { return a.PID == sf.PID }) {
+			return
+		}
+		pids = append(pids, sf.PID)
+	}
+	waitPIDsExit(pids, taskExitTimeout)
+}
+
 // describeHolder 는 worktree 를 열고 있는 세션 밖의 Claude 를 말한다 — 무엇을 닫으면 되는지가 다르다.
 func (scan taskScan) describeHolder(t Task, pid int) string {
 	for _, a := range scan.agents {
@@ -219,6 +243,10 @@ func (scan taskScan) describeHolder(t Task, pid int) string {
 			return fmt.Sprintf("리뷰어 세션 %s 가 이 worktree 를 열고 있다 — tmux kill-session -t =%s 뒤에 다시 하라", a.Session, a.Session)
 		}
 		return fmt.Sprintf("세션 %s 의 Claude(pid %d)가 이 worktree 를 열고 있다 — 끝낸 뒤 다시 하라", a.Session, pid)
+	}
+	if t.Session == "" {
+		return fmt.Sprintf("세션 밖의 Claude(pid %d)가 이 worktree 를 열고 있다(%v 기다렸다) — 방금 닫은 세션의 것이면 몇 초 뒤 다시 하라. "+
+			"다른 tmux 서버나 herdr 의 것이면 끝낸 뒤 다시 하라", pid, taskExitTimeout)
 	}
 	return fmt.Sprintf("세션 밖의 Claude(pid %d)가 이 worktree 를 열고 있다 — 다른 tmux 서버나 herdr 일 수 있다. 끝낸 뒤 다시 하라", pid)
 }

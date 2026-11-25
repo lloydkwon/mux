@@ -349,6 +349,119 @@ func TestDoneRefusesWhileAnotherClaudeHoldsTheFolder(t *testing.T) {
 	})
 }
 
+// closing 은 세션은 이미 없고 그 세션의 Claude 만 아직 살아 있는 작업이다 — 사람이 방금 닫았다.
+func (w *taskWorld) closing(status string) {
+	w.watch(w.main)
+	w.addTree(w.worktree("m1"), "refs/heads/t-m1")
+	w.writeClaude("t-m1", "conv", w.worktree("m1"), status)
+	taskExitTimeout = 10 * time.Second
+}
+
+// 세션을 막 닫고 부른 done 은 그 Claude 가 끝나기를 기다렸다가 지운다. 닫힐 때 무엇을 하던 중이었는지는 따지지 않는다.
+func TestDoneWaitsForTheClaudeOfAJustClosedSession(t *testing.T) {
+	for _, status := range []string{"idle", "busy", "waiting"} {
+		t.Run(status, func(t *testing.T) {
+			withTaskWorld(t, func(w *taskWorld) {
+				w.closing(status)
+				begin, sleep := agentNow(), agentSleep
+				agentSleep = func(d time.Duration) {
+					if sleep(d); agentNow().Sub(begin) >= 3*time.Second {
+						w.stopClaude()
+					}
+				}
+				removed := 0
+				w.onGit = func(k string) {
+					if !strings.Contains(k, "worktree remove") {
+						return
+					}
+					if removed++; isAlive(taskPID, "") {
+						t.Error("Claude 가 살아 있는데 worktree 를 지웠다")
+					}
+				}
+				if _, err := w.done(false); err != nil || removed != 1 {
+					t.Errorf("err = %v, 지운 횟수 = %d", err, removed)
+				}
+				if took := agentNow().Sub(begin); took < 3*time.Second || took > 4*time.Second {
+					t.Errorf("기다린 시간 = %v", took)
+				}
+			})
+		})
+	}
+}
+
+// 끝나지 않으면 거절하고, 방금 닫은 세션이면 다시 해 보라고 알린다.
+func TestDoneGivesUpOnAClaudeThatStays(t *testing.T) {
+	for status, want := range map[string]error{"idle": ErrTaskRefused, "busy": ErrTaskRefused, "waiting": ErrAgentBlocked} {
+		t.Run(status, func(t *testing.T) {
+			withTaskWorld(t, func(w *taskWorld) {
+				w.closing(status)
+				begin := agentNow()
+				_, err := w.done(true)
+				if !errors.Is(err, want) || !strings.Contains(err.Error(), "방금 닫은 세션") {
+					t.Errorf("err = %v, want %v", err, want)
+				}
+				if took := agentNow().Sub(begin); took < taskExitTimeout || took > taskExitTimeout+time.Second {
+					t.Errorf("기다린 시간 = %v", took)
+				}
+				if m := w.mutated(); len(m) != 0 {
+					t.Errorf("무언가 했다: %q", m)
+				}
+			})
+		})
+	}
+}
+
+// 끝나는 중이 아닌 것이 분명하면 기다리지 않는다: pane 에 사는 Claude(리뷰어·다른 세션)와, 작업 세션이 아직 있을 때.
+func TestDoneDoesNotWaitForAClaudeThatIsNotClosing(t *testing.T) {
+	cases := map[string]func(w *taskWorld){
+		"리뷰어": func(w *taskWorld) {
+			w.closing("idle")
+			w.sessions["r-m1"], w.paneSession = w.worktree("m1"), "r-m1"
+			w.writeClaude("r-m1", "rev", w.worktree("m1"), "idle")
+		},
+		"작업 세션이 있다(Claude 는 꺼졌다)": func(w *taskWorld) {
+			w.running("idle")
+			w.stopClaude()
+			taskExitTimeout = 10 * time.Second
+			b, _ := json.Marshal(map[string]any{"pid": 777, "sessionId": "s", "cwd": w.worktree("m1"), "procStart": "1", "status": "idle"})
+			os.WriteFile(w.claudeFile(777), b, 0o600)
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			withTaskWorld(t, func(w *taskWorld) {
+				setup(w)
+				begin := agentNow()
+				if _, err := w.done(true); !errors.Is(err, ErrTaskRefused) || strings.Contains(err.Error(), "방금 닫은 세션") {
+					t.Errorf("err = %v", err)
+				}
+				if took := agentNow().Sub(begin); took > time.Second {
+					t.Errorf("기다렸다: %v", took)
+				}
+			})
+		})
+	}
+}
+
+// 기다리는 사이 누가 그 작업을 다시 열었으면 닫지 않는다 — 없던 세션이라 닫아도 되는지 물은 적이 없다.
+func TestDoneLeavesASessionThatOpenedWhileWaiting(t *testing.T) {
+	withTaskWorld(t, func(w *taskWorld) {
+		w.closing("idle")
+		sleep := agentSleep
+		agentSleep = func(d time.Duration) {
+			sleep(d)
+			w.sessions["t-m1"] = w.worktree("m1")
+			w.stopClaude()
+		}
+		if _, err := w.done(true); err == nil || !strings.Contains(err.Error(), "다시 하라") {
+			t.Errorf("err = %v", err)
+		}
+		if m := w.mutated(); len(m) != 0 {
+			t.Errorf("무언가 했다: %q", m)
+		}
+	})
+}
+
 // 리뷰어가 열고 있으면 거절하되, 어떤 상태든 무엇을 닫아야 하는지 말한다. 막혀 있으면 워커와 같이 3 이다.
 func TestDoneNamesTheReviewerHoldingTheFolder(t *testing.T) {
 	for status, want := range map[string]error{

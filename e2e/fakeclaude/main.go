@@ -48,6 +48,9 @@ var (
 	fork   = flag.Bool("fork-session", false, "--resume 한 대화를 새 id 로 이어 간다")
 )
 
+// slowExit 은 .fake-slow-exit 가 있을 때 터미널이 끊긴 뒤 더 사는 시간이다.
+const slowExit = 3 * time.Second
+
 type fake struct {
 	mu        sync.Mutex
 	home, cwd string
@@ -72,6 +75,11 @@ func main() {
 		return
 	}
 	flag.Parse()
+	// 폴더에 .fake-slow-exit 가 있으면 터미널이 끊긴 뒤에도 잠깐 더 산다 — 끝낼 때 훅이 도는 진짜 Claude 의 모양이다.
+	if _, err := os.Stat(".fake-slow-exit"); err == nil {
+		signal.Ignore(syscall.SIGHUP)
+		defer time.Sleep(slowExit)
+	}
 	// raw 모드를 가장 먼저: 상태 파일을 쓰면 mux 가 곧바로 보낼 수 있는데, 그 전에 도착한 키가
 	// cooked 모드로 처리되면 에코가 화면에 섞인다. 에코는 하지 않는다 — 입력창은 draw 가 그린다.
 	stty := exec.Command("stty", "raw", "-echo")
