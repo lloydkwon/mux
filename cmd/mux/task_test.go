@@ -35,14 +35,14 @@ func TestTasksJSON(t *testing.T) {
 	agent := tmux.Agent{PaneID: "%5", SessionID: "conv"}
 	b, err := tasksJSON([]tmux.Task{
 		{ID: "m1", Repo: "/p/repo", Worktree: "/p/repo-t-m1", Branch: "t-m1", Session: "t-m1",
-			State: "working", Since: time.UnixMilli(1793589532061), Title: "로그인", Agent: &agent},
-		{ID: "m2", Repo: "/p/repo", Worktree: "/p/repo-t-m2", State: tmux.TaskNoSession},
+			State: "working", Since: time.UnixMilli(1793589532061), Title: "로그인", Agent: &agent, Commits: 2},
+		{ID: "m2", Repo: "/p/repo", Worktree: "/p/repo-t-m2", State: tmux.TaskNoSession, Commits: -1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `[{"id":"m1","repo":"/p/repo","worktree":"/p/repo-t-m1","branch":"t-m1","session":"t-m1","pane":"%5","sessionId":"conv","state":"working","since":1793589532061,"title":"로그인"},` +
-		`{"id":"m2","repo":"/p/repo","worktree":"/p/repo-t-m2","branch":"","session":"","pane":"","sessionId":"","state":"no-session","since":0,"title":""}]`
+	want := `[{"id":"m1","repo":"/p/repo","worktree":"/p/repo-t-m1","branch":"t-m1","session":"t-m1","pane":"%5","sessionId":"conv","state":"working","since":1793589532061,"commits":2,"title":"로그인"},` +
+		`{"id":"m2","repo":"/p/repo","worktree":"/p/repo-t-m2","branch":"","session":"","pane":"","sessionId":"","state":"no-session","since":0,"commits":-1,"title":""}]`
 	if string(b) != want {
 		t.Errorf("got  %s\nwant %s", b, want)
 	}

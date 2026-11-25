@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -90,7 +91,7 @@ func newTaskLsCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:          "ls",
-		Short:        "List tasks: id, repository, state and title",
+		Short:        "List tasks: id, repository, state, commits since the start and title",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -194,7 +195,8 @@ type taskJSON struct {
 	Pane      string `json:"pane"`
 	SessionID string `json:"sessionId"`
 	State     string `json:"state"`
-	Since     int64  `json:"since"` // unix ms, 모르면 0
+	Since     int64  `json:"since"`   // unix ms, 모르면 0
+	Commits   int    `json:"commits"` // 시작점 뒤의 커밋 수, 모르면 -1
 	Title     string `json:"title"`
 }
 
@@ -203,7 +205,7 @@ func tasksJSON(tasks []tmux.Task) ([]byte, error) {
 	for _, t := range tasks {
 		j := taskJSON{
 			ID: t.ID, Repo: t.Repo, Worktree: t.Worktree, Branch: t.Branch, Session: t.Session,
-			State: string(t.State), Title: t.Title,
+			State: string(t.State), Commits: t.Commits, Title: t.Title,
 		}
 		if t.Agent != nil {
 			j.Pane, j.SessionID = t.Agent.PaneID, t.Agent.SessionID
@@ -239,16 +241,19 @@ func taskStateLabel(t tmux.Task) string {
 }
 
 func writeTaskTable(w io.Writer, tasks []tmux.Task, now time.Time) {
-	rows := [][]string{{"ID", "REPO", "STATE", "SINCE", "TITLE"}}
+	rows := [][]string{{"ID", "REPO", "STATE", "SINCE", "COMMITS", "TITLE"}}
 	for _, t := range tasks {
-		repo, since := "-", "-"
+		repo, since, commits := "-", "-", "-"
+		if t.Commits >= 0 {
+			commits = strconv.Itoa(t.Commits)
+		}
 		if t.Repo != "" {
 			repo = filepath.Base(t.Repo)
 		}
 		if !t.Since.IsZero() {
 			since = shortAge(now.Sub(t.Since))
 		}
-		rows = append(rows, []string{t.ID, repo, taskStateLabel(t), since, t.Title})
+		rows = append(rows, []string{t.ID, repo, taskStateLabel(t), since, commits, t.Title})
 	}
 	writeColumns(w, rows)
 }

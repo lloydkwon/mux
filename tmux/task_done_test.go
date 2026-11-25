@@ -349,6 +349,30 @@ func TestDoneRefusesWhileAnotherClaudeHoldsTheFolder(t *testing.T) {
 	})
 }
 
+// 리뷰어가 열고 있으면 거절하되, 어떤 상태든 무엇을 닫아야 하는지 말한다. 막혀 있으면 워커와 같이 3 이다.
+func TestDoneNamesTheReviewerHoldingTheFolder(t *testing.T) {
+	for status, want := range map[string]error{
+		"idle": ErrTaskRefused, "busy": ErrTaskRefused, "shell": ErrTaskRefused, "compacting": ErrTaskRefused, "waiting": ErrAgentBlocked,
+	} {
+		t.Run(status, func(t *testing.T) {
+			withTaskWorld(t, func(w *taskWorld) {
+				w.watch(w.main)
+				w.addTree(w.worktree("m1"), "refs/heads/t-m1")
+				w.sessions["r-m1"] = w.worktree("m1")
+				w.paneSession = "r-m1"
+				w.writeClaude("r-m1", "rev", w.worktree("m1"), status)
+				_, err := w.done(true)
+				if !errors.Is(err, want) || !strings.Contains(err.Error(), "리뷰어 세션 r-m1") || !strings.Contains(err.Error(), "kill-session -t =r-m1") {
+					t.Errorf("err = %v, want %v", err, want)
+				}
+				if m := w.mutated(); len(m) != 0 {
+					t.Errorf("무언가 했다: %q", m)
+				}
+			})
+		})
+	}
+}
+
 // worktree 가 안 보이는 세션은 «이미 지운 작업이 되살아난 것» 일 때만 닫는다. 저장소를 못 읽은 것과 사람의 세션은 닫지
 // 않는다 — 커밋 안 된 변경을 보지 않은 채 닫게 된다.
 func TestDoneClosesALoneSessionOnlyWhenItsFolderIsGone(t *testing.T) {

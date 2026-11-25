@@ -199,12 +199,28 @@ func checkTaskIdle(scan taskScan, t Task, pane string) ([]int, error) {
 		if !underDir(sf.CWD, t.Worktree) || slices.Contains(pids, sf.PID) {
 			continue
 		}
-		if err := idleOrRefuse(agentStateOf(sf.Status, sf.PID), "pid "+strconv.Itoa(sf.PID), sf.WaitingFor); err != nil {
-			return nil, err
+		// 어떤 상태든 누가 열고 있는지를 말한다. 상태는 종료 코드만 가른다(막혔으면 3).
+		holder, state := scan.describeHolder(t, sf.PID), agentStateOf(sf.Status, sf.PID)
+		if state == AgentBlocked {
+			return nil, fmt.Errorf("%w (%s): %s", ErrAgentBlocked, sf.WaitingFor, holder)
 		}
-		return nil, fmt.Errorf("%w: 세션 밖의 Claude(pid %d)가 이 worktree 를 열고 있다 — 다른 tmux 서버나 herdr 일 수 있다. 끝낸 뒤 다시 하라", ErrTaskRefused, sf.PID)
+		return nil, fmt.Errorf("%w (%s): %s", ErrTaskRefused, state, holder)
 	}
 	return pids, nil
+}
+
+// describeHolder 는 worktree 를 열고 있는 세션 밖의 Claude 를 말한다 — 무엇을 닫으면 되는지가 다르다.
+func (scan taskScan) describeHolder(t Task, pid int) string {
+	for _, a := range scan.agents {
+		if a.PID != pid {
+			continue
+		}
+		if a.Session == ReviewSessionName(t.ID) {
+			return fmt.Sprintf("리뷰어 세션 %s 가 이 worktree 를 열고 있다 — tmux kill-session -t =%s 뒤에 다시 하라", a.Session, a.Session)
+		}
+		return fmt.Sprintf("세션 %s 의 Claude(pid %d)가 이 worktree 를 열고 있다 — 끝낸 뒤 다시 하라", a.Session, pid)
+	}
+	return fmt.Sprintf("세션 밖의 Claude(pid %d)가 이 worktree 를 열고 있다 — 다른 tmux 서버나 herdr 일 수 있다. 끝낸 뒤 다시 하라", pid)
 }
 
 // checkLoneSession 은 worktree 가 안 보이는 세션을 닫아도 되는지 본다. 닫아도 되는 것은 이미 지운 작업이 복구로 되살아난

@@ -130,6 +130,79 @@ func TestStartSendsThePromptThatWasNeverSent(t *testing.T) {
 	}
 }
 
+// 같은 worktree 에서 돈 리뷰어(r-<id>)의 대화는 워커의 것이 아니다 — 이어 열지도, «보냈다» 로 세지도, 제목으로 쓰지도 않는다.
+func TestReviewerConversationIsNotTheWorkers(t *testing.T) {
+	title := func(s string) string { return `{"type":"custom-title","customTitle":"` + s + `"}` }
+	later := func(w *taskWorld, path string, min int) {
+		born, _ := os.Stat(filepath.Join(w.worktree("m1"), ".git"))
+		at := born.ModTime().Add(time.Duration(min) * time.Minute)
+		if err := os.Chtimes(path, at, at); err != nil {
+			w.t.Fatal(err)
+		}
+	}
+	setup := func(w *taskWorld) string {
+		w.watch(w.main)
+		wt := w.worktree("m1")
+		w.addTree(wt, "refs/heads/t-m1")
+		return wt
+	}
+	for name, lines := range map[string][]string{
+		"리뷰어":            {title("r-m1"), trHumanLine},
+		"나중에 이름을 바꾼 리뷰어": {title("r-m1"), trHumanLine, title("딴 이름")},
+		"이름이 나중에 붙은 리뷰어": {trHumanLine, title("r-m1")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			withTaskWorld(t, func(w *taskWorld) {
+				wt := setup(w)
+				later(w, w.transcript(wt, "worker", trCustomTitle, trHumanLine), 1)
+				later(w, w.transcript(wt, "reviewer", lines...), 2)
+				tasks, _, _ := Tasks()
+				if len(tasks) != 1 || tasks[0].Title != "로그인 오류 고치기" {
+					t.Errorf("ls = %+v", tasks)
+				}
+				// 리뷰어가 떠 있어도 워커의 대화를 연다.
+				b, _ := json.Marshal(map[string]any{"pid": 777, "sessionId": "reviewer", "cwd": wt, "procStart": "1", "status": "idle"})
+				os.WriteFile(w.claudeFile(777), b, 0o600)
+				if res, err := w.start("go"); err != nil || res.Action != TaskResumed || len(w.pane.submitted) != 0 {
+					t.Errorf("start: %+v, %v, 제출 %q", res, err, w.pane.submitted)
+				}
+				if !strings.Contains(strings.Join(w.calls, "\n"), "--resume worker;") {
+					t.Errorf("워커의 대화를 열지 않았다: %q", w.mutated())
+				}
+			})
+		})
+	}
+	t.Run("리뷰어의 기록뿐이면 워커에게는 보낸 적이 없다", func(t *testing.T) {
+		withTaskWorld(t, func(w *taskWorld) {
+			w.transcript(setup(w), "reviewer", title("r-m1"), trHumanLine)
+			if _, err := w.start("go"); err != nil || !slices.Equal(w.pane.submitted, []string{"go"}) {
+				t.Errorf("%v, 제출 %q", err, w.pane.submitted)
+			}
+		})
+	})
+	t.Run("다른 작업의 리뷰어 이름은 이 작업의 제목일 수 있다", func(t *testing.T) {
+		withTaskWorld(t, func(w *taskWorld) {
+			wt := setup(w)
+			w.transcript(wt, "worker", title("r-m2"), trHumanLine)
+			if conv, ok, err := latestTaskConversation(Task{ID: "m1", Worktree: wt}); err != nil || !ok || conv.id != "worker" {
+				t.Errorf("conv = %+v, %v, %v", conv, ok, err)
+			}
+		})
+	})
+}
+
+// 리뷰어의 이름을 제목으로 주면 그 워커의 대화가 리뷰어로 읽힌다.
+func TestStartRefusesTheReviewersNameAsTitle(t *testing.T) {
+	withTaskWorld(t, func(w *taskWorld) {
+		if _, err := StartTask(TaskStartRequest{ID: "m1", Repo: w.main, Title: " r-m1 ", Prompt: "go"}); err == nil || !strings.Contains(err.Error(), "r-m1") {
+			t.Errorf("err = %v", err)
+		}
+		if m := w.mutated(); len(m) != 0 {
+			t.Errorf("무언가 했다: %q", m)
+		}
+	})
+}
+
 // 이어 갈 대화는 가장 최근의 것이다. `claude -p` 의 기록이 더 새것이어도 고르지 않는다.
 func TestLatestTaskConversationPicksTheNewestRealOne(t *testing.T) {
 	withTaskWorld(t, func(w *taskWorld) {
@@ -143,7 +216,7 @@ func TestLatestTaskConversationPicksTheNewestRealOne(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		conv, ok, err := latestTaskConversation(wt)
+		conv, ok, err := latestTaskConversation(Task{ID: "m1", Worktree: wt})
 		if err != nil || !ok || conv.id != "b" || !conv.prompted {
 			t.Errorf("conv = %+v, %v, %v, want b", conv, ok, err)
 		}
@@ -199,7 +272,7 @@ func TestLatestTaskConversationFindsUnusualPaths(t *testing.T) {
 				future := time.Now().Add(time.Hour)
 				os.Chtimes(filepath.Join(dir, "neighbour.jsonl"), future, future)
 			}
-			convs, err := taskConversations(tc.worktree, time.Time{})
+			convs, err := taskConversations(Task{ID: "m1", Worktree: tc.worktree}, time.Time{})
 			if err != nil || len(convs) != 1 || convs[0].id != "mine" || !convs[0].prompted {
 				t.Errorf("%s: %+v, want mine", tc.name, convs)
 			}
@@ -236,7 +309,7 @@ func TestLatestTaskConversationRefusesNamesThatWouldReachTheShell(t *testing.T) 
 		for _, id := range []string{"x; touch pwned", "$(id)", "a b", "-n", "`id`"} {
 			w.transcript(wt, id, trHumanLine)
 		}
-		if conv, ok, err := latestTaskConversation(wt); ok || err != nil {
+		if conv, ok, err := latestTaskConversation(Task{ID: "m1", Worktree: wt}); ok || err != nil {
 			t.Errorf("conv = %+v, %v", conv, err)
 		}
 	})

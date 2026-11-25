@@ -23,6 +23,7 @@ import (
 type taskRow struct {
 	ID, Repo, Worktree, Branch, Session, Pane, SessionID, State, Title string
 	Since                                                              int64
+	Commits                                                            int
 }
 
 // muxTaskEnv 는 `mux task …` 를 dir 에서 돌려 stdout·stderr·종료 코드를 돌려준다. env 의 «-이름» 은 그 변수를 지운다 —
@@ -140,7 +141,7 @@ func TestTaskLifecycle(t *testing.T) {
 	}
 	row := taskByID(t, "/", "m1")
 	if row == nil || row.Repo != repo || row.Worktree != wt || row.Branch != "t-m1" || row.Session != "t-m1" ||
-		row.State != "idle" || row.Title != title || row.Pane == "" || row.SessionID == "" || row.Since == 0 {
+		row.State != "idle" || row.Title != title || row.Pane == "" || row.SessionID == "" || row.Since == 0 || row.Commits != 0 {
 		t.Fatalf("ls = %+v", row)
 	}
 	conversation := row.SessionID
@@ -199,6 +200,9 @@ func TestTaskLifecycle(t *testing.T) {
 	// 6. 커밋만으로는 «푸시 안 됨»(8), 푸시하면 정리된다. 브랜치는 남는다.
 	git(t, wt, "add", "a.txt")
 	git(t, wt, "commit", "-q", "-m", "a")
+	if row := taskByID(t, "/", "m1"); row == nil || row.Commits != 1 {
+		t.Errorf("커밋 하나 뒤의 ls = %+v", row)
+	}
 	if _, errOut, code := muxTask(t, "/", "done", "m1"); code != 8 || !hasSession("t-m1") {
 		t.Errorf("푸시 전 done: exit %d, %q", code, errOut)
 	}
@@ -337,6 +341,43 @@ func TestTaskDoneFromAForeignEnvironment(t *testing.T) {
 	if _, err := os.Stat(wt); !os.IsNotExist(err) || hasSession("t-env1") {
 		t.Errorf("LANG=C done 뒤: worktree %v, session %v", err, hasSession("t-env1"))
 	}
+}
+
+// 대화상자에서 사람을 기다리는 Claude 에게는 첫 프롬프트를 보내지 않는다(3). 보내면 대화상자에 답하는 셈이다.
+func TestTaskStartDoesNotTypeIntoADialog(t *testing.T) {
+	repo := taskRepo(t)
+	commitFile(t, repo, ".fake-dialog") // 가짜 Claude 는 이 파일이 있는 폴더에서 대화상자를 띄운 채 시작한다
+	killTask(t, "dlg1")
+	start := []string{"start", "dlg1", "--repo", repo, "--prompt", "대화상자에 들어가면 안 되는 글"}
+	out, errOut, code := muxTask(t, repo, start...)
+	if code != 3 || out != "" {
+		t.Fatalf("start: exit %d, %q\n%s", code, out, errOut)
+	}
+	row := taskByID(t, repo, "dlg1")
+	if row == nil || row.State != "blocked" || row.Session != "t-dlg1" || row.Commits != 0 {
+		t.Fatalf("ls = %+v", row)
+	}
+	// 대화상자에 글자가 한 자도 들어가지 않았다.
+	if s := screen(t, row.Pane); !strings.Contains(s, "과일을 골라 주세요") || strings.Contains(s, "대화상자에 들어가면") {
+		t.Errorf("화면:\n%s", s)
+	}
+	// 다시 불러도 보내지 않고, 막혀 있는 동안은 done 도 거절한다.
+	if out, _, code := muxTask(t, repo, start...); code != 0 || out != "" {
+		t.Errorf("두 번째 start: exit %d, %q", code, out)
+	}
+	if _, _, code := muxTask(t, repo, "done", "dlg1", "--force"); code != 3 || !hasSession("t-dlg1") {
+		t.Errorf("막힌 채 done: exit %d, session %v", code, hasSession("t-dlg1"))
+	}
+	if got := fakeLog("t-dlg1"); got != "" {
+		t.Errorf("가짜 Claude 가 받은 것 = %q", got)
+	}
+	// 사람이 대화상자를 치우면 그 뒤에는 보낼 수 있다.
+	tm(t, "send-keys", "-t", row.Pane, "Escape")
+	waitTaskIdle(t, repo, "dlg1")
+	if _, errOut, code := muxAgent(t, "prompt", "t-dlg1", "이제 보낸다"); code != 0 {
+		t.Errorf("치운 뒤 prompt: exit %d\n%s", code, errOut)
+	}
+	eventually(t, "치운 뒤의 글만 들어간다", 5*time.Second, func() bool { return fakeLog("t-dlg1") == "이제 보낸다\n" })
 }
 
 // git 이 조용히 잃는 것들을 진짜 git 으로 고정한다. git 이 바뀌어 막아 주기 시작하면 여기가 알려 준다.

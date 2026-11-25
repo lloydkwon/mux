@@ -227,7 +227,8 @@ Every tick is *stateless*: `sessionsLoadedMsg` replaces `m.sessions` wholesale a
   브랜치까지 지우고 `origin/HEAD` 에서 시작한다. `done` 은 git 에 `--force` 를 주지 않고, `status.showUntrackedFiles` 를 명시하고(no 면
   `git worktree remove` 가 추적 안 된 파일째 지운다), detached 의 떠 있는 커밋을 막고, `=t-<id>` 로 닫고(`t-m1` 이 없으면 `t-m12` 가
   죽는다), 닫은 뒤 resurrect 저장을 한 번 부른다(없으면 지운 작업이 재부팅 뒤 홈 폴더에서 되살아난다). 종료 코드 5(`--force` 로도
-  안 됨)와 8(`--force` 면 됨)을 합치지 않는다. 답하지 못하는 tmux 서버, 다른 소켓에 살아 있는 서버를 «세션 없음» 으로 읽지 않는다 — 목록은 `tmux -u` 와 `#{q:}` 로 읽는다(UTF-8 이 아닌 로캘에서 탭이 `_` 가 되어 모든 세션이 사라진 것으로 읽힌다). 보관본에서 `○ 종료` 를
+  안 됨)와 8(`--force` 면 됨)을 합치지 않는다. 이름이 `r-<id>` 인 대화는 같은 worktree 에서 돈 리뷰어의 것이라 워커의 대화로 보지 않고,
+  리뷰어는 `--resume` 이 아니라 `--session-id <새 UUID> --name=r-<id>` 로 띄운다(복구가 옛 대화로 돌아가지 않는 모양). 답하지 못하는 tmux 서버, 다른 소켓에 살아 있는 서버를 «세션 없음» 으로 읽지 않는다 — 목록은 `tmux -u` 와 `#{q:}` 로 읽는다(UTF-8 이 아닌 로캘에서 탭이 `_` 가 되어 모든 세션이 사라진 것으로 읽힌다). 보관본에서 `○ 종료` 를
   되돌리지 않는다. (task.md, panel-events.md)
 - **`-c` 에 넘기는 디렉터리는 `tmuxDirArg` 를 거친다** — tmux 는 `-c` 를 포맷으로 펼쳐서 디렉터리 이름의 `#(…)` 가
   셸 명령으로 돈다(실측). `set-option -t` 는 pane 대상이라 정확히 지목하려면 `=name:`(콜론까지)이다. 이름으로 세션을 닫고

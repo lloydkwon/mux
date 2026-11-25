@@ -28,11 +28,15 @@ type taskWorld struct {
 	dirty    map[string]string // worktree → status 출력
 	unpushed string
 	contains string // for-each-ref --contains HEAD 의 답
+	reflog   string // worktree 의 HEAD reflog(새것 먼저)
+	ahead    string // 시작점 뒤의 커밋 수
 	options  map[string]string
 
 	listErr  error // list-sessions 의 오류
 	panesErr error // list-panes 만의 오류
 	locked   string
+	// paneSession 은 taskPane 을 가진 세션이다. 비면 있는 t-* 세션이다.
+	paneSession string
 
 	startTime string // 서버가 뜬 시각(초)
 	killErr   error
@@ -88,6 +92,9 @@ func (w *taskWorld) Output(name string, args ...string) ([]byte, error) {
 	case strings.HasPrefix(k, "tmux list-panes"):
 		if err := errors.Join(w.listErr, w.panesErr); err != nil {
 			return nil, err
+		}
+		if w.paneSession != "" {
+			return []byte(taskPane + " 5001 " + w.paneSession + "\n"), nil
 		}
 		for s := range w.sessions {
 			if strings.HasPrefix(s, "t-") {
@@ -161,6 +168,10 @@ func (w *taskWorld) git(args []string) ([]byte, error) {
 		return []byte("abc1234\n"), nil
 	case k == "status --porcelain --untracked-files=normal":
 		return []byte(w.dirty[dir]), nil
+	case k == "reflog show --format=%H HEAD":
+		return []byte(w.reflog), nil
+	case strings.HasPrefix(k, "rev-list --count ") && strings.HasSuffix(k, "..HEAD"):
+		return []byte(w.ahead), nil
 	case strings.HasPrefix(k, "rev-list --count HEAD --not "):
 		return []byte(w.unpushed), nil
 	}
@@ -371,6 +382,72 @@ func TestTaskIDReadsOnlyOurNames(t *testing.T) {
 			t.Errorf("TaskID(%q) = %q, %v, want %q", session, got, ok, want)
 		}
 	}
+}
+
+// r-<id> 는 2단계 리뷰어의 이름으로 예약돼 있다. 워커로 읽히지 않고, 복구 쪽은 이 함수로 가른다.
+func TestReviewNamesAreReserved(t *testing.T) {
+	cases := map[string]string{
+		"r-m1": "m1", "r-wms-45": "wms-45", "r-": "", "r--x": "", "r-M1": "", "r-a b": "", "r": "", "rm1": "", "t-m1": "", "my-r-m1": "",
+	}
+	for session, want := range cases {
+		got, ok := ReviewID(session)
+		if got != want || ok != (want != "") {
+			t.Errorf("ReviewID(%q) = %q, %v, want %q", session, got, ok, want)
+		}
+		if id, worker := TaskID(session); worker && session != "t-m1" {
+			t.Errorf("TaskID(%q) = %q — 워커로 읽혔다", session, id)
+		}
+	}
+	if id, ok := TaskID("t-r-1"); !ok || id != "r-1" {
+		t.Errorf("t-r-1 은 id 가 r-1 인 워커다: %q %v", id, ok)
+	}
+	if _, ok := ReviewID("t-r-1"); ok {
+		t.Error("t-r-1 이 리뷰어로 읽혔다")
+	}
+	withTaskWorld(t, func(w *taskWorld) {
+		w.watch(w.main)
+		w.addTree(w.worktree("m1"), "refs/heads/t-m1")
+		w.sessions["r-m1"] = w.worktree("m1")
+		w.sessions["r-x"] = "/somewhere"
+		tasks, _, err := Tasks()
+		if err != nil || len(tasks) != 1 || tasks[0].ID != "m1" || tasks[0].State != TaskNoSession {
+			t.Errorf("tasks = %+v, %v", tasks, err)
+		}
+	})
+}
+
+// ls 는 시작점 뒤의 커밋 수를 낸다 — «idle 인데 커밋 0» 이 관문 카드 앞에서 멈춘 워커를 알아보는 길이다.
+func TestTasksCountsCommitsSinceTheStart(t *testing.T) {
+	cases := []struct {
+		name          string
+		reflog, count string
+		want          int
+	}{
+		{"커밋 없음", "bbb\naaa\n", "0\n", 0},
+		{"셋", "ddd\nccc\naaa\n", "3\n", 3},
+		{"reflog 가 비었다", "", "9\n", -1},
+		{"셀 수 없는 답", "aaa\n", "?\n", -1},
+	}
+	for _, tc := range cases {
+		withTaskWorld(t, func(w *taskWorld) {
+			w.watch(w.main)
+			w.addTree(w.worktree("m1"), "refs/heads/feat/renamed")
+			w.reflog, w.ahead = tc.reflog, tc.count
+			tasks, _, err := Tasks()
+			if err != nil || len(tasks) != 1 || tasks[0].Commits != tc.want {
+				t.Errorf("%s: %+v, %v, want %d", tc.name, tasks, err, tc.want)
+			}
+			if tc.want >= 0 && w.called("git -C "+w.worktree("m1")+" rev-list --count aaa..HEAD") != 1 {
+				t.Errorf("%s: 시작 커밋에서 세지 않았다: %q", tc.name, w.calls)
+			}
+		})
+	}
+	withTaskWorld(t, func(w *taskWorld) {
+		w.sessions["t-m1"] = "/nowhere"
+		if tasks, _, _ := Tasks(); len(tasks) != 1 || tasks[0].Commits != -1 {
+			t.Errorf("worktree 없음: %+v", tasks)
+		}
+	})
 }
 
 // 작업은 폴더 자리로 알아본다 — 브랜치 이름이 아니라.

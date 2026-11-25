@@ -12,6 +12,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -64,6 +65,33 @@ func (s privateServer) sessions() string { return s.run("list-sessions", "-F", "
 
 func (s privateServer) env() []string { return []string{"TMUX=" + s.sock + ",0,0"} }
 
+// assertSaved 는 저장이 멎은 뒤 last 가 있는 파일을 가리키고 그 작업들이 다 들어 있는지 본다. 깨진 last 로 재부팅하면
+// 세션이 하나도 돌아오지 않는다.
+func (s privateServer) assertSaved(saves string, ids ...string) {
+	s.t.Helper()
+	last := filepath.Join(saves, "last")
+	var problem string
+	for deadline := time.Now().Add(8 * time.Second); ; time.Sleep(300 * time.Millisecond) {
+		problem = ""
+		data, err := os.ReadFile(last)
+		if err != nil {
+			target, _ := os.Readlink(last)
+			problem = fmt.Sprintf("last 가 깨졌다(%s): %v", target, err)
+		}
+		for _, id := range ids {
+			if n := strings.Count(string(data), "pane\tt-"+id+"\t"); err == nil && n != 1 {
+				problem = fmt.Sprintf("t-%s 가 저장본에 %d줄이다", id, n)
+			}
+		}
+		if problem == "" || time.Now().After(deadline) {
+			break
+		}
+	}
+	if problem != "" {
+		s.t.Fatalf("저장본: %s", problem)
+	}
+}
+
 // waitServerAge 는 서버가 뜬 지 age 가 지나기를 기다린다.
 func waitServerAge(t *testing.T, s privateServer, age time.Duration) {
 	t.Helper()
@@ -106,9 +134,10 @@ run-shell '%s/resurrect.tmux'
 	s.boot()
 	t.Cleanup(s.kill)
 
-	// 이름이 서로 앞부분인 작업 둘과, 끝낼 작업 하나.
+	// 이름이 서로 앞부분인 작업 둘과, 끝낼 작업 둘.
 	conversations := map[string]string{}
-	for _, id := range []string{"r1", "r12", "r3"} {
+	var mu sync.Mutex
+	for _, id := range []string{"r1", "r12", "r3", "r4"} {
 		out, errOut, code := muxTaskEnv(t, repo, s.env(), "start", id, "--title", "작업 "+id+" (공백; 메타)", "--prompt", "복구 시험 "+id)
 		if code != 0 {
 			t.Fatalf("start %s: exit %d\n%s", id, code, errOut)
@@ -132,6 +161,30 @@ run-shell '%s/resurrect.tmux'
 		eventually(t, id+" 의 턴이 끝난다", 15*time.Second, func() bool { return idle(id) })
 	}
 
+	// 함께 부른 start 들이 저장본을 깨뜨리지 않는다. 저장본 이름이 초 단위라, 같은 초의 저장 둘이면 last 가 없는 파일을
+	// 가리킨다(OpenRig 시험: 잠금 없이 10번 중 10번). 첫 번째는 훅에 잠금이 없어 mux 가 1초씩 띄우는 것만으로 버틴다.
+	s.run("set-hook", "-g", "session-created", `run-shell -b "`+plugin+`/scripts/save.sh quiet"`)
+	startAll := func(ids ...string) {
+		t.Helper()
+		var wg sync.WaitGroup
+		for _, id := range ids {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if out, errOut, code := muxTaskEnv(t, repo, s.env(), "start", id, "--prompt", "동시 시험 "+id); code != 0 {
+					t.Errorf("start %s: exit %d\n%s", id, code, errOut)
+				} else {
+					mu.Lock()
+					conversations[id], _, _ = strings.Cut(out, "@")
+					mu.Unlock()
+				}
+			}()
+		}
+		wg.Wait()
+	}
+	startAll("p1", "p2", "p3")
+	s.assertSaved(saves, "p1", "p2", "p3")
+
 	// 저장한 뒤 하나를 끝낸다. done 이 저장을 한 번 더 불러 저장본에서 빠져야 한다.
 	s.run("run-shell", plugin+"/scripts/save.sh quiet")
 	saved, _ := os.ReadFile(filepath.Join(saves, "last"))
@@ -145,9 +198,25 @@ run-shell '%s/resurrect.tmux'
 	}
 	// 서버가 뜬 지 30초 안에는 done 이 저장을 부르지 않는다(복원 중인 목록으로 덮지 않게).
 	waitServerAge(t, s, 31*time.Second)
-	if _, errOut, code := muxTaskEnv(t, repo, s.env(), "done", "r3"); code != 0 || strings.Contains(errOut, "저장") {
-		t.Fatalf("done: exit %d\n%s", code, errOut)
+	// 사용자의 훅(잠금 + 1초)이 걸린 서버에서 done 둘을 함께, 이어서 start 둘을 함께 부른다. done 둘의 저장은 잠금이 없으면
+	// 같은 초에 선다.
+	s.run("set-hook", "-g", "session-created", `run-shell -b "if [ $(( $(date +%s) - #{start_time} )) -gt 30 ]; then { flock 9; `+
+		plugin+`/scripts/save.sh quiet; sleep 1; } 9>>`+saves+`/.save.lock; fi"`)
+	var wg sync.WaitGroup
+	for _, id := range []string{"r3", "r4"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, errOut, code := muxTaskEnv(t, repo, s.env(), "done", id); code != 0 || strings.Contains(errOut, "저장") {
+				t.Errorf("done %s: exit %d\n%s", id, code, errOut)
+			}
+		}()
 	}
+	wg.Wait()
+	// 뒤의 저장이 깨진 last 를 고쳐 버리면 겹침이 보이지 않는다 — start 를 부르기 전에 본다.
+	s.assertSaved(saves, "r1", "r12", "p1", "p2", "p3")
+	startAll("p4", "p5")
+	s.assertSaved(saves, "r1", "r12", "p1", "p2", "p3", "p4", "p5")
 
 	// «재부팅» — 서버를 내리고 새로 띄워 복원한다.
 	s.kill()
@@ -155,10 +224,10 @@ run-shell '%s/resurrect.tmux'
 	s.boot()
 	s.run("run-shell", plugin+"/scripts/restore.sh")
 
-	if got := s.sessions(); strings.Contains(got, "t-r3") {
+	if got := s.sessions(); strings.Contains(got, "t-r3") || strings.Contains(got, "t-r4") {
 		t.Errorf("끝낸 작업이 되살아났다:\n%s", got)
 	}
-	for _, id := range []string{"r1", "r12"} {
+	for _, id := range []string{"r1", "r12", "p1", "p4"} {
 		for deadline := time.Now().Add(20 * time.Second); !idle(id); time.Sleep(200 * time.Millisecond) {
 			if time.Now().After(deadline) {
 				t.Fatalf("%s 가 같은 대화로 돌아오지 않았다: %s\n화면:\n%s", id, row(id), s.run("capture-pane", "-p", "-t", "=t-"+id+":"))
@@ -166,6 +235,9 @@ run-shell '%s/resurrect.tmux'
 		}
 		if got := s.run("display-message", "-p", "-t", "=t-"+id+":", "#{pane_current_path}"); got != repo+"-t-"+id {
 			t.Errorf("%s 의 폴더 = %q", id, got)
+		}
+		if strings.HasPrefix(id, "p") {
+			continue // 제목 없이 시작한 작업
 		}
 		if !strings.Contains(row(id), `"title":"작업 `+id) {
 			t.Errorf("%s 의 제목이 돌아오지 않았다: %s", id, row(id))

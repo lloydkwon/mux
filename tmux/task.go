@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -20,8 +21,12 @@ import (
 // 상태 파일은 없다. 작업의 지금 모습은 부를 때마다 git worktree 목록, tmux 세션 목록, Claude 상태 파일로
 // 다시 계산한다.
 
-// taskPrefix 는 작업 세션과 worktree 이름의 앞머리다.
-const taskPrefix = "t-"
+const (
+	// taskPrefix 는 작업 세션과 worktree 이름의 앞머리다.
+	taskPrefix = "t-"
+	// reviewPrefix 는 그 작업의 리뷰어 세션과 대화 이름의 앞머리다. 2단계를 위한 예약이고, mux 는 아직 만들지 않는다.
+	reviewPrefix = "r-"
+)
 
 // taskIDRe 는 작업 id 다. `-` 로 시작하면 tmux 와 git 의 옵션으로 읽힌다.
 var taskIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
@@ -55,6 +60,8 @@ type Task struct {
 	State    TaskState
 	Since    time.Time
 	Title    string
+	// Commits 는 worktree 가 시작한 뒤의 커밋 수다. 모르면 -1. Tasks 만 채운다.
+	Commits int
 	// Agent 는 그 세션의 Claude 중 가장 급한 것이다. 없으면 nil.
 	Agent *Agent
 
@@ -79,6 +86,19 @@ func TaskSessionName(id string) string { return taskPrefix + id }
 // TaskID 는 세션 이름이 작업의 것이면 그 id 를 돌려준다. 이름만 보는 순수 함수라 패널이 틱마다 불러도 된다.
 func TaskID(session string) (string, bool) {
 	id, ok := strings.CutPrefix(session, taskPrefix)
+	if !ok || ValidTaskID(id) != nil {
+		return "", false
+	}
+	return id, true
+}
+
+// ReviewSessionName 은 작업의 리뷰어 세션이자 그 대화의 이름이다.
+func ReviewSessionName(id string) string { return reviewPrefix + id }
+
+// ReviewID 는 세션 이름이 리뷰어의 것이면 그 작업 id 를 돌려준다. 리뷰어는 재부팅 복구 뒤에 예전 대화로 돌아가지 않고
+// 늘 새 대화로 시작해야 해서, 복구 쪽이 이 이름으로 가른다(task.md «리뷰어 이름»).
+func ReviewID(session string) (string, bool) {
+	id, ok := strings.CutPrefix(session, reviewPrefix)
 	if !ok || ValidTaskID(id) != nil {
 		return "", false
 	}
@@ -375,7 +395,37 @@ func Tasks(dirs ...string) (tasks []Task, warnings []error, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return scan.tasks(), scan.warnings, nil
+	tasks = scan.tasks()
+	for i, t := range tasks {
+		tasks[i].Commits = commitsSinceStart(t.Worktree)
+	}
+	return tasks, scan.warnings, nil
+}
+
+// commitsSinceStart 는 worktree 가 시작한 커밋 뒤의 커밋 수다. 모르면 -1 — 0 은 «아직 커밋이 없다» 는 뜻이다.
+//
+// 시작 커밋은 그 worktree 의 HEAD reflog 의 첫 줄이다. 브랜치 이름을 바꿔도 남고, 상태 파일이 필요 없다.
+func commitsSinceStart(worktree string) int {
+	if worktree == "" {
+		return -1
+	}
+	out, err := outputWithin(worktreeReadLimit, "git", "-C", worktree, "reflog", "show", "--format=%H", "HEAD")
+	if err != nil {
+		return -1
+	}
+	log := strings.Fields(string(out))
+	if len(log) == 0 {
+		return -1
+	}
+	out, err = outputWithin(worktreeReadLimit, "git", "-C", worktree, "rev-list", "--count", log[len(log)-1]+"..HEAD")
+	if err != nil {
+		return -1
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return -1
+	}
+	return n
 }
 
 // taskPanelTitle 은 패널이 세션 아래 줄에 쓸 사람이 준 제목이다. 작업 세션이고, 사람이 이름을 정했고, 그 이름이
@@ -399,7 +449,7 @@ func taskDisplayTitle(t Task) string {
 		}
 		sessionID, cwd = t.Agent.SessionID, t.Agent.CWD
 	} else if t.Worktree != "" {
-		conv, ok, err := latestTaskConversation(t.Worktree)
+		conv, ok, err := latestTaskConversation(t)
 		if err != nil || !ok {
 			return ""
 		}

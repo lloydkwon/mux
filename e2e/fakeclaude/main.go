@@ -85,8 +85,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, "fakeclaude:", err)
 		os.Exit(1)
 	}
-	f.writeState("idle")
-	f.draw()
+	// 폴더에 .fake-dialog 가 있으면 대화상자를 띄운 채 시작한다 — 시작하자마자 사람을 기다리는 Claude 다.
+	if _, err := os.Stat(".fake-dialog"); err == nil {
+		f.startWithDialog()
+	} else {
+		f.writeState("idle")
+		f.draw()
+	}
 
 	winch := make(chan os.Signal, 1)
 	signal.Notify(winch, syscall.SIGWINCH)
@@ -331,6 +336,22 @@ func (f *fake) waitAsk(multi bool) string {
 		return "declined"
 	}
 	return "answers: " + strings.Join(answers, " / ")
+}
+
+// startWithDialog 는 질문 대화상자를 띄우고, 답(또는 취소)이 오면 입력창으로 돌아간다. 턴은 만들지 않는다.
+func (f *fake) startWithDialog() {
+	a := newFakeAsk(false)
+	f.ask = a
+	f.writeStateWaiting("input needed")
+	f.draw()
+	go func() {
+		<-a.done
+		f.mu.Lock()
+		f.ask = nil
+		f.mu.Unlock()
+		f.writeState("idle")
+		f.draw()
+	}()
 }
 
 // finishTurn 은 회신 글로 턴을 끝낸다(응답 그룹, turn_duration, idle).
